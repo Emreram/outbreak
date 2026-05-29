@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { GameState, Spawn, TurnInput } from "../shared/contracts";
+import type { GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
 import { generateWorld, SOLID_TILES, type Building, type WorldData } from "../game/worldgen";
 import { randomSeed } from "../game/rng";
 import {
@@ -15,7 +15,7 @@ import { applyDecay } from "../game/survival";
 import { isArmed, removeItem } from "../game/inventory";
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
-import { newRunState, runTurn } from "../ai/gameMaster";
+import { runTurn } from "../ai/gameMaster";
 import { WorldRenderer } from "../engine/WorldRenderer";
 import { Player } from "../engine/Player";
 import { Enemy } from "../engine/Enemy";
@@ -73,7 +73,7 @@ export class WorldScene extends Phaser.Scene {
     this.saveAcc = 0;
     this.enemies = [];
     this.ambientAcc = 0;
-    this.ambientDelay = nextAmbientDelayMs();
+    this.ambientDelay = 30000; // set properly once state/day is known (below)
     this.currentBuildingId = null;
     this.segAcc = 0;
     this.kills = 0;
@@ -146,8 +146,9 @@ export class WorldScene extends Phaser.Scene {
       this.persist();
     });
 
-    // Seed the streets with a few wandering walkers so the world feels alive.
-    if (!isDead(this.state)) this.spawnAmbientWalkers(Phaser.Math.Between(4, 7));
+    // Day 0 is nearly empty — the streets fill as the outbreak spreads.
+    if (!isDead(this.state)) this.spawnAmbientWalkers(this.ambientStartCount());
+    this.ambientDelay = this.scheduleAmbientMs();
 
     // A fresh run opens with its AI-authored scenario intro.
     const intro = this.registry.get("intro") as string | undefined;
@@ -187,7 +188,7 @@ export class WorldScene extends Phaser.Scene {
       this.ambientAcc += delta;
       if (this.ambientAcc >= this.ambientDelay) {
         this.ambientAcc = 0;
-        this.ambientDelay = nextAmbientDelayMs() * (this.isNight() ? 0.55 : 1);
+        this.ambientDelay = this.scheduleAmbientMs();
         this.ambientEvent();
       }
 
@@ -297,10 +298,23 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  /** Starting walker count — near-empty at day 0, busier as the outbreak spreads. */
+  private ambientStartCount(): number {
+    return Math.min(1 + this.state.day * 2, 16);
+  }
+
+  /** Time to the next ambient threat — rare at day 0, more frequent later/at night. */
+  private scheduleAmbientMs(): number {
+    const base = nextAmbientDelayMs();
+    const dayFactor = this.state.day === 0 ? 2.6 : 1 / (1 + this.state.day * 0.12);
+    return base * dayFactor * (this.isNight() ? 0.6 : 1);
+  }
+
   private ambientEvent(): void {
     const extra = this.state.difficultyModifier > 1.15 ? 1 : 0;
-    const n = Phaser.Math.Between(1, 2) + extra;
-    const runnerChance = this.isNight() ? 0.3 : 0.15;
+    const dayBonus = Math.floor(this.state.day / 3);
+    const n = Math.min(Phaser.Math.Between(1, 2) + extra + dayBonus, 5);
+    const runnerChance = this.isNight() ? 0.32 : 0.12 + this.state.day * 0.02;
     const kind: Spawn["type"] = Math.random() < runnerChance ? "zombie_runner" : "zombie";
     this.spawnNear([{ type: kind, count: n }]);
     this.showToast("You hear shuffling nearby…");
@@ -398,12 +412,18 @@ export class WorldScene extends Phaser.Scene {
   private startEncounter(loc: string, openingValue: string, title: string): void {
     if (this.dead || this.inEncounter) return;
     this.inEncounter = true;
+    this.setGameKeys(false); // so typing/keys can't move the player or fire actions
     this.player.sprite.setVelocity(0, 0);
     this.freezeEnemies();
     this.encounterLoc = loc;
     sfx.ui();
     this.modal.openLoading(title);
     void this.resolveTurn({ mode: "free_text", value: openingValue });
+  }
+
+  /** Enable/disable the Phaser keyboard so encounter typing never leaks to gameplay. */
+  private setGameKeys(enabled: boolean): void {
+    if (this.input.keyboard) this.input.keyboard.enabled = enabled;
   }
 
   private onEncounterAction(input: TurnInput): void {
@@ -423,11 +443,31 @@ export class WorldScene extends Phaser.Scene {
       this.enterDeath(result.reason || undefined);
       return;
     }
-    this.modal.showResult(result.narrative, result.interaction);
+    this.modal.showResult(result.narrative, result.interaction, this.effectsSummary(gm));
+  }
+
+  /** A concise "here's what the GM just did" line so the AI's impact is visible. */
+  private effectsSummary(gm: GMResponse): string {
+    const parts: string[] = [];
+    for (const a of gm.inventory_add) parts.push(`+${a.qty}× ${a.item}`);
+    for (const r of gm.inventory_remove) parts.push(`−${r.qty}× ${r.item}`);
+    const sc = gm.state_changes;
+    const labels: Array<[string, number]> = [
+      ["HP", sc.hp],
+      ["Stamina", sc.stamina],
+      ["Food", sc.hunger],
+      ["Water", sc.thirst],
+      ["Infection", sc.infection],
+    ];
+    for (const [label, v] of labels) if (v) parts.push(`${label} ${v > 0 ? "+" : ""}${v}`);
+    const threats = gm.spawns.reduce((n, s) => n + s.count, 0);
+    if (threats) parts.push(`⚠ ${threats} hostile${threats > 1 ? "s" : ""} drawn in`);
+    return parts.join("   ·   ");
   }
 
   private onEncounterLeave(): void {
     this.inEncounter = false;
+    this.setGameKeys(true);
     this.persist();
   }
 
@@ -435,8 +475,8 @@ export class WorldScene extends Phaser.Scene {
     const kb = this.input.keyboard;
     if (!kb) return;
 
-    // R = brand-new run (new seed + new AI scenario).
-    kb.on("keydown-R", () => void this.startNewRun());
+    // R = back to the menu to begin a fresh, named run.
+    kb.on("keydown-R", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
     kb.on("keydown-E", () => this.tryInteract());
@@ -536,22 +576,12 @@ export class WorldScene extends Phaser.Scene {
   /** Open the run with its AI-authored scenario intro; first action goes to the GM. */
   private showIntro(intro: string): void {
     this.inEncounter = true;
+    this.setGameKeys(false);
     this.player.sprite.setVelocity(0, 0);
     this.freezeEnemies();
     const b = this.buildingAt();
     this.encounterLoc = b ? b.type : "street";
     this.modal.showResult(intro, { type: "free_text", prompt: "What do you do?", options: [] });
-  }
-
-  private async startNewRun(): Promise<void> {
-    if (this.inEncounter) this.modal.close();
-    this.showToast("Generating a new world…");
-    const { state, intro } = await newRunState();
-    saveGame(state);
-    this.registry.set("seed", state.seed);
-    this.registry.set("seedFromUrl", false);
-    this.registry.set("intro", intro);
-    this.scene.restart();
   }
 
   private persist(): void {

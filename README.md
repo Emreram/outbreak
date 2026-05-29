@@ -44,14 +44,18 @@ Open the URL Vite prints (default **http://localhost:5173/**).
 | Sprint | hold **Shift** · push the joystick to its edge |
 | Act / open an encounter | **E** · the **ACT** button |
 | Attack (melee) | **SPACE** / **F** · the **HIT** button |
-| New run | **R** |
-| Quick item use (debug) | **1** eat · **2** drink · **3** hurt · **4** bandage |
+| Menu / new run | **R** |
+| Quick item use | **1** eat · **2** drink · **3** hurt · **4** bandage |
 | Reproduce a specific city | add `?seed=<value>` to the URL, e.g. `…/?seed=alpha` |
 
-In an **encounter** the world pauses and you either type what you do or tap one of 4
-options; the GM narrates and the engine applies a validated outcome. The HUD (top-left)
-shows day/time, your five survival stats, inventory, and a debug line. Your run
-**autosaves**; death → a summary → a brand-new, AI-authored run.
+Every run starts at **hour zero** of the outbreak (Day 0) and asks for your **name**;
+the streets are nearly empty at first and danger ramps as the days pass. In an
+**encounter** the world pauses and you either **type** what you do or tap one of 4
+options — while you're typing, game keys are paused so a stray key can't interrupt or
+cancel your input. The GM narrates, the engine applies a validated outcome, and a line
+shows exactly **what changed** (items/stats/threats). The HUD shows your name, day/time,
+five survival stats, inventory, and the latest event. Your run **autosaves**; death → a
+summary → a brand-new, AI-authored run.
 
 ## Other scripts
 

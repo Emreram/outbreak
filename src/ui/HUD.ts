@@ -38,6 +38,7 @@ export class HUD {
   private readonly dayText: Phaser.GameObjects.Text;
   private readonly valueTexts: Phaser.GameObjects.Text[] = [];
   private readonly invText: Phaser.GameObjects.Text;
+  private readonly logText: Phaser.GameObjects.Text;
   private readonly controlsText: Phaser.GameObjects.Text;
   private readonly debugText: Phaser.GameObjects.Text;
   private deathText?: Phaser.GameObjects.Text;
@@ -60,12 +61,21 @@ export class HUD {
       this.valueTexts.push(mk(BAR_X + BAR_W + 8, y - 1, "11px", "#f4efe2"));
     });
     this.invText = mk(PANEL_X + 8, 0, "12px", "#e8e2d0");
+    this.logText = scene.add
+      .text(PANEL_X + 8, 0, "", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#cdb89a",
+        wordWrap: { width: PANEL_W - 20 },
+      })
+      .setScrollFactor(0)
+      .setDepth(DEPTH + 2);
     this.controlsText = mk(PANEL_X + 8, 0, "11px", "#8fa3b8");
     this.debugText = mk(PANEL_X + 8, 0, "11px", "#7f93a8");
   }
 
   update(s: GameState, debug: { fps: number; tx: number; ty: number }): void {
-    this.dayText.setText(`Day ${s.day}  ·  ${s.timeOfDay}`);
+    this.dayText.setText(`${s.player.name}  ·  Day ${s.day}  ·  ${s.timeOfDay}`);
 
     this.bars.clear();
     BARS.forEach((b, i) => {
@@ -83,10 +93,15 @@ export class HUD {
       : "· (empty)";
     this.invText.setPosition(PANEL_X + 8, invY).setText("Inventory:\n" + list);
 
-    const cY = invY + this.invText.height + 8;
+    // Latest event — narrative continuity / shows the AI's last impact.
+    const logY = invY + this.invText.height + 8;
+    const last = s.recentEvents[s.recentEvents.length - 1] ?? "";
+    this.logText.setPosition(PANEL_X + 8, logY).setText(last ? `» ${last}` : "");
+    const cY = logY + (last ? this.logText.height + 8 : 0);
+
     this.controlsText
       .setPosition(PANEL_X + 8, cY)
-      .setText("WASD/arrows move · E act · R new run\n[1] eat  [2] drink  [3] hurt  [4] bandage");
+      .setText("WASD/arrows move · E act · SPACE/F hit\nShift sprint · R menu · [1-4] use items");
 
     const dY = cY + this.controlsText.height + 6;
     this.debugText

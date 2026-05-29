@@ -1,9 +1,7 @@
 import Phaser from "phaser";
-import { newRunState } from "../ai/gameMaster";
-import { saveGame } from "../game/GameState";
 
-// Death summary -> a brand-new, noticeably different run (CLAUDE.md §12, §16):
-// new map seed + a freshly generated AI scenario.
+// Death summary -> back to the menu to start a brand-new, noticeably different run
+// (new name + new map seed + a freshly generated AI scenario; CLAUDE.md §12, §16).
 
 interface GOData {
   days?: number;
@@ -13,14 +11,11 @@ interface GOData {
 }
 
 export class GameOverScene extends Phaser.Scene {
-  private busy = false;
-
   constructor() {
     super("GameOverScene");
   }
 
   create(data: GOData): void {
-    this.busy = false;
     const w = this.scale.width;
     const h = this.scale.height;
     this.cameras.main.setBackgroundColor("#07090c");
@@ -61,9 +56,9 @@ export class GameOverScene extends Phaser.Scene {
       .setInteractive({ useHandCursor: true });
     btn.on("pointerover", () => btn.setColor("#bfe9ff"));
     btn.on("pointerout", () => btn.setColor("#7fd3ff"));
-    btn.on("pointerup", () => void this.newRun(btn));
-    this.input.keyboard?.on("keydown-R", () => void this.newRun(btn));
-    this.input.keyboard?.on("keydown-ENTER", () => void this.newRun(btn));
+    btn.on("pointerup", () => this.newRun());
+    this.input.keyboard?.on("keydown-R", () => this.newRun());
+    this.input.keyboard?.on("keydown-ENTER", () => this.newRun());
 
     this.add
       .text(cx, h * 0.72 + 46, "(a new city and a new story await)", {
@@ -74,15 +69,7 @@ export class GameOverScene extends Phaser.Scene {
       .setOrigin(0.5);
   }
 
-  private async newRun(btn: Phaser.GameObjects.Text): Promise<void> {
-    if (this.busy) return;
-    this.busy = true;
-    btn.setText("[ Generating world… ]");
-    const { state, intro } = await newRunState();
-    saveGame(state);
-    this.registry.set("seed", state.seed);
-    this.registry.set("seedFromUrl", false);
-    this.registry.set("intro", intro);
-    this.scene.start("WorldScene");
+  private newRun(): void {
+    this.scene.start("MainMenuScene");
   }
 }

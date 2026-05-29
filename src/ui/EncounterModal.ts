@@ -18,6 +18,7 @@ const CSS = `
 .ob-title{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#7fd3ff;opacity:.9}
 .ob-narr{font-size:15px;line-height:1.5;color:#e8eef4;min-height:48px;white-space:pre-wrap;overflow:auto;max-height:46vh}
 .ob-prompt{font-size:13px;color:#9fb3c8}
+.ob-effects{font-size:12.5px;color:#bfe9ff;background:#0c1620;border:1px solid #24384a;border-radius:8px;padding:8px 10px;line-height:1.4}
 .ob-spin{display:flex;align-items:center;gap:10px;color:#9fb3c8;font-size:14px}
 .ob-dot{width:9px;height:9px;border-radius:50%;background:#7fd3ff;animation:ob-pulse 1s infinite ease-in-out}
 @keyframes ob-pulse{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1.1)}}
@@ -42,6 +43,7 @@ export class EncounterModal {
   private readonly root: HTMLDivElement;
   private readonly titleEl: HTMLDivElement;
   private readonly narrEl: HTMLDivElement;
+  private readonly effectsEl: HTMLDivElement;
   private readonly promptEl: HTMLDivElement;
   private readonly spinEl: HTMLDivElement;
   private readonly choicesEl: HTMLDivElement;
@@ -67,6 +69,7 @@ export class EncounterModal {
     const panel = el("div", "ob-panel");
     this.titleEl = el("div", "ob-title");
     this.narrEl = el("div", "ob-narr");
+    this.effectsEl = el("div", "ob-effects");
     this.promptEl = el("div", "ob-prompt");
 
     this.spinEl = el("div", "ob-spin");
@@ -84,24 +87,34 @@ export class EncounterModal {
     send.className = "ob-send";
     send.textContent = "Act";
     send.addEventListener("click", () => this.submitText());
+    // Keep keystrokes inside the box: stop them reaching the game's key handlers,
+    // and never let a stray key cancel what you're typing.
     this.inputEl.addEventListener("keydown", (e) => {
+      e.stopPropagation();
       if (e.key === "Enter") this.submitText();
     });
     this.rowEl.append(this.inputEl, send);
 
     this.leaveEl = document.createElement("button");
     this.leaveEl.className = "ob-leave";
-    this.leaveEl.textContent = "Leave (Esc)";
+    this.leaveEl.textContent = "Leave encounter";
     this.leaveEl.addEventListener("click", () => this.leave());
 
     // Click the narrative to skip the typewriter.
     this.narrEl.addEventListener("click", () => this.finishTyping());
 
-    panel.append(this.titleEl, this.narrEl, this.spinEl, this.promptEl, this.choicesEl, this.rowEl, this.leaveEl);
+    panel.append(
+      this.titleEl,
+      this.narrEl,
+      this.effectsEl,
+      this.spinEl,
+      this.promptEl,
+      this.choicesEl,
+      this.rowEl,
+      this.leaveEl,
+    );
     this.root.append(panel);
     document.body.appendChild(this.root);
-
-    window.addEventListener("keydown", this.onKey);
   }
 
   isOpen(): boolean {
@@ -120,14 +133,15 @@ export class EncounterModal {
     this.root.classList.add("ob-show");
     this.clearTyping();
     this.narrEl.textContent = "";
+    this.effectsEl.classList.add("ob-hidden");
     this.promptEl.classList.add("ob-hidden");
     this.choicesEl.classList.add("ob-hidden");
     this.rowEl.classList.add("ob-hidden");
     this.spinEl.classList.remove("ob-hidden");
   }
 
-  /** Render a resolved outcome: typewriter narrative, then free-text or choices. */
-  showResult(narrative: string, interaction: NextInteraction): void {
+  /** Render a resolved outcome: typewriter narrative, an effects line, then input/choices. */
+  showResult(narrative: string, interaction: NextInteraction, effects = ""): void {
     this.opened = true;
     this.root.classList.add("ob-show");
     this.spinEl.classList.add("ob-hidden");
@@ -135,8 +149,13 @@ export class EncounterModal {
     this.choicesEl.classList.add("ob-hidden");
     this.rowEl.classList.add("ob-hidden");
     this.promptEl.classList.add("ob-hidden");
+    this.effectsEl.classList.add("ob-hidden");
 
     this.typewriter(narrative, () => {
+      if (effects) {
+        this.effectsEl.textContent = effects;
+        this.effectsEl.classList.remove("ob-hidden");
+      }
       this.promptEl.textContent = interaction.prompt;
       this.promptEl.classList.remove("ob-hidden");
       if (interaction.type === "choices" && interaction.options.length > 0) {
@@ -164,16 +183,10 @@ export class EncounterModal {
 
   destroy(): void {
     this.clearTyping();
-    window.removeEventListener("keydown", this.onKey);
     this.root.remove();
   }
 
   // --- internals ---
-
-  private onKey = (e: KeyboardEvent): void => {
-    if (!this.opened) return;
-    if (e.key === "Escape") this.leave();
-  };
 
   private submitText(): void {
     const v = this.inputEl.value.trim();

@@ -24,7 +24,7 @@ export function isDead(s: GameState): boolean {
 export function newGame(seed: string): GameState {
   return {
     seed,
-    day: 1,
+    day: 0, // hour zero — the outbreak is just beginning
     timeOfDay: "day",
     player: {
       name: "Survivor",

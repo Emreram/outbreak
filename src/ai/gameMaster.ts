@@ -92,12 +92,14 @@ export function randomTheme(): string {
   return SCENARIO_THEMES[Math.floor(Math.random() * SCENARIO_THEMES.length)];
 }
 
-/** Build a complete fresh run: a seed + a generated opening scenario folded in. */
-export async function newRunState(seed?: string): Promise<{ state: GameState; intro: string }> {
+/** Build a complete fresh run: a seed + a generated opening scenario folded in.
+ *  A provided player name overrides the scenario's suggested name. */
+export async function newRunState(seed?: string, name?: string): Promise<{ state: GameState; intro: string }> {
   const s = seed ?? randomSeed();
   const scenario = await generateScenario();
   const gs = newGame(s);
   applyScenario(gs, scenario);
+  if (name && name.trim()) gs.player.name = name.trim().slice(0, 24);
   return { state: gs, intro: scenario.intro_narrative };
 }
 

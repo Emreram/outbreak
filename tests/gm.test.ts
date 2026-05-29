@@ -128,6 +128,10 @@ async function main() {
   armed.inventory.push({ item: "Crowbar", qty: 1 });
   ok(isArmed(armed), "isArmed detects a weapon");
 
+  const named = await newRunState("name-seed", "Alex");
+  ok(named.state.player.name === "Alex", "newRunState applies the provided player name");
+  ok(newGame("d0").day === 0, "a fresh run starts at Day 0 (outbreak hour zero)");
+
   console.log(fail === 0 ? "ALL GM CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
   process.exit(fail === 0 ? 0 : 1);
 }
