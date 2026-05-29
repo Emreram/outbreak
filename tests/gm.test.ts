@@ -5,8 +5,9 @@
 
 import { sanitizeGM, applyOutcome } from "../src/game/outcomes";
 import { newGame } from "../src/game/GameState";
+import { isArmed } from "../src/game/inventory";
 import { MockProvider } from "../src/ai/mockProvider";
-import { runTurn } from "../src/ai/gameMaster";
+import { runTurn, newRunState } from "../src/ai/gameMaster";
 import type { GMResponse } from "../src/shared/contracts";
 
 let fail = 0;
@@ -113,6 +114,19 @@ async function main() {
     [p.hp, p.stamina, p.hunger, p.thirst, p.infection].every((v) => v >= 0 && v <= 100),
     "after applyOutcome all stats in 0..100",
   );
+
+  // new-run scenario integration (Phase 6/7)
+  const run = await newRunState("run-seed");
+  ok(
+    run.state.seed === "run-seed" && run.state.inventory.length > 0 && run.intro.length > 0,
+    "newRunState builds a scenario run (seed + items + intro)",
+  );
+  ok(run.state.player.hp === 100 && run.state.difficultyModifier > 0, "new run state is sane");
+
+  const armed = newGame("x");
+  ok(!isArmed(armed), "fresh survivor is unarmed");
+  armed.inventory.push({ item: "Crowbar", qty: 1 });
+  ok(isArmed(armed), "isArmed detects a weapon");
 
   console.log(fail === 0 ? "ALL GM CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
   process.exit(fail === 0 ? 0 : 1);

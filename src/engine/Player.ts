@@ -19,6 +19,7 @@ export class Player {
   private readonly wasd: WasdKeys;
   private facing = 0; // radians; Kenney top-down sprites default-face east (+x)
   private walkT = 0; // walk-bob phase accumulator
+  private _sprinting = false;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
@@ -48,7 +49,7 @@ export class Player {
     }) as WasdKeys;
   }
 
-  update(): void {
+  update(canSprint = false): void {
     const left = this.cursors.left.isDown || this.wasd.left.isDown;
     const right = this.cursors.right.isDown || this.wasd.right.isDown;
     const up = this.cursors.up.isDown || this.wasd.up.isDown;
@@ -61,18 +62,27 @@ export class Player {
     if (up) vy -= 1;
     if (down) vy += 1;
 
-    // Normalise so diagonals aren't faster.
     const len = Math.hypot(vx, vy);
+    const sprint = len > 0 && canSprint && this.cursors.shift.isDown;
+    this._sprinting = sprint;
+    const speed = sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED;
+
+    // Normalise so diagonals aren't faster.
     if (len > 0) {
-      this.sprite.setVelocity((vx / len) * PLAYER_SPEED, (vy / len) * PLAYER_SPEED);
+      this.sprite.setVelocity((vx / len) * speed, (vy / len) * speed);
       this.facing = Math.atan2(vy, vx); // turn to face the direction of travel
-      this.walkT += 1;
+      this.walkT += sprint ? 2 : 1;
       this.sprite.setScale(1 + 0.03 * Math.sin(this.walkT * 0.35)); // subtle walk bob
     } else {
       this.sprite.setVelocity(0, 0);
       this.sprite.setScale(1);
     }
     this.sprite.setRotation(this.facing);
+  }
+
+  /** True while sprinting this frame (drains stamina, widens enemy aggro). */
+  get sprinting(): boolean {
+    return this._sprinting;
   }
 
   /** Player tile coordinates, handy for the debug overlay. */

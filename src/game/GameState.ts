@@ -3,7 +3,8 @@
 // persistence. Nothing else may mutate stats without clamping — this is the
 // engine's authority over hard mechanics (CLAUDE.md §5, §14).
 
-import type { GameState } from "../shared/contracts";
+import type { GameState, ScenarioResponse } from "../shared/contracts";
+import { addItem } from "./inventory";
 
 export const STAT_MIN = 0;
 export const STAT_MAX = 100;
@@ -46,6 +47,16 @@ export function newGame(seed: string): GameState {
     knownLocations: [],
     difficultyModifier: 1.0,
   };
+}
+
+/** Fold a generated opening scenario into a fresh run (CLAUDE.md §8.6). */
+export function applyScenario(gs: GameState, sc: ScenarioResponse): void {
+  gs.player.name = sc.player_name || gs.player.name;
+  gs.difficultyModifier = Number.isFinite(sc.difficulty_modifier) ? sc.difficulty_modifier : 1;
+  gs.inventory = [];
+  for (const it of sc.starting_items) addItem(gs, it.item, it.qty, it.note);
+  if (gs.inventory.length === 0) addItem(gs, "Water Bottle", 1);
+  gs.recentEvents = [`Goal: ${sc.starting_goal}`];
 }
 
 /** Append a one-line event and keep only the last ~6 (CLAUDE.md §7, §8.5). */

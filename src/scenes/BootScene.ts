@@ -1,15 +1,12 @@
 import Phaser from "phaser";
 import { TILE_SIZE } from "../game/constants";
-import {
-  ASSET_PATHS,
-  generatePlayerTexture,
-  generateTileTexture,
-} from "../engine/textures";
-import { randomSeed } from "../game/rng";
+import { ASSET_PATHS, generatePlayerTexture, generateTileTexture } from "../engine/textures";
+import { loadGame, saveGame } from "../game/GameState";
+import { newRunState } from "../ai/gameMaster";
 
-// Boot: load CC0 art (Phase 2), fall back to generated placeholders for anything
-// that failed to load, decide the run seed, then enter the world. A seed can be
-// pinned via ?seed=<value> for reproducible debugging (CLAUDE.md §10).
+// Boot: load CC0 art (fall back to placeholders), then either resume a saved run
+// or generate a fresh run (new seed + AI scenario) and hand off to the world.
+// ?seed=<value> forces a fresh, reproducible run (CLAUDE.md §10, §8.6).
 
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -22,18 +19,37 @@ export class BootScene extends Phaser.Scene {
     }
   }
 
-  create(): void {
-    // Placeholder fallback: these no-op if the CC0 texture already loaded.
+  async create(): Promise<void> {
     generateTileTexture(this, TILE_SIZE);
     generatePlayerTexture(this, TILE_SIZE);
 
-    const urlSeed = new URLSearchParams(window.location.search).get("seed");
-    if (!this.registry.has("seed")) {
-      this.registry.set("seed", urlSeed ?? randomSeed());
-    }
-    // A ?seed= in the URL pins a fresh, reproducible run (ignores any save).
-    this.registry.set("seedFromUrl", urlSeed !== null);
+    const loading = this.add
+      .text(this.scale.width / 2, this.scale.height / 2, "Loading…", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: "#9fb3c8",
+      })
+      .setOrigin(0.5);
 
+    const urlSeed = new URLSearchParams(window.location.search).get("seed");
+    const existing = loadGame();
+
+    if (urlSeed !== null) {
+      const { state, intro } = await newRunState(urlSeed);
+      saveGame(state);
+      this.registry.set("seed", state.seed);
+      this.registry.set("intro", intro);
+    } else if (existing) {
+      this.registry.set("seed", existing.seed); // resume the saved run
+    } else {
+      const { state, intro } = await newRunState();
+      saveGame(state);
+      this.registry.set("seed", state.seed);
+      this.registry.set("intro", intro);
+    }
+    this.registry.set("seedFromUrl", false);
+
+    loading.destroy();
     this.scene.start("WorldScene");
   }
 }

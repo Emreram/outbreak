@@ -1,5 +1,6 @@
 import type { LLMProvider } from "./provider";
 import { createRng, type Rng } from "../game/rng";
+import { WEAPON_ITEMS } from "../game/inventory";
 
 // Offline procedural Game Master ("the Director"). Implements LLMProvider so the
 // full AI-driven loop runs on ANY device with NO model and NO API key — this is
@@ -33,10 +34,6 @@ const LOOT: Record<string, string[]> = {
   house: ["Canned Food", "Water Bottle", "Kitchen Knife", "Batteries", "Blanket"],
   street: ["Scrap Metal", "Empty Bottle", "Loose Brick"],
 };
-
-const WEAPONS = new Set([
-  "Pistol", "Crowbar", "Hatchet", "Hammer", "Baton", "Kitchen Knife", "Machete", "Bat",
-]);
 
 const FOOD = new Set(["Canned Food", "Energy Bar", "Dried Fruit", "Snacks"]);
 const DRINK = new Set(["Water Bottle", "Soda"]);
@@ -92,7 +89,7 @@ function turn(p: TurnIn, rng: Rng): object {
   const value = (p.input?.value ?? "").toLowerCase().trim();
   const hp = gs.player?.hp ?? 100;
   const night = gs.timeOfDay === "night" || gs.timeOfDay === "dusk";
-  const hasWeapon = inv.some((i) => WEAPONS.has(i.item));
+  const hasWeapon = inv.some((i) => WEAPON_ITEMS.has(i.item));
   const locLoot = LOOT[loc] ?? LOOT.street;
   const intent = classify(value);
 

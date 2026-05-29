@@ -15,15 +15,16 @@ interface Params {
   aggro: number; // px detection radius
   damage: number; // hp per hit (0 = harmless)
   bite: boolean; // can transmit infection
+  hp: number; // melee hits to put down
   tint?: number;
   scale: number;
 }
 
 const PARAMS: Record<SpawnType, Params> = {
-  zombie: { texture: ZOMBIE_KEY, speed: 55, aggro: 150, damage: 6, bite: true, scale: 0.8 },
-  zombie_runner: { texture: ZOMBIE_KEY, speed: 132, aggro: 240, damage: 9, bite: true, tint: 0xff6b6b, scale: 0.78 },
-  survivor_hostile: { texture: SURVIVOR_NPC_KEY, speed: 88, aggro: 210, damage: 8, bite: false, tint: 0xffae6b, scale: 0.82 },
-  survivor_friendly: { texture: SURVIVOR_NPC_KEY, speed: 38, aggro: 0, damage: 0, bite: false, tint: 0x9affa6, scale: 0.82 },
+  zombie: { texture: ZOMBIE_KEY, speed: 55, aggro: 150, damage: 6, bite: true, hp: 2, scale: 0.8 },
+  zombie_runner: { texture: ZOMBIE_KEY, speed: 132, aggro: 240, damage: 9, bite: true, hp: 3, tint: 0xff6b6b, scale: 0.78 },
+  survivor_hostile: { texture: SURVIVOR_NPC_KEY, speed: 88, aggro: 210, damage: 8, bite: false, hp: 3, tint: 0xffae6b, scale: 0.82 },
+  survivor_friendly: { texture: SURVIVOR_NPC_KEY, speed: 38, aggro: 0, damage: 0, bite: false, hp: 1, tint: 0x9affa6, scale: 0.82 },
 };
 
 export class Enemy {
@@ -31,6 +32,7 @@ export class Enemy {
   readonly kind: SpawnType;
   readonly damage: number;
   readonly bite: boolean;
+  hp: number;
   state: EnemyState = "wander";
   private lastAttack = 0;
   private wanderUntil = 0;
@@ -41,6 +43,7 @@ export class Enemy {
     this.p = PARAMS[kind] ?? PARAMS.zombie;
     this.damage = this.p.damage;
     this.bite = this.p.bite;
+    this.hp = this.p.hp;
 
     const tex = scene.textures.exists(this.p.texture) ? this.p.texture : PLAYER_KEY;
     this.sprite = scene.physics.add.sprite(x, y, tex);
@@ -93,6 +96,18 @@ export class Enemy {
       this.lastAttack = now;
       return true;
     }
+    return false;
+  }
+
+  /** Apply melee damage; returns true if this put the enemy down. */
+  takeDamage(n: number): boolean {
+    this.hp -= n;
+    if (this.hp <= 0) return true;
+    this.sprite.setTint(0xffffff);
+    this.sprite.scene.time.delayedCall(80, () => {
+      if (this.p.tint !== undefined) this.sprite.setTint(this.p.tint);
+      else this.sprite.clearTint();
+    });
     return false;
   }
 

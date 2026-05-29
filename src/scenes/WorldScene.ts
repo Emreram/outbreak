@@ -12,10 +12,10 @@ import {
   saveGame,
 } from "../game/GameState";
 import { applyDecay } from "../game/survival";
-import { removeItem } from "../game/inventory";
+import { isArmed, removeItem } from "../game/inventory";
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
-import { runTurn } from "../ai/gameMaster";
+import { newRunState, runTurn } from "../ai/gameMaster";
 import { WorldRenderer } from "../engine/WorldRenderer";
 import { Player } from "../engine/Player";
 import { Enemy } from "../engine/Enemy";
@@ -33,6 +33,8 @@ const SOLID = new Set<number>(SOLID_TILES as number[]);
 type StatKey = "hp" | "stamina" | "hunger" | "thirst" | "infection";
 const DECAY_MS = 2000;
 const SAVE_MS = 4000;
+const PHASES = ["dawn", "day", "dusk", "night"] as const;
+const SEG_MS = 45000; // real seconds per time-of-day segment
 
 export class WorldScene extends Phaser.Scene {
   private player!: Player;
@@ -51,6 +53,10 @@ export class WorldScene extends Phaser.Scene {
   private ambientAcc = 0;
   private ambientDelay = 30000;
   private currentBuildingId: number | null = null;
+  private nightOverlay!: Phaser.GameObjects.Rectangle;
+  private segAcc = 0;
+  private kills = 0;
+  private lastMelee = 0;
   private readonly saveOnUnload = () => this.persist();
 
   constructor() {
@@ -66,6 +72,9 @@ export class WorldScene extends Phaser.Scene {
     this.ambientAcc = 0;
     this.ambientDelay = nextAmbientDelayMs();
     this.currentBuildingId = null;
+    this.segAcc = 0;
+    this.kills = 0;
+    this.lastMelee = 0;
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
     const fromUrl = this.registry.get("seedFromUrl") === true;
@@ -97,6 +106,15 @@ export class WorldScene extends Phaser.Scene {
     this.enemyGroup = this.physics.add.group();
     this.physics.add.collider(this.enemyGroup, this.worldRenderer.layer);
 
+    // Day/night tint overlay (screen-space, above the world, below HUD).
+    this.nightOverlay = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x00040c, 0)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(500);
+    this.scale.on("resize", this.onResize, this);
+    this.applyPhaseVisual();
+
     if (!saved) {
       this.state.player.x = startX;
       this.state.player.y = startY;
@@ -114,6 +132,7 @@ export class WorldScene extends Phaser.Scene {
     window.addEventListener("beforeunload", this.saveOnUnload);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener("beforeunload", this.saveOnUnload);
+      this.scale.off("resize", this.onResize, this);
       this.modal.destroy();
       this.persist();
     });
@@ -121,13 +140,24 @@ export class WorldScene extends Phaser.Scene {
     // Seed the streets with a few wandering walkers so the world feels alive.
     if (!isDead(this.state)) this.spawnAmbientWalkers(Phaser.Math.Between(4, 7));
 
+    // A fresh run opens with its AI-authored scenario intro.
+    const intro = this.registry.get("intro") as string | undefined;
+    if (intro) {
+      this.registry.set("intro", undefined);
+      if (!isDead(this.state)) this.showIntro(intro);
+    }
+
     if (isDead(this.state)) this.enterDeath();
   }
 
   override update(time: number, delta: number): void {
     // The world pauses during an encounter (CLAUDE.md §2).
     if (!this.dead && !this.inEncounter) {
-      this.player.update();
+      const canSprint = this.state.player.stamina > 5;
+      this.player.update(canSprint);
+      if (this.player.sprinting) {
+        this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012);
+      }
       this.updateEnemies(time);
       this.checkBuildingTrigger();
 
@@ -138,10 +168,16 @@ export class WorldScene extends Phaser.Scene {
         if (isDead(this.state)) this.enterDeath();
       }
 
+      this.segAcc += delta;
+      if (this.segAcc >= SEG_MS) {
+        this.segAcc -= SEG_MS;
+        this.advanceClock();
+      }
+
       this.ambientAcc += delta;
       if (this.ambientAcc >= this.ambientDelay) {
         this.ambientAcc = 0;
-        this.ambientDelay = nextAmbientDelayMs();
+        this.ambientDelay = nextAmbientDelayMs() * (this.isNight() ? 0.55 : 1);
         this.ambientEvent();
       }
 
@@ -160,11 +196,48 @@ export class WorldScene extends Phaser.Scene {
   private updateEnemies(now: number): void {
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
-    const noise = this.player.isMoving() ? 45 : 0;
+    const noise =
+      (this.player.isMoving() ? 45 : 0) + (this.player.sprinting ? 70 : 0) + this.nightNoise();
     for (const e of this.enemies) {
       e.update(px, py, noise, now);
       if (e.tryAttack(px, py, now)) this.takeHit(e);
     }
+  }
+
+  private isNight(): boolean {
+    return this.state.timeOfDay === "night" || this.state.timeOfDay === "dusk";
+  }
+
+  /** Zombies sense you from farther away in the dark. */
+  private nightNoise(): number {
+    if (this.state.timeOfDay === "night") return 80;
+    if (this.state.timeOfDay === "dusk") return 35;
+    return 0;
+  }
+
+  private advanceClock(): void {
+    const idx = PHASES.indexOf(this.state.timeOfDay);
+    const next = (idx + 1) % PHASES.length;
+    if (next === 0) this.state.day += 1; // wrapped night -> dawn
+    this.state.timeOfDay = PHASES[next];
+    this.applyPhaseVisual();
+    this.persist();
+  }
+
+  private applyPhaseVisual(): void {
+    const tints: Record<string, { color: number; alpha: number }> = {
+      dawn: { color: 0x24304f, alpha: 0.22 },
+      day: { color: 0x000000, alpha: 0.0 },
+      dusk: { color: 0x3a1f10, alpha: 0.3 },
+      night: { color: 0x00040c, alpha: 0.56 },
+    };
+    const v = tints[this.state.timeOfDay] ?? tints.day;
+    this.nightOverlay.setFillStyle(v.color, 1);
+    this.tweens.add({ targets: this.nightOverlay, alpha: v.alpha, duration: 1200 });
+  }
+
+  private onResize(size: Phaser.Structs.Size): void {
+    this.nightOverlay?.setSize(size.width, size.height);
   }
 
   private takeHit(e: Enemy): void {
@@ -346,15 +419,15 @@ export class WorldScene extends Phaser.Scene {
     const kb = this.input.keyboard;
     if (!kb) return;
 
-    // R = brand-new run (new seed + fresh state).
-    kb.on("keydown-R", () => {
-      clearSave();
-      this.registry.set("seed", randomSeed());
-      this.scene.restart();
-    });
+    // R = brand-new run (new seed + new AI scenario).
+    kb.on("keydown-R", () => void this.startNewRun());
 
     // E = act on your surroundings (open an AI Game Master encounter).
     kb.on("keydown-E", () => this.tryInteract());
+
+    // SPACE / F = melee swing at the nearest threat.
+    kb.on("keydown-SPACE", () => this.meleeAttack());
+    kb.on("keydown-F", () => this.meleeAttack());
 
     // Debug actions (Phase 3) so stats/inventory are visibly alive. Phase 4
     // replaces these with GM-driven, validated outcomes.
@@ -389,18 +462,83 @@ export class WorldScene extends Phaser.Scene {
     this.dead = true;
     this.inEncounter = false;
     this.player.sprite.setVelocity(0, 0);
+    this.modal.close();
+    clearSave(); // the run is over; the next run is fresh
     const msg =
       reason ??
-      (this.state.player.infection >= 100 ? "The infection takes you." : "Your body gives out.");
-    this.hud.showDeath(msg);
-    this.persist();
+      (this.state.player.infection >= 100 ? "The infection took you." : "Your wounds were too much.");
+    this.scene.start("GameOverScene", {
+      days: this.state.day,
+      kills: this.kills,
+      reason: msg,
+      name: this.state.player.name,
+    });
+  }
+
+  /** Melee swing at the nearest threat (SPACE/F). Weapons hit harder. */
+  private meleeAttack(): void {
+    if (this.dead || this.inEncounter) return;
+    const now = this.time.now;
+    if (now - this.lastMelee < 380 || this.state.player.stamina < 4) return;
+    this.lastMelee = now;
+    this.state.player.stamina = clampStat(this.state.player.stamina - 6);
+
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let nearest: Enemy | null = null;
+    let best = 50;
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.sprite.x - px, e.sprite.y - py);
+      if (d < best) {
+        best = d;
+        nearest = e;
+      }
+    }
+    this.cameras.main.shake(50, 0.003);
+    if (!nearest) return;
+
+    const armed = isArmed(this.state);
+    if (nearest.takeDamage(armed ? 2 : 1)) {
+      const kind = nearest.kind.replace(/_/g, " ");
+      this.removeEnemy(nearest);
+      this.kills += 1;
+      pushRecentEvent(this.state, `Put down a ${kind}.`);
+    } else if (!armed && Math.random() < 0.4) {
+      this.takeHit(nearest); // bare hands are risky
+    }
+  }
+
+  private removeEnemy(e: Enemy): void {
+    const i = this.enemies.indexOf(e);
+    if (i >= 0) this.enemies.splice(i, 1);
+    e.destroy();
+  }
+
+  /** Open the run with its AI-authored scenario intro; first action goes to the GM. */
+  private showIntro(intro: string): void {
+    this.inEncounter = true;
+    this.player.sprite.setVelocity(0, 0);
+    this.freezeEnemies();
+    const b = this.buildingAt();
+    this.encounterLoc = b ? b.type : "street";
+    this.modal.showResult(intro, { type: "free_text", prompt: "What do you do?", options: [] });
+  }
+
+  private async startNewRun(): Promise<void> {
+    if (this.inEncounter) this.modal.close();
+    this.showToast("Generating a new world…");
+    const { state, intro } = await newRunState();
+    saveGame(state);
+    this.registry.set("seed", state.seed);
+    this.registry.set("seedFromUrl", false);
+    this.registry.set("intro", intro);
+    this.scene.restart();
   }
 
   private persist(): void {
-    if (this.player) {
-      this.state.player.x = this.player.sprite.x;
-      this.state.player.y = this.player.sprite.y;
-    }
+    if (this.dead) return; // never persist a finished run
+    this.state.player.x = this.player.sprite.x;
+    this.state.player.y = this.player.sprite.y;
     saveGame(this.state);
   }
 }

@@ -6,6 +6,16 @@ import type { GameState } from "../shared/contracts";
 
 export const MAX_STACK = 99;
 
+/** Items that count as a melee/ranged weapon (better combat odds). */
+export const WEAPON_ITEMS: ReadonlySet<string> = new Set([
+  "Pistol", "Crowbar", "Hatchet", "Hammer", "Baton", "Kitchen Knife", "Machete", "Bat", "Shiv",
+]);
+
+/** Whether the player is holding any weapon. */
+export function isArmed(s: GameState): boolean {
+  return s.inventory.some((i) => WEAPON_ITEMS.has(i.item));
+}
+
 /** Add qty of an item, merging into an existing stack and capping the total. */
 export function addItem(s: GameState, item: string, qty = 1, note?: string): void {
   if (qty <= 0) return;

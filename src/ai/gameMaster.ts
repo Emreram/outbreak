@@ -11,6 +11,8 @@ import { ClaudeProvider } from "./claudeProvider";
 import { MockProvider } from "./mockProvider";
 import { GM_SYSTEM_PROMPT, SCENARIO_SYSTEM_PROMPT } from "./prompts";
 import { sanitizeGM } from "../game/outcomes";
+import { applyScenario, newGame } from "../game/GameState";
+import { randomSeed } from "../game/rng";
 
 function makeProvider(): LLMProvider {
   switch (configuredProvider()) {
@@ -88,6 +90,15 @@ export async function generateScenario(theme?: string): Promise<ScenarioResponse
 
 export function randomTheme(): string {
   return SCENARIO_THEMES[Math.floor(Math.random() * SCENARIO_THEMES.length)];
+}
+
+/** Build a complete fresh run: a seed + a generated opening scenario folded in. */
+export async function newRunState(seed?: string): Promise<{ state: GameState; intro: string }> {
+  const s = seed ?? randomSeed();
+  const scenario = await generateScenario();
+  const gs = newGame(s);
+  applyScenario(gs, scenario);
+  return { state: gs, intro: scenario.intro_narrative };
 }
 
 function safeFallback(): GMResponse {

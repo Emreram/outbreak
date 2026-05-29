@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { BootScene } from "./scenes/BootScene";
 import { WorldScene } from "./scenes/WorldScene";
+import { GameOverScene } from "./scenes/GameOverScene";
 
 // Phaser bootstrap (CLAUDE.md §6). Arcade physics for movement/collision,
 // FIT scaling so the canvas fills the window, pixel-art friendly rendering.
@@ -21,7 +22,7 @@ const config: Phaser.Types.Core.GameConfig = {
     default: "arcade",
     arcade: { debug: false },
   },
-  scene: [BootScene, WorldScene],
+  scene: [BootScene, WorldScene, GameOverScene],
 };
 
 // eslint-disable-next-line no-new
