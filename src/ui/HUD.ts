@@ -86,7 +86,7 @@ export class HUD {
     const cY = invY + this.invText.height + 8;
     this.controlsText
       .setPosition(PANEL_X + 8, cY)
-      .setText("WASD/arrows move · R new run\n[1] eat  [2] drink  [3] hurt  [4] bandage");
+      .setText("WASD/arrows move · E act · R new run\n[1] eat  [2] drink  [3] hurt  [4] bandage");
 
     const dY = cY + this.controlsText.height + 6;
     this.debugText

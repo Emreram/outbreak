@@ -12,9 +12,15 @@ export interface LLMProvider {
   generate(systemPrompt: string, payload: object, schema: object): Promise<string>;
 }
 
-export type ProviderName = "ollama" | "claude";
+export type ProviderName = "ollama" | "claude" | "mock";
 
-/** Which provider is configured via env (defaults to local Ollama). */
+/**
+ * Which provider is active. Defaults to the offline procedural GM ("mock") so the
+ * game runs on ANY device with no model and no key. Set VITE_AI_PROVIDER=ollama
+ * (local model) or =claude (cloud) to swap in a real LLM.
+ */
 export function configuredProvider(): ProviderName {
-  return import.meta.env.VITE_AI_PROVIDER === "claude" ? "claude" : "ollama";
+  const v = import.meta.env?.VITE_AI_PROVIDER;
+  if (v === "ollama" || v === "claude") return v;
+  return "mock";
 }

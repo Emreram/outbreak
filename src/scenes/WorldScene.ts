@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { GameState } from "../shared/contracts";
+import type { GameState, TurnInput } from "../shared/contracts";
 import { generateWorld, type WorldData } from "../game/worldgen";
 import { randomSeed } from "../game/rng";
 import {
@@ -13,10 +13,13 @@ import {
 } from "../game/GameState";
 import { applyDecay } from "../game/survival";
 import { removeItem } from "../game/inventory";
+import { applyOutcome } from "../game/outcomes";
+import { runTurn } from "../ai/gameMaster";
 import { WorldRenderer } from "../engine/WorldRenderer";
 import { Player } from "../engine/Player";
 import { setupCamera } from "../engine/Camera";
 import { HUD } from "../ui/HUD";
+import { EncounterModal } from "../ui/EncounterModal";
 import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../game/constants";
 
 // The open world (CLAUDE.md §13 Phases 1–3): a walkable seeded city plus the
@@ -32,10 +35,13 @@ export class WorldScene extends Phaser.Scene {
   private world!: WorldData;
   private worldRenderer!: WorldRenderer;
   private hud!: HUD;
+  private modal!: EncounterModal;
   private state!: GameState;
   private decayAcc = 0;
   private saveAcc = 0;
   private dead = false;
+  private inEncounter = false;
+  private encounterLoc = "street";
   private readonly saveOnUnload = () => this.persist();
 
   constructor() {
@@ -44,6 +50,7 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     this.dead = false;
+    this.inEncounter = false;
     this.decayAcc = 0;
     this.saveAcc = 0;
 
@@ -80,11 +87,17 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.hud = new HUD(this);
+    this.modal = new EncounterModal();
+    this.modal.setHandlers(
+      (input) => this.onEncounterAction(input),
+      () => this.onEncounterLeave(),
+    );
     this.bindKeys();
 
     window.addEventListener("beforeunload", this.saveOnUnload);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener("beforeunload", this.saveOnUnload);
+      this.modal.destroy();
       this.persist();
     });
 
@@ -92,7 +105,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   override update(_time: number, delta: number): void {
-    if (!this.dead) {
+    // The world pauses during an encounter (CLAUDE.md §2).
+    if (!this.dead && !this.inEncounter) {
       this.player.update();
 
       this.decayAcc += delta;
@@ -109,8 +123,66 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    this.hud.update(this.state, this.debugInfo());
+  }
+
+  private debugInfo(): { fps: number; tx: number; ty: number } {
     const { tx, ty } = this.player.tilePos();
-    this.hud.update(this.state, { fps: Math.round(this.game.loop.actualFps), tx, ty });
+    return { fps: Math.round(this.game.loop.actualFps), tx, ty };
+  }
+
+  // --- encounters (CLAUDE.md §2, §8) -----------------------------------------
+
+  /** What location the player is standing in (building type, or "street"). */
+  private locationTypeAt(): string {
+    const { tx, ty } = this.player.tilePos();
+    for (const b of this.world.buildings) {
+      if (tx >= b.tx && tx <= b.tx + b.tw - 1 && ty >= b.ty && ty <= b.ty + b.th - 1) {
+        return b.type;
+      }
+    }
+    return "street";
+  }
+
+  /** Press E to act on the current surroundings — opens an encounter. */
+  private tryInteract(): void {
+    if (this.dead || this.inEncounter) return;
+    this.inEncounter = true;
+    this.player.sprite.setVelocity(0, 0);
+    this.encounterLoc = this.locationTypeAt();
+    const inside = this.encounterLoc !== "street";
+    const title = inside ? this.encounterLoc.replace(/_/g, " ") : "The street";
+    const opening: TurnInput = {
+      mode: "free_text",
+      value: inside
+        ? `I search the ${this.encounterLoc.replace(/_/g, " ")}.`
+        : "I scan the ruined street and the buildings around me.",
+    };
+    this.modal.openLoading(title);
+    void this.resolveTurn(opening);
+  }
+
+  private onEncounterAction(input: TurnInput): void {
+    this.modal.openLoading();
+    void this.resolveTurn(input);
+  }
+
+  private async resolveTurn(input: TurnInput): Promise<void> {
+    const gm = await runTurn(this.state, input, this.encounterLoc);
+    const result = applyOutcome(this.state, gm);
+    this.hud.update(this.state, this.debugInfo());
+    this.persist();
+    if (result.gameOver) {
+      this.modal.close();
+      this.enterDeath(result.reason || undefined);
+      return;
+    }
+    this.modal.showResult(result.narrative, result.interaction);
+  }
+
+  private onEncounterLeave(): void {
+    this.inEncounter = false;
+    this.persist();
   }
 
   private bindKeys(): void {
@@ -124,6 +196,9 @@ export class WorldScene extends Phaser.Scene {
       this.scene.restart();
     });
 
+    // E = act on your surroundings (open an AI Game Master encounter).
+    kb.on("keydown-E", () => this.tryInteract());
+
     // Debug actions (Phase 3) so stats/inventory are visibly alive. Phase 4
     // replaces these with GM-driven, validated outcomes.
     kb.on("keydown-ONE", () => this.consume("Canned Food", { hunger: 25, hp: 5 }, "Ate canned food."));
@@ -134,7 +209,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Consume one of an item (if held) and apply clamped stat gains. */
   private consume(item: string, gains: Partial<Record<StatKey, number>>, msg: string): void {
-    if (this.dead) return;
+    if (this.dead || this.inEncounter) return;
     if (removeItem(this.state, item, 1) === 0) return;
     const p = this.state.player;
     (Object.keys(gains) as StatKey[]).forEach((k) => {
@@ -145,20 +220,22 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private debugHurt(): void {
-    if (this.dead) return;
+    if (this.dead || this.inEncounter) return;
     this.state.player.hp = clampStat(this.state.player.hp - 15);
     pushRecentEvent(this.state, "Took a hit.");
     if (isDead(this.state)) this.enterDeath();
     this.persist();
   }
 
-  private enterDeath(): void {
+  private enterDeath(reason?: string): void {
     if (this.dead) return;
     this.dead = true;
+    this.inEncounter = false;
     this.player.sprite.setVelocity(0, 0);
-    const reason =
-      this.state.player.infection >= 100 ? "The infection takes you." : "Your body gives out.";
-    this.hud.showDeath(reason);
+    const msg =
+      reason ??
+      (this.state.player.infection >= 100 ? "The infection takes you." : "Your body gives out.");
+    this.hud.showDeath(msg);
     this.persist();
   }
 

@@ -52,7 +52,7 @@ export class OllamaProvider implements LLMProvider {
 /** Build the default Ollama provider from Vite env (see .env.example). */
 export function createOllamaProvider(): OllamaProvider {
   return new OllamaProvider({
-    host: import.meta.env.VITE_OLLAMA_HOST ?? "http://localhost:11434",
-    model: import.meta.env.VITE_OLLAMA_MODEL ?? "llama3.1",
+    host: import.meta.env?.VITE_OLLAMA_HOST ?? "http://localhost:11434",
+    model: import.meta.env?.VITE_OLLAMA_MODEL ?? "llama3.1",
   });
 }

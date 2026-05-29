@@ -17,7 +17,7 @@ know it works before moving on.
 | 1 | Walkable world | ✅ Done | worldgen invariant harness + dev-server boot |
 | 2 | Designed art (CC0) | ✅ Done | baked-tileset visual check + asset load/serve + build |
 | 3 | State + HUD + save/load | ✅ Done | 21 game-logic unit tests + HUD smoke + dev boot |
-| 4 | The Game Master (core) | ⏳ Planned | provider/validation unit tests + live Ollama turn |
+| 4 | The Game Master (core) | ✅ Done | GM pipeline tests (offline GM + validation + e2e turn) + build |
 | 5 | Encounters & reactive world | ⏳ Planned | trigger/spawn/flag tests + play session |
 | 6 | Survival + death + new run | ⏳ Planned | decay/death tests + full-loop play session |
 | 7 | Replayability & polish | ⏳ Planned | scenario-variety + MVP Definition-of-Done pass |
