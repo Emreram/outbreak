@@ -8,13 +8,17 @@ cloud Claude behind the same interface.
 - **Full design spec:** [`CLAUDE.md`](./CLAUDE.md)
 - **Build roadmap & verification plan:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
-> **Current status: Phases 0–3 complete and verified.**
-> A seeded, procedurally generated city rendered with **CC0 Kenney art** (top-down
-> tiles + an animated survivor that turns to face movement), camera-follow, and wall
-> collisions — plus a live **HUD** (HP / stamina / hunger / thirst / infection +
-> inventory), survival stat **decay**, and **localStorage save/load** (your run
-> resumes on reload). The AI Game Master and combat arrive in later phases (see the
-> plan). No model or internet is required to run what exists today.
+> **Current status: MVP complete (Phases 0–7).**
+> A seeded procedural city in **CC0 Kenney art**; an animated survivor with movement,
+> sprint, and **melee**; **zombies** (walkers + runners) that wander and chase; an **AI
+> Game Master** that resolves free-text or 4-choice actions into validated outcomes
+> (the engine clamps/validates everything); a live **HUD**; **survival** (hunger /
+> thirst / stamina / infection) with a **day/night** cycle; **death → summary → a new,
+> AI-authored run**; a **main menu**; sound; and **touch controls** for phones.
+>
+> **Runs on any device with no setup** — an offline procedural GM is the default, so
+> the full loop works in any browser with no model and no API key. A local **Ollama**
+> model or cloud **Claude** is a one-env-var swap (`VITE_AI_PROVIDER`).
 
 ---
 
@@ -34,18 +38,20 @@ npm run dev
 Open the URL Vite prints (default **http://localhost:5173/**).
 
 ### Controls
-| Action | Keys |
+| Action | Keys / Touch |
 |---|---|
-| Move | **WASD** or **arrow keys** |
-| New run (new city + fresh stats) | **R** |
-| Eat / Drink / Hurt (debug) / Bandage | **1** / **2** / **3** / **4** |
+| Move | **WASD** / **arrows** · on-screen **joystick** (mobile) |
+| Sprint | hold **Shift** · push the joystick to its edge |
+| Act / open an encounter | **E** · the **ACT** button |
+| Attack (melee) | **SPACE** / **F** · the **HIT** button |
+| New run | **R** |
+| Quick item use (debug) | **1** eat · **2** drink · **3** hurt · **4** bandage |
 | Reproduce a specific city | add `?seed=<value>` to the URL, e.g. `…/?seed=alpha` |
 
-The HUD (top-left) shows day/time, your five survival stats, inventory, and a debug
-line (seed · fps · tile). Stats **decay** over time and the run **autosaves** — reload
-the page and you resume where you left off. Keys **1–4** are temporary Phase-3
-stand-ins so you can watch stats/inventory change and persist; the AI Game Master will
-drive these outcomes in Phase 4.
+In an **encounter** the world pauses and you either type what you do or tap one of 4
+options; the GM narrates and the engine applies a validated outcome. The HUD (top-left)
+shows day/time, your five survival stats, inventory, and a debug line. Your run
+**autosaves**; death → a summary → a brand-new, AI-authored run.
 
 ## Other scripts
 
@@ -91,14 +97,16 @@ Copy `.env.example` → `.env` to override defaults. All browser-visible vars ar
 
 | Var | Default | Purpose |
 |---|---|---|
-| `VITE_AI_PROVIDER` | `ollama` | `ollama` (local, default) or `claude` (optional cloud) |
+| `VITE_AI_PROVIDER` | `mock` | `mock` (offline GM, default), `ollama` (local), or `claude` (cloud) |
 | `VITE_OLLAMA_HOST` | `http://localhost:11434` | local Ollama HTTP API |
 | `VITE_OLLAMA_MODEL` | `llama3.1` | local model name |
 
-> The AI Game Master is wired up in **Phase 4**. When that lands, you'll run a
-> local model with `ollama run <model>` (and set `OLLAMA_ORIGINS` for browser
-> CORS, or use the optional `/server` proxy). A cloud API key, if ever used,
-> stays server-side — never in the browser bundle.
+> By default OUTBREAK uses a built-in **offline procedural Game Master** so it runs
+> anywhere with no setup. To use a real local model, run `ollama run <model>`, set
+> `VITE_AI_PROVIDER=ollama` (and `OLLAMA_ORIGINS` for browser CORS, or use the
+> optional `/server` proxy). If the configured model is unreachable, the game
+> automatically falls back to the offline GM. A cloud key, if ever used, stays
+> server-side — never in the browser bundle.
 
 ## License / assets
 

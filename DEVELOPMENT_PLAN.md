@@ -20,7 +20,7 @@ know it works before moving on.
 | 4 | The Game Master (core) | ✅ Done | GM pipeline tests (offline GM + validation + e2e turn) + build |
 | 5 | Encounters & reactive world | ✅ Done | build + logic tests; enemy AI / triggers (browser play) |
 | 6 | Survival + death + new run | ✅ Done | decay/death/new-run tests + build; full loop (browser play) |
-| 7 | Replayability & polish | ⏳ Planned | scenario-variety + MVP Definition-of-Done pass |
+| 7 | Replayability & polish | ✅ Done | build + tests; menu/sound/touch/scenario + mobile (browser play) |
 
 > **Discipline (CLAUDE.md §0, §13):** after every phase, make it run, **stop**, report
 > how to test it, and wait for the go-ahead. Do not build ahead of the current phase.

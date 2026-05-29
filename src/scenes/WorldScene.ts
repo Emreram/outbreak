@@ -22,6 +22,8 @@ import { Enemy } from "../engine/Enemy";
 import { setupCamera } from "../engine/Camera";
 import { HUD } from "../ui/HUD";
 import { EncounterModal } from "../ui/EncounterModal";
+import { TouchControls } from "../ui/TouchControls";
+import { sfx } from "../engine/audio";
 import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../game/constants";
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
@@ -42,6 +44,7 @@ export class WorldScene extends Phaser.Scene {
   private worldRenderer!: WorldRenderer;
   private hud!: HUD;
   private modal!: EncounterModal;
+  private touch!: TouchControls;
   private state!: GameState;
   private decayAcc = 0;
   private saveAcc = 0;
@@ -127,6 +130,11 @@ export class WorldScene extends Phaser.Scene {
       (input) => this.onEncounterAction(input),
       () => this.onEncounterLeave(),
     );
+    this.touch = new TouchControls();
+    this.touch.setHandlers(
+      () => this.tryInteract(),
+      () => this.meleeAttack(),
+    );
     this.bindKeys();
 
     window.addEventListener("beforeunload", this.saveOnUnload);
@@ -134,6 +142,7 @@ export class WorldScene extends Phaser.Scene {
       window.removeEventListener("beforeunload", this.saveOnUnload);
       this.scale.off("resize", this.onResize, this);
       this.modal.destroy();
+      this.touch.destroy();
       this.persist();
     });
 
@@ -154,7 +163,8 @@ export class WorldScene extends Phaser.Scene {
     // The world pauses during an encounter (CLAUDE.md §2).
     if (!this.dead && !this.inEncounter) {
       const canSprint = this.state.player.stamina > 5;
-      this.player.update(canSprint);
+      const tv = this.touch.vector();
+      this.player.update(canSprint, { x: tv.x, y: tv.y, sprint: this.touch.sprintHeld });
       if (this.player.sprinting) {
         this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012);
       }
@@ -242,13 +252,15 @@ export class WorldScene extends Phaser.Scene {
 
   private takeHit(e: Enemy): void {
     const p = this.state.player;
-    p.hp = clampStat(p.hp - e.damage);
+    const dmg = Math.max(1, Math.round(e.damage * this.state.difficultyModifier));
+    p.hp = clampStat(p.hp - dmg);
     let msg = "Claws and teeth find you.";
     if (e.bite && Math.random() < 0.28) {
       p.infection = clampStat(p.infection + Phaser.Math.Between(8, 16));
       msg = "Bitten — the wound burns hot.";
     }
     pushRecentEvent(this.state, msg);
+    sfx.hurt();
     this.cameras.main.shake(120, 0.006);
     this.cameras.main.flash(110, 120, 0, 0);
     if (isDead(this.state)) this.enterDeath();
@@ -286,8 +298,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private ambientEvent(): void {
-    const n = Phaser.Math.Between(1, 2);
-    const kind: Spawn["type"] = Math.random() < 0.15 ? "zombie_runner" : "zombie";
+    const extra = this.state.difficultyModifier > 1.15 ? 1 : 0;
+    const n = Phaser.Math.Between(1, 2) + extra;
+    const runnerChance = this.isNight() ? 0.3 : 0.15;
+    const kind: Spawn["type"] = Math.random() < runnerChance ? "zombie_runner" : "zombie";
     this.spawnNear([{ type: kind, count: n }]);
     this.showToast("You hear shuffling nearby…");
   }
@@ -387,6 +401,7 @@ export class WorldScene extends Phaser.Scene {
     this.player.sprite.setVelocity(0, 0);
     this.freezeEnemies();
     this.encounterLoc = loc;
+    sfx.ui();
     this.modal.openLoading(title);
     void this.resolveTurn({ mode: "free_text", value: openingValue });
   }
@@ -400,6 +415,7 @@ export class WorldScene extends Phaser.Scene {
     const gm = await runTurn(this.state, input, this.encounterLoc);
     const result = applyOutcome(this.state, gm);
     this.spawnNear(result.spawns); // GM-decided spawns appear on the map (§8.5)
+    if (gm.inventory_add.length > 0) sfx.pickup();
     this.hud.update(this.state, this.debugInfo());
     this.persist();
     if (result.gameOver) {
@@ -463,6 +479,7 @@ export class WorldScene extends Phaser.Scene {
     this.inEncounter = false;
     this.player.sprite.setVelocity(0, 0);
     this.modal.close();
+    sfx.death();
     clearSave(); // the run is over; the next run is fresh
     const msg =
       reason ??
@@ -482,6 +499,7 @@ export class WorldScene extends Phaser.Scene {
     if (now - this.lastMelee < 380 || this.state.player.stamina < 4) return;
     this.lastMelee = now;
     this.state.player.stamina = clampStat(this.state.player.stamina - 6);
+    sfx.swing();
 
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
@@ -502,6 +520,7 @@ export class WorldScene extends Phaser.Scene {
       const kind = nearest.kind.replace(/_/g, " ");
       this.removeEnemy(nearest);
       this.kills += 1;
+      sfx.kill();
       pushRecentEvent(this.state, `Put down a ${kind}.`);
     } else if (!armed && Math.random() < 0.4) {
       this.takeHit(nearest); // bare hands are risky

@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { BootScene } from "./scenes/BootScene";
+import { MainMenuScene } from "./scenes/MainMenuScene";
 import { WorldScene } from "./scenes/WorldScene";
 import { GameOverScene } from "./scenes/GameOverScene";
 
@@ -22,7 +23,7 @@ const config: Phaser.Types.Core.GameConfig = {
     default: "arcade",
     arcade: { debug: false },
   },
-  scene: [BootScene, WorldScene, GameOverScene],
+  scene: [BootScene, MainMenuScene, WorldScene, GameOverScene],
 };
 
 // eslint-disable-next-line no-new

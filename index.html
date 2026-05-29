@@ -12,6 +12,10 @@
         background: #0b0d0e;
         overflow: hidden;
         height: 100%;
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
         font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
       }
       #game {
@@ -21,6 +25,7 @@
       #game canvas {
         display: block;
         margin: 0 auto;
+        touch-action: none;
       }
     </style>
   </head>

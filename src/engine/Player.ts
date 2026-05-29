@@ -49,7 +49,7 @@ export class Player {
     }) as WasdKeys;
   }
 
-  update(canSprint = false): void {
+  update(canSprint = false, ext?: { x: number; y: number; sprint?: boolean }): void {
     const left = this.cursors.left.isDown || this.wasd.left.isDown;
     const right = this.cursors.right.isDown || this.wasd.right.isDown;
     const up = this.cursors.up.isDown || this.wasd.up.isDown;
@@ -62,8 +62,14 @@ export class Player {
     if (up) vy -= 1;
     if (down) vy += 1;
 
+    // Combine with external (touch joystick) input, if any.
+    if (ext) {
+      vx += ext.x;
+      vy += ext.y;
+    }
+
     const len = Math.hypot(vx, vy);
-    const sprint = len > 0 && canSprint && this.cursors.shift.isDown;
+    const sprint = len > 0 && canSprint && (this.cursors.shift.isDown || ext?.sprint === true);
     this._sprinting = sprint;
     const speed = sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED;
 
