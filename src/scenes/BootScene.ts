@@ -27,10 +27,12 @@ export class BootScene extends Phaser.Scene {
     generateTileTexture(this, TILE_SIZE);
     generatePlayerTexture(this, TILE_SIZE);
 
+    const urlSeed = new URLSearchParams(window.location.search).get("seed");
     if (!this.registry.has("seed")) {
-      const fromUrl = new URLSearchParams(window.location.search).get("seed");
-      this.registry.set("seed", fromUrl ?? randomSeed());
+      this.registry.set("seed", urlSeed ?? randomSeed());
     }
+    // A ?seed= in the URL pins a fresh, reproducible run (ignores any save).
+    this.registry.set("seedFromUrl", urlSeed !== null);
 
     this.scene.start("WorldScene");
   }

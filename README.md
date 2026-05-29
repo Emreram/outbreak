@@ -8,12 +8,13 @@ cloud Claude behind the same interface.
 - **Full design spec:** [`CLAUDE.md`](./CLAUDE.md)
 - **Build roadmap & verification plan:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
-> **Current status: Phases 0–2 complete and verified.**
-> A seeded, procedurally generated city — now rendered with **CC0 Kenney art**
-> (top-down city tiles + an animated survivor that turns to face movement) —
-> with camera-follow and wall collisions. The AI Game Master, HUD, survival
-> systems, and combat arrive in later phases (see the plan). No model or
-> internet is required to run what exists today.
+> **Current status: Phases 0–3 complete and verified.**
+> A seeded, procedurally generated city rendered with **CC0 Kenney art** (top-down
+> tiles + an animated survivor that turns to face movement), camera-follow, and wall
+> collisions — plus a live **HUD** (HP / stamina / hunger / thirst / infection +
+> inventory), survival stat **decay**, and **localStorage save/load** (your run
+> resumes on reload). The AI Game Master and combat arrive in later phases (see the
+> plan). No model or internet is required to run what exists today.
 
 ---
 
@@ -36,14 +37,20 @@ Open the URL Vite prints (default **http://localhost:5173/**).
 | Action | Keys |
 |---|---|
 | Move | **WASD** or **arrow keys** |
-| New random city | **R** |
+| New run (new city + fresh stats) | **R** |
+| Eat / Drink / Hurt (debug) / Bandage | **1** / **2** / **3** / **4** |
 | Reproduce a specific city | add `?seed=<value>` to the URL, e.g. `…/?seed=alpha` |
 
-The HUD (top-left) shows the run seed, building count, your tile coords, and FPS.
+The HUD (top-left) shows day/time, your five survival stats, inventory, and a debug
+line (seed · fps · tile). Stats **decay** over time and the run **autosaves** — reload
+the page and you resume where you left off. Keys **1–4** are temporary Phase-3
+stand-ins so you can watch stats/inventory change and persist; the AI Game Master will
+drive these outcomes in Phase 4.
 
 ## Other scripts
 
 ```bash
+npm test           # headless game-logic tests (worldgen invariants + state/inventory/survival)
 npm run build      # type-check (tsc --noEmit, strict) + production bundle
 npm run typecheck  # type-check only
 npm run preview    # serve the production build
@@ -62,8 +69,11 @@ src/
 │   ├── Player.ts · Camera.ts · WorldRenderer.ts
 ├── game/                  # hard mechanics (authoritative)
 │   ├── constants.ts · rng.ts (seeded) · worldgen.ts (seeded city)
+│   ├── GameState.ts (state + clamp + save/load) · survival.ts · inventory.ts
 ├── ai/                    # swappable GM brain (LLMProvider)
 │   ├── provider.ts · ollamaProvider.ts (default) · claudeProvider.ts (optional stub)
+├── ui/                    # HUD overlay (reads state, never mutates mechanics)
+│   └── HUD.ts
 └── scenes/
     ├── BootScene.ts · WorldScene.ts
 ```
