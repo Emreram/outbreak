@@ -82,4 +82,10 @@ export class Player {
       ty: Math.floor(this.sprite.y / TILE_SIZE),
     };
   }
+
+  /** Whether the player is moving (makes noise that widens zombie aggro). */
+  isMoving(): boolean {
+    const b = this.sprite.body as Phaser.Physics.Arcade.Body;
+    return Math.abs(b.velocity.x) > 1 || Math.abs(b.velocity.y) > 1;
+  }
 }
