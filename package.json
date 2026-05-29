@@ -1,0 +1,20 @@
+{
+  "name": "outbreak",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OUTBREAK — a top-down, open-world zombie-survival game with an AI Game Master. MVP build.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "phaser": "^3.80.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.8"
+  }
+}

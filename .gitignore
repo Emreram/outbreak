@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-ssr/
+.vite/
+
+# local env / secrets (never commit a real key)
+.env
+.env.local
+.env.*.local
+
+# logs & os cruft
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
