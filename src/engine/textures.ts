@@ -1,12 +1,24 @@
 import Phaser from "phaser";
 import { Tile } from "../game/worldgen";
 
-// Programmatic PLACEHOLDER art (CLAUDE.md §9 "draw a labelled colored shape").
-// Phase 2 replaces these with CC0 Kenney sprite/tile sheets.
-// TODO: replace placeholder art with Kenney packs in Phase 2.
+// Phase 2 uses real CC0 art (Kenney packs) loaded from /public/assets — see
+// ASSET_PATHS below and public/assets/CREDITS.md. The generators in this file
+// are the PLACEHOLDER fallback (CLAUDE.md §9 "draw a labelled colored shape"):
+// they only run if a CC0 asset fails to load, so dev is never blocked.
 
 export const TILESET_KEY = "tiles";
 export const PLAYER_KEY = "player";
+export const ZOMBIE_KEY = "zombie";
+export const SURVIVOR_NPC_KEY = "survivor_npc";
+
+// CC0 assets served from /public (loaded in BootScene). If a load fails, the
+// generators below provide a placeholder for that key.
+export const ASSET_PATHS: Readonly<Record<string, string>> = {
+  [TILESET_KEY]: "assets/tiles/city_tileset.png",
+  [PLAYER_KEY]: "assets/characters/survivor.png",
+  [ZOMBIE_KEY]: "assets/characters/zombie.png",
+  [SURVIVOR_NPC_KEY]: "assets/characters/survivor_npc.png",
+};
 
 // One colour per Tile enum value. Index === Tile index, so the generated
 // tileset's frame order matches the grid values used by the tilemap.

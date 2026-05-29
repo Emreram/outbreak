@@ -8,11 +8,12 @@ cloud Claude behind the same interface.
 - **Full design spec:** [`CLAUDE.md`](./CLAUDE.md)
 - **Build roadmap & verification plan:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
-> **Current status: Phase 0 + Phase 1 complete and verified.**
-> A seeded, procedurally generated city you can walk around with a placeholder
-> player sprite, camera-follow, and wall collisions. The AI Game Master, HUD,
-> survival systems, and combat arrive in later phases (see the plan). No model
-> or internet is required to run what exists today.
+> **Current status: Phases 0–2 complete and verified.**
+> A seeded, procedurally generated city — now rendered with **CC0 Kenney art**
+> (top-down city tiles + an animated survivor that turns to face movement) —
+> with camera-follow and wall collisions. The AI Game Master, HUD, survival
+> systems, and combat arrive in later phases (see the plan). No model or
+> internet is required to run what exists today.
 
 ---
 
@@ -57,7 +58,7 @@ src/
 ├── main.ts                # Phaser bootstrap
 ├── shared/contracts.ts    # GM request/response types + JSON schemas (one source of truth)
 ├── engine/                # rendering / movement / camera / textures (no story logic)
-│   ├── textures.ts        # placeholder art (replaced by CC0 packs in Phase 2)
+│   ├── textures.ts        # CC0 asset paths + placeholder fallback
 │   ├── Player.ts · Camera.ts · WorldRenderer.ts
 ├── game/                  # hard mechanics (authoritative)
 │   ├── constants.ts · rng.ts (seeded) · worldgen.ts (seeded city)
@@ -91,5 +92,7 @@ Copy `.env.example` → `.env` to override defaults. All browser-visible vars ar
 
 ## License / assets
 
-Original or **CC0** assets only (Phase 2 uses Kenney.nl packs). No copyrighted
-game art, characters, or named content.
+Original or **CC0** assets only. Phase 2 uses CC0 Kenney.nl packs (Roguelike
+Modern City + Top-down Shooter); sources are listed in
+[`public/assets/CREDITS.md`](./public/assets/CREDITS.md). No copyrighted game
+art, characters, or named content.

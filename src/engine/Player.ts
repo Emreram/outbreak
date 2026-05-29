@@ -17,17 +17,22 @@ export class Player {
   readonly sprite: Phaser.Physics.Arcade.Sprite;
   private readonly cursors: Phaser.Types.Input.Keyboard.CursorKeys;
   private readonly wasd: WasdKeys;
+  private facing = 0; // radians; Kenney top-down sprites default-face east (+x)
+  private walkT = 0; // walk-bob phase accumulator
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
+    this.sprite.setOrigin(0.5, 0.5);
     this.sprite.setCollideWorldBounds(true);
     this.sprite.setDepth(10);
 
-    // Square body slightly smaller than a tile -> clean collision through doors.
-    const bodySize = Math.floor(TILE_SIZE * 0.7);
+    // Compact square body centred in the sprite frame (whatever its size) so the
+    // player passes cleanly through 1-tile doorways. The visual rotation applied
+    // in update() is cosmetic — the arcade body stays an axis-aligned box.
+    const bodySize = 20;
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
     body.setSize(bodySize, bodySize);
-    body.setOffset((TILE_SIZE - bodySize) / 2, (TILE_SIZE - bodySize) / 2);
+    body.setOffset((this.sprite.width - bodySize) / 2, (this.sprite.height - bodySize) / 2);
 
     const keyboard = scene.input.keyboard;
     if (!keyboard) {
@@ -60,9 +65,14 @@ export class Player {
     const len = Math.hypot(vx, vy);
     if (len > 0) {
       this.sprite.setVelocity((vx / len) * PLAYER_SPEED, (vy / len) * PLAYER_SPEED);
+      this.facing = Math.atan2(vy, vx); // turn to face the direction of travel
+      this.walkT += 1;
+      this.sprite.setScale(1 + 0.03 * Math.sin(this.walkT * 0.35)); // subtle walk bob
     } else {
       this.sprite.setVelocity(0, 0);
+      this.sprite.setScale(1);
     }
+    this.sprite.setRotation(this.facing);
   }
 
   /** Player tile coordinates, handy for the debug overlay. */

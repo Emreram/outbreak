@@ -44,13 +44,15 @@ export class WorldRenderer {
         .text(b.center.x, b.center.y, labelFor(b), {
           fontFamily: "monospace",
           fontSize: "11px",
-          color: "#e8e2d0",
+          color: "#f4efe2",
           align: "center",
+          stroke: "#0b0d0e",
+          strokeThickness: 3,
         })
         .setOrigin(0.5)
         .setDepth(5)
         .setResolution(2);
-      text.setAlpha(0.85);
+      text.setAlpha(0.9);
       this.labels.push(text);
     }
   }

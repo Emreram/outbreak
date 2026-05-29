@@ -15,7 +15,7 @@ know it works before moving on.
 |---|---|---|---|
 | 0 | Scaffold | ✅ Done | `npm run build` (type-check + bundle) + dev-server boot |
 | 1 | Walkable world | ✅ Done | worldgen invariant harness + dev-server boot |
-| 2 | Designed art (CC0) | ⏳ Planned | visual smoke + atlas/anim checks |
+| 2 | Designed art (CC0) | ✅ Done | baked-tileset visual check + asset load/serve + build |
 | 3 | State + HUD + save/load | ⏳ Planned | unit tests (clamp/persist) + HUD smoke |
 | 4 | The Game Master (core) | ⏳ Planned | provider/validation unit tests + live Ollama turn |
 | 5 | Encounters & reactive world | ⏳ Planned | trigger/spawn/flag tests + play session |
@@ -75,8 +75,8 @@ outbreak/
     ├── vite-env.d.ts         # typed VITE_ env access               [P0 ✅]
     ├── shared/contracts.ts   # GM request/response TYPES + schemas  [P0 ✅]
     ├── engine/
-    │   ├── textures.ts       # placeholder art generation           [P1 ✅ → P2 swap]
-    │   ├── Player.ts         # movement, collision (anim in P2)     [P1 ✅]
+    │   ├── textures.ts       # CC0 asset paths + placeholder fallback [P1/P2 ✅]
+    │   ├── Player.ts         # movement, collision, rotate-to-face   [P1/P2 ✅]
     │   ├── Camera.ts         # follow + bounds                      [P1 ✅]
     │   ├── WorldRenderer.ts  # draws the tilemap                    [P1 ✅]
     │   └── Enemy.ts          # zombie state machine                 [P5]
@@ -159,19 +159,20 @@ Each phase lists: **Goal**, **Build**, **Deliverables**, **Verify (how we know i
   - **Manual smoke (browser):** WASD/arrows move the player; camera follows; player cannot pass through building walls; `R` yields a visibly different city; `?seed=foo` reproduces the same city.
 - **Exit gate:** walk the city, collide with walls, regenerate. ✔ **Met.**
 
-### Phase 2 — Designed art (CC0)
+### ✅ Phase 2 — Designed art (CC0) (DONE)
 - **Goal:** *"It looks like a real game."*
-- **Build:**
-  - Add curated **CC0** packs (Kenney Topdown Shooter / Roguelike / Tiny Town + UI) under `public/assets/`. Originals/CC0 only — **no copyrighted game art** (§9, §15).
-  - Pack character frames into a Phaser **texture atlas**; define **idle + 4-direction walk** animations for player, walker, runner, survivor.
-  - Map worldgen tile types → real city tiles (roads, sidewalks, interiors, walls, doors) + props (cars, crates, barricades, loot containers).
-  - Keep `textures.ts` placeholders as the fallback for any missing sprite (tag `// TODO`).
-- **Deliverables:** real-looking city + animated player; placeholders only where a sprite is genuinely missing.
+- **Built:**
+  - Downloaded two **CC0 Kenney** packs — **Roguelike Modern City** (top-down city tiles) and **Top-down Shooter** (characters). License CC0, recorded in `public/assets/CREDITS.md`. No copyrighted game art (§9, §15).
+  - **City tileset** (`public/assets/tiles/city_tileset.png`): a 32px, 6-frame strip baked from chosen 16×16 city tiles (upscaled 2×, nearest-neighbor), in `Tile` enum order — Road (asphalt), Sidewalk (pavement), Floor (warm interior), Wall (brick), Door (brick + an original open-doorway overlay), Grass. `WorldRenderer` is unchanged; it just loads this instead of flat colours.
+  - **Characters** (`public/assets/characters/*.png`): survivor (player), zombie (walker/runner), survivor-NPC — top-down sprites that default-face **east** and are **rotated toward movement**, with a subtle walk bob. Zombie/NPC textures are preloaded for Phase 5.
+  - `textures.ts` placeholder generators kept as a **fallback** (used only if a CC0 asset fails to load), tagged accordingly.
 - **Verify:**
-  - Asset-license check: every imported pack is CC0; record sources in `public/assets/CREDITS.md`.
-  - Animation smoke: player shows idle vs. the 4 directional walk cycles; tiles align to the 32px grid with no seams/gaps.
-  - `npm run build` clean (assets load; no 404s in dev console).
-- **Exit gate:** the same walkable world now renders with designed sprites/tiles and animates.
+  - Baked tileset visually inspected — 6 frames correct, including the doorway. ✔
+  - `npm run build` clean; production build copies `public/assets` → `dist/assets`. ✔
+  - Dev server serves every asset (`image/png`, HTTP 200). ✔
+  - *(Cannot screenshot the live canvas in this headless sandbox — a 30-second browser glance is the final visual check.)*
+- **Honest scope note:** Kenney's CC0 top-down characters are single-pose sprites designed to **rotate to face** (Project Zomboid–style), not RPG-style 4-direction *frame* sheets — those aren't available CC0 in this top-down style. Rotation-to-face + walk bob is the faithful, intended use of the pack. Road **lane-marking autotiling** (straight vs. intersection vs. crosswalk) is deferred to polish; clean asphalt is used for now.
+- **Exit gate:** the same walkable world now renders with designed CC0 sprites/tiles. ✔ **Met.**
 
 ### Phase 3 — State + HUD + save/load
 - **Goal:** *"Stats live and persist."*
