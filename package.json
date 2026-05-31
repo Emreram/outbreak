@@ -12,6 +12,7 @@
     "test": "node scripts/test.mjs"
   },
   "dependencies": {
+    "@mlc-ai/web-llm": "^0.2.84",
     "phaser": "^3.80.1"
   },
   "devDependencies": {

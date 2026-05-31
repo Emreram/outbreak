@@ -27,6 +27,8 @@ for (const file of testFiles) {
     format: "esm",
     outfile,
     logLevel: "error",
+    // Browser-only LLM lib (dynamically imported at runtime, never in tests).
+    external: ["@mlc-ai/web-llm"],
   });
   try {
     execFileSync(process.execPath, [outfile], { stdio: "inherit" });

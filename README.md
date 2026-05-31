@@ -105,6 +105,22 @@ Copy `.env.example` → `.env` to override defaults. All browser-visible vars ar
 | `VITE_AI_PROVIDER` | `auto` | `auto` (use Ollama if running, else offline GM), `ollama`, `mock`, or `claude` |
 | `VITE_OLLAMA_HOST` | `/ollama` (proxied) | local Ollama; set an absolute URL to bypass the dev proxy |
 | `VITE_OLLAMA_MODEL` | _auto_ | pin a model name; unset auto-picks the first installed model |
+| `VITE_WEBLLM_MODEL` | `Llama-3.2-3B-Instruct-q4f16_1-MLC` | in-browser model to download (use a 1B id for weak GPUs) |
+
+### Real AI in the browser — no install, no key (WebLLM)
+
+There's a second real-AI path that needs **nothing on a server and no API key**, and it
+works on the **deployed site**: a model that runs entirely on your GPU via **WebGPU**.
+
+- In the **main menu**, click **"Enable in-browser AI"**. The model (~2 GB) downloads
+  once and is cached by the browser; a progress % shows while it loads.
+- When it's ready the Game Master runs on that in-browser model — the HUD shows
+  **`GM:webllm`**. Your choice is remembered (it auto-loads from cache next visit).
+- Requires **WebGPU** (desktop **Chrome/Edge**; not most phones or Safari yet). On
+  unsupported browsers the button says so and the game uses the offline GM.
+
+This is the only real-LLM option that runs on the **public Vercel link** with zero
+backend — at the cost of a one-time multi-GB download per device.
 
 ### Play with the real AI (local Ollama)
 

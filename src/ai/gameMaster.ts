@@ -7,6 +7,7 @@ import { GM_OUTPUT_SCHEMA, SCENARIO_OUTPUT_SCHEMA, SCENARIO_THEMES } from "../sh
 import type { LLMProvider } from "./provider";
 import { configuredProvider, resolveBrain } from "./provider";
 import { createOllamaProvider, detectOllama, pickOllamaModel } from "./ollamaProvider";
+import { webllmEnabled, webllmReady, getWebLLMProvider } from "./webllm";
 import { ClaudeProvider } from "./claudeProvider";
 import { MockProvider } from "./mockProvider";
 import { GM_SYSTEM_PROMPT, SCENARIO_SYSTEM_PROMPT } from "./prompts";
@@ -18,27 +19,30 @@ import { randomSeed } from "../game/rng";
 // provider (e.g. Ollama) is unreachable — so the game keeps running anywhere.
 const offline = new MockProvider();
 
-type Brain = "ollama" | "claude" | "offline";
-let resolvedProvider: LLMProvider | null = null;
+type Brain = "webllm" | "ollama" | "claude" | "offline";
 let activeBrain: Brain = "offline";
 let lastTurnFellBack = false;
 
-/** Resolve (once per session) which real brain to use, auto-detecting a local Ollama. */
-async function getProvider(): Promise<LLMProvider> {
-  if (resolvedProvider) return resolvedProvider;
+/**
+ * Pick the brain for THIS call (cheap — Ollama detection is cached internally).
+ * The in-browser WebLLM wins when the player has enabled it and the model is
+ * loaded; otherwise fall through to the auto/Ollama/offline logic.
+ */
+async function resolve(): Promise<{ provider: LLMProvider; brain: Brain }> {
+  if (webllmEnabled() && webllmReady()) return { provider: getWebLLMProvider(), brain: "webllm" };
   const want = configuredProvider();
   const det = want === "ollama" || want === "auto" ? await detectOllama() : { up: false, models: [] as string[] };
-  activeBrain = resolveBrain(want, det.up);
-  resolvedProvider =
-    activeBrain === "claude"
+  const brain = resolveBrain(want, det.up);
+  const provider =
+    brain === "claude"
       ? new ClaudeProvider()
-      : activeBrain === "ollama"
+      : brain === "ollama"
         ? createOllamaProvider(pickOllamaModel(det.models))
         : offline;
-  return resolvedProvider;
+  return { provider, brain };
 }
 
-/** Which brain actually resolved this session — drives the HUD "GM:" indicator. */
+/** Which brain resolved on the latest call — drives the HUD "GM:" indicator. */
 export function getActiveBrain(): Brain {
   return activeBrain;
 }
@@ -72,7 +76,8 @@ async function callJSON(provider: LLMProvider, system: string, payload: object, 
 
 /** Resolve one player action into a validated GM outcome. */
 export async function runTurn(state: GameState, input: TurnInput, locationType: string): Promise<GMResponse> {
-  const provider = await getProvider();
+  const { provider, brain } = await resolve();
+  activeBrain = brain;
   const payload = buildTurnPayload(state, input, locationType);
 
   try {
@@ -82,7 +87,7 @@ export async function runTurn(state: GameState, input: TurnInput, locationType: 
       // retry once (CLAUDE.md §8.4)
       return sanitizeGM(await callJSON(provider, GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA));
     } catch {
-      if (activeBrain !== "offline") lastTurnFellBack = true; // real brain failed -> note it
+      if (brain !== "offline") lastTurnFellBack = true; // real brain failed -> note it
       try {
         // configured provider unreachable -> offline GM
         return sanitizeGM(JSON.parse(await offline.generate(GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA)));
@@ -95,14 +100,15 @@ export async function runTurn(state: GameState, input: TurnInput, locationType: 
 
 /** Author a fresh opening scenario for a new run (CLAUDE.md §8.6). */
 export async function generateScenario(theme?: string): Promise<ScenarioResponse> {
-  const provider = await getProvider();
+  const { provider, brain } = await resolve();
+  activeBrain = brain;
   const chosen = theme ?? SCENARIO_THEMES[Math.floor(Math.random() * SCENARIO_THEMES.length)];
   const payload = { kind: "scenario", theme: chosen };
 
   try {
     return sanitizeScenario(await callJSON(provider, SCENARIO_SYSTEM_PROMPT, payload, SCENARIO_OUTPUT_SCHEMA), chosen);
   } catch {
-    if (activeBrain !== "offline") lastTurnFellBack = true;
+    if (brain !== "offline") lastTurnFellBack = true;
     try {
       return sanitizeScenario(JSON.parse(await offline.generate(SCENARIO_SYSTEM_PROMPT, payload, SCENARIO_OUTPUT_SCHEMA)), chosen);
     } catch {

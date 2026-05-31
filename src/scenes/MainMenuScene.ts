@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { loadGame, saveGame } from "../game/GameState";
 import { newRunState } from "../ai/gameMaster";
+import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmError, webllmModel, loadWebLLM } from "../ai/webllm";
 import { sfx } from "../engine/audio";
 
 // Title screen (CLAUDE.md §13 Phase 7). "New run" always asks for the player's
@@ -26,6 +27,9 @@ export class MainMenuScene extends Phaser.Scene {
   private nameRoot?: HTMLDivElement;
   private nameInput?: HTMLInputElement;
   private nameBtn?: HTMLButtonElement;
+  private aiBtn?: Phaser.GameObjects.Text;
+  private aiHint?: Phaser.GameObjects.Text;
+  private menuDestroyed = false;
 
   constructor() {
     super("MainMenuScene");
@@ -33,6 +37,7 @@ export class MainMenuScene extends Phaser.Scene {
 
   create(): void {
     this.busy = false;
+    this.menuDestroyed = false;
     const w = this.scale.width;
     const h = this.scale.height;
     const cx = w / 2;
@@ -66,6 +71,8 @@ export class MainMenuScene extends Phaser.Scene {
     }
     this.button(cx, y, "New run", () => this.promptName());
 
+    this.buildAiToggle(cx, h * 0.72);
+
     this.add
       .text(cx, h * 0.9, "WASD/arrows move · E act · SPACE/F attack · Shift sprint", {
         fontFamily: "monospace",
@@ -76,9 +83,89 @@ export class MainMenuScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.menuDestroyed = true;
       this.nameRoot?.remove();
       this.nameRoot = undefined;
     });
+  }
+
+  /** Optional in-browser AI (WebLLM/WebGPU): a real LLM Game Master with no key/server. */
+  private buildAiToggle(x: number, y: number): void {
+    this.aiBtn = this.add
+      .text(x, y, "", {
+        fontFamily: "monospace",
+        fontSize: "16px",
+        color: "#7fd3ff",
+        backgroundColor: "#101a22",
+        padding: { x: 12, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    this.aiHint = this.add
+      .text(x, y + 26, "", { fontFamily: "monospace", fontSize: "11px", color: "#7f93a8", align: "center" })
+      .setOrigin(0.5);
+    this.aiBtn.on("pointerup", () => this.onAiToggle());
+    this.refreshAiToggle();
+    // Previously opted in? Warm-load from the browser cache automatically.
+    if (hasWebGPU() && webllmEnabled() && webllmState() === "idle") void this.startWebllmLoad();
+  }
+
+  private refreshAiToggle(): void {
+    if (this.menuDestroyed || !this.aiBtn || !this.aiHint) return;
+    if (!hasWebGPU()) {
+      this.aiBtn.setText("In-browser AI: unsupported").setColor("#6b7a89").disableInteractive();
+      this.aiHint.setText("needs WebGPU — try desktop Chrome/Edge");
+      return;
+    }
+    switch (webllmState()) {
+      case "ready":
+        if (webllmEnabled()) {
+          this.aiBtn.setText("In-browser AI: ON ✓").setColor("#8ef0a0");
+          this.aiHint.setText(`${webllmModel()} · tap to turn off`);
+        } else {
+          this.aiBtn.setText("In-browser AI: OFF").setColor("#7fd3ff");
+          this.aiHint.setText("model loaded · tap to use it");
+        }
+        break;
+      case "loading":
+        this.aiBtn.setText("Loading AI model…").setColor("#ffd98a");
+        break;
+      case "error":
+        this.aiBtn.setText("In-browser AI: retry").setColor("#ff9d9d");
+        this.aiHint.setText((webllmError() || "load failed").slice(0, 52));
+        break;
+      default:
+        this.aiBtn.setText("Enable in-browser AI").setColor("#7fd3ff");
+        this.aiHint.setText("real LLM in your browser · ~2 GB one-time download");
+    }
+  }
+
+  private onAiToggle(): void {
+    if (this.menuDestroyed || !hasWebGPU()) return;
+    const st = webllmState();
+    if (st === "loading") return;
+    if (st === "ready") {
+      setWebllmEnabled(!webllmEnabled()); // already loaded — just flip use on/off
+      this.refreshAiToggle();
+      return;
+    }
+    void this.startWebllmLoad();
+  }
+
+  private async startWebllmLoad(): Promise<void> {
+    setWebllmEnabled(true);
+    this.refreshAiToggle();
+    try {
+      await loadWebLLM((r) => {
+        if (this.menuDestroyed) return;
+        const pct = Math.round((r.progress ?? 0) * 100);
+        this.aiHint?.setText(`${pct}%  ${r.text}`.slice(0, 56));
+        this.refreshAiToggle();
+      });
+    } catch {
+      /* state=error; refreshAiToggle shows retry + reason */
+    }
+    this.refreshAiToggle();
   }
 
   private button(x: number, y: number, label: string, fn: () => void): Phaser.GameObjects.Text {
