@@ -26,6 +26,7 @@ interface TurnIn {
   input?: { mode?: string; value?: string };
   kind?: string;
   theme?: string;
+  background?: string;
 }
 
 // Loot now comes from the rarity-weighted catalog tables (src/game/items/lootTables.ts).
@@ -71,7 +72,7 @@ export class MockProvider implements LLMProvider {
     const p = payload as TurnIn;
     const rng = createRng(`${p.input?.value ?? ""}|${Date.now()}|${Math.random()}`);
     if (p.kind === "scenario") {
-      return JSON.stringify(scenario(p.theme ?? "downtown high-rise", rng));
+      return JSON.stringify(scenario(p.theme ?? "downtown high-rise", rng, p.background));
     }
     return JSON.stringify(turn(p, rng));
   }
@@ -326,7 +327,7 @@ function prettyLoc(loc: string): string {
 
 // --- scenario generation (CLAUDE.md §8.6) — framed at the OUTBREAK'S FIRST HOURS ---
 
-function scenario(theme: string, rng: Rng) {
+function scenario(theme: string, rng: Rng, background?: string) {
   const NAMES = ["Mara", "Dev", "Ruiz", "Cole", "Imani", "Yuki", "Sasha", "Bishop", "Lena", "Tariq"];
   const byTheme: Record<string, { loc: string; items: string[]; goal: string; hook: string }> = {
     "winter outbreak": { loc: "a frozen transit depot", items: ["Warm Coat", "Canned Food"], goal: "Reach somewhere defensible before the cold and the crowds turn.", hook: "The platform TV is looping an emergency broadcast nobody's watching anymore." },
@@ -341,7 +342,7 @@ function scenario(theme: string, rng: Rng) {
   const t = byTheme[theme] ?? byTheme["downtown high-rise"];
   const name = rng.pick(NAMES);
   return {
-    intro_narrative: `It's hour zero. ${name} is in ${t.loc} when it all goes sideways. ${t.hook} The infection is spreading fast — minutes ago this was an ordinary day. Whatever you do next is on you.`,
+    intro_narrative: `It's hour zero. ${background ? `${name}, a ${background.toLowerCase()},` : name} is in ${t.loc} when it all goes sideways. ${t.hook} The infection is spreading fast — minutes ago this was an ordinary day. Whatever you do next is on you.`,
     player_name: name,
     start_location: t.loc,
     starting_items: t.items.map((item) => ({ item, qty: /Rounds|Shells|Ammo|Arrows|Bolts|Nails|Cells/.test(item) ? 24 : 1 })),

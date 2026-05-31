@@ -3,9 +3,11 @@
 // persistence. Nothing else may mutate stats without clamping — this is the
 // engine's authority over hard mechanics (CLAUDE.md §5, §14).
 
-import type { GameState, ScenarioResponse } from "../shared/contracts";
-import { addItem, autoEquip, hasItem, removeItem } from "./inventory";
-import { getItemDef } from "./items/catalog";
+import type { CharacterCreation, GameState, ScenarioResponse } from "../shared/contracts";
+import { addItem, autoEquip, equipWeapon, hasItem, removeItem } from "./inventory";
+import { getItemDef, weaponDef } from "./items/catalog";
+import { getBackground } from "./backgrounds";
+import { consumableMult } from "./perks";
 
 export const STAT_MIN = 0;
 export const STAT_MAX = 100;
@@ -63,14 +65,39 @@ export function applyScenario(gs: GameState, sc: ScenarioResponse): void {
   for (const it of gs.inventory) autoEquip(gs, it.item); // wield any starter weapon
 }
 
+/** Fold character-creation choices in on top of the scenario (loadout/perks/look/difficulty). */
+export function applyCreation(gs: GameState, c?: CharacterCreation): void {
+  if (!c) return;
+  const bg = c.background ? getBackground(c.background) : undefined;
+  if (bg) {
+    gs.background = bg.id;
+    gs.perks = [...bg.perks];
+    for (const it of bg.items) addItem(gs, it.item, it.qty);
+    for (const it of bg.items) if (weaponDef(it.item)) equipWeapon(gs, it.item); // wield class weapons
+    for (const it of gs.inventory) autoEquip(gs, it.item);
+    if (bg.statTweaks) {
+      const p = gs.player;
+      for (const k of Object.keys(bg.statTweaks) as (keyof NonNullable<typeof bg.statTweaks>)[]) {
+        p[k] = clampStat(p[k] + (bg.statTweaks[k] ?? 0));
+      }
+    }
+    gs.difficultyModifier *= bg.difficulty;
+  }
+  if (c.color !== undefined) gs.appearance = { color: c.color };
+  if (c.difficulty !== undefined) gs.difficultyModifier *= c.difficulty;
+}
+
 /** Use one consumable from the inventory, applying its clamped effects. */
 export function useConsumable(s: GameState, name: string): boolean {
   const d = getItemDef(name);
   if (!d || d.kind !== "consumable" || !hasItem(s, name)) return false;
   removeItem(s, name, 1);
   const p = s.player;
+  const mult = consumableMult(s); // Field Medic boosts healing
   for (const k of Object.keys(d.effects) as (keyof typeof d.effects)[]) {
-    p[k] = clampStat(p[k] + (d.effects[k] ?? 0));
+    const v = d.effects[k] ?? 0;
+    const scaled = (k === "hp" && v > 0) || (k === "infection" && v < 0) ? Math.round(v * mult) : v;
+    p[k] = clampStat(p[k] + scaled);
   }
   if (d.cure) p.infection = 0;
   return true;

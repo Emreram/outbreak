@@ -2,7 +2,7 @@
 // retry-once-then-offline-then-safe-fallback backstop so a turn NEVER crashes
 // the game (CLAUDE.md §8.3, §8.4). The engine validates everything downstream.
 
-import type { GMResponse, GameState, ScenarioResponse, TurnInput } from "../shared/contracts";
+import type { CharacterCreation, GMResponse, GameState, ScenarioResponse, TurnInput } from "../shared/contracts";
 import { GM_OUTPUT_SCHEMA, SCENARIO_OUTPUT_SCHEMA, SCENARIO_THEMES } from "../shared/contracts";
 import type { LLMProvider } from "./provider";
 import { configuredProvider, resolveBrain } from "./provider";
@@ -12,7 +12,8 @@ import { ClaudeProvider } from "./claudeProvider";
 import { MockProvider } from "./mockProvider";
 import { GM_SYSTEM_PROMPT, SCENARIO_SYSTEM_PROMPT } from "./prompts";
 import { sanitizeGM } from "../game/outcomes";
-import { applyScenario, newGame } from "../game/GameState";
+import { applyCreation, applyScenario, newGame } from "../game/GameState";
+import { getBackground } from "../game/backgrounds";
 import { randomSeed } from "../game/rng";
 
 // Always-available offline GM, used as the last-resort fallback if the configured
@@ -99,11 +100,11 @@ export async function runTurn(state: GameState, input: TurnInput, locationType: 
 }
 
 /** Author a fresh opening scenario for a new run (CLAUDE.md §8.6). */
-export async function generateScenario(theme?: string): Promise<ScenarioResponse> {
+export async function generateScenario(theme?: string, background?: string): Promise<ScenarioResponse> {
   const { provider, brain } = await resolve();
   activeBrain = brain;
   const chosen = theme ?? SCENARIO_THEMES[Math.floor(Math.random() * SCENARIO_THEMES.length)];
-  const payload = { kind: "scenario", theme: chosen };
+  const payload = { kind: "scenario", theme: chosen, background };
 
   try {
     return sanitizeScenario(await callJSON(provider, SCENARIO_SYSTEM_PROMPT, payload, SCENARIO_OUTPUT_SCHEMA), chosen);
@@ -123,11 +124,17 @@ export function randomTheme(): string {
 
 /** Build a complete fresh run: a seed + a generated opening scenario folded in.
  *  A provided player name overrides the scenario's suggested name. */
-export async function newRunState(seed?: string, name?: string): Promise<{ state: GameState; intro: string }> {
+export async function newRunState(
+  seed?: string,
+  name?: string,
+  creation?: CharacterCreation,
+): Promise<{ state: GameState; intro: string }> {
   const s = seed ?? randomSeed();
-  const scenario = await generateScenario();
+  const bg = creation?.background ? getBackground(creation.background) : undefined;
+  const scenario = await generateScenario(undefined, bg?.name);
   const gs = newGame(s);
   applyScenario(gs, scenario);
+  applyCreation(gs, creation); // loadout / perks / appearance / difficulty on top
   if (name && name.trim()) gs.player.name = name.trim().slice(0, 24);
   return { state: gs, intro: scenario.intro_narrative };
 }

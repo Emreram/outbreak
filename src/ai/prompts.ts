@@ -43,7 +43,8 @@ EXAMPLE: {"narrative":"You pry the pharmacy door and slip inside. Dust, and a si
 export const SCENARIO_SYSTEM_PROMPT = `Generate a unique opening scenario for a new run of OUTBREAK. Given the THEME, define:
 who the player is (one line), where they start, the immediate threat, ONE starting
 advantage (a single useful item or trait), and a short-term goal. It is HOUR ZERO of the
-outbreak — the infection is just spreading. Make it distinct and atmospheric.
+outbreak — the infection is just spreading. Make it distinct and atmospheric. If a BACKGROUND
+is given in the input, make the survivor that background and reflect it in the intro.
 Return EXACTLY one JSON object (no markdown):
 {"intro_narrative": string (3-5 sentences), "player_name": string, "start_location": string,
  "starting_items": [{"item": string, "qty": int}], "starting_goal": string, "difficulty_modifier": number}`;
