@@ -35,7 +35,6 @@ export const BACKGROUNDS: readonly BackgroundDef[] = Object.freeze([
     items: [{ item: "9mm Pistol", qty: 1 }, { item: "9mm Rounds", qty: 36 }, { item: "Combat Knife", qty: 1 }, { item: "Kevlar Vest", qty: 1 }, { item: "MRE", qty: 1 }],
     color: 0x6b8e23,
     difficulty: 0.9,
-    statTweaks: { hp: 10 },
   },
   {
     id: "cop",
@@ -54,7 +53,6 @@ export const BACKGROUNDS: readonly BackgroundDef[] = Object.freeze([
     items: [{ item: "Fire Axe", qty: 1 }, { item: "First-Aid Kit", qty: 1 }, { item: "Warm Coat", qty: 1 }],
     color: 0xd13a2a,
     difficulty: 0.95,
-    statTweaks: { hp: 10, stamina: 10 },
   },
   {
     id: "paramedic",
@@ -92,7 +90,6 @@ export const BACKGROUNDS: readonly BackgroundDef[] = Object.freeze([
     items: [{ item: "Aluminum Bat", qty: 1 }, { item: "Energy Drink", qty: 2 }, { item: "Water Bottle", qty: 1 }],
     color: 0xffd23f,
     difficulty: 1.0,
-    statTweaks: { stamina: 25 },
   },
   {
     id: "mechanic",
@@ -121,7 +118,6 @@ export const BACKGROUNDS: readonly BackgroundDef[] = Object.freeze([
     items: [{ item: "Aluminum Bat", qty: 1 }, { item: "Leather Jacket", qty: 1 }, { item: "Energy Bar", qty: 2 }],
     color: 0x222222,
     difficulty: 1.0,
-    statTweaks: { hp: 5 },
   },
   {
     id: "prepper",

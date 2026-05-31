@@ -89,6 +89,7 @@ export class CharacterCreate {
     this.nameInput.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Enter") this.begin();
+      else if (e.key === "Escape") this.close();
     });
     card.append(this.nameInput);
 
@@ -110,6 +111,10 @@ export class CharacterCreate {
     card.append(this.diffRow);
 
     const foot = el("div", "ob-ccfoot");
+    const cancel = document.createElement("button");
+    cancel.className = "ob-ccrand";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => this.close());
     const rand = document.createElement("button");
     rand.className = "ob-ccrand";
     rand.textContent = "Random";
@@ -118,7 +123,7 @@ export class CharacterCreate {
     this.beginBtn.className = "ob-ccbegin";
     this.beginBtn.textContent = "Begin";
     this.beginBtn.addEventListener("click", () => this.begin());
-    foot.append(rand, this.beginBtn);
+    foot.append(cancel, rand, this.beginBtn);
     card.append(foot);
 
     this.root.append(card);

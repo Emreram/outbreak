@@ -51,6 +51,16 @@ function main(): void {
   }
   ok(bad === "", `every background valid (${bad || "ok"})`);
 
+  // hp/stamina start at 100, so a +tweak there is a clamped no-op — disallow it
+  let noop = "";
+  for (const b of BACKGROUNDS) {
+    if (b.statTweaks && Object.keys(b.statTweaks).some((k) => k === "hp" || k === "stamina")) {
+      noop = b.name;
+      break;
+    }
+  }
+  ok(noop === "", `no background has a no-op hp/stamina tweak (${noop || "ok"})`);
+
   // every perk is reachable (granted by some background)
   const used = new Set<string>();
   for (const b of BACKGROUNDS) for (const p of b.perks) used.add(p);
