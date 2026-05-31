@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import { TILE_SIZE } from "../game/constants";
 import { ASSET_PATHS, generatePlayerTexture, generateTileTexture } from "../engine/textures";
 import { generateFxTextures } from "../engine/fx";
+import { generateAllIcons, generateLootWorldTextures } from "../engine/icons";
 import { saveGame } from "../game/GameState";
 import { newRunState } from "../ai/gameMaster";
 
@@ -23,6 +24,8 @@ export class BootScene extends Phaser.Scene {
     generateTileTexture(this, TILE_SIZE);
     generatePlayerTexture(this, TILE_SIZE);
     generateFxTextures(this);
+    generateAllIcons(this);
+    generateLootWorldTextures(this);
 
     const urlSeed = new URLSearchParams(window.location.search).get("seed");
     if (urlSeed !== null) {
