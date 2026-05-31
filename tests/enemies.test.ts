@@ -98,6 +98,28 @@ function main(): void {
   ok(!!getZombie("shambler"), "getZombie resolves a known id");
   ok(familyPool("boss").length >= 8, `boss pool populated (${familyPool("boss").length})`);
 
+  // completeness: every type's movement + traits must be ones the engine implements
+  // (Enemy.update movement variants + WorldScene trait behaviours).
+  const IMPL_MOVES = new Set(["walker", "runner", "leaper", "crawler", "stalker", "erratic", "lurcher"]);
+  const IMPL_TRAITS = new Set([
+    "biter", "spitter", "screamer", "exploder", "splitter", "toxic", "grabber", "brute",
+    "electric", "frenzied", "armored", "regenerator", "bloated", "undying", "leaper", "fast",
+    "acidic", "shielded",
+  ]);
+  let unimpl = "";
+  for (const z of ZOMBIES) {
+    if (!IMPL_MOVES.has(z.movement)) {
+      unimpl = `${z.name}: movement "${z.movement}"`;
+      break;
+    }
+    const t = z.traits.find((tr) => !IMPL_TRAITS.has(tr));
+    if (t) {
+      unimpl = `${z.name}: trait "${t}"`;
+      break;
+    }
+  }
+  ok(unimpl === "", `every type's movement + traits are implemented (${unimpl || "ok"})`);
+
   if (fail === 0) console.log("\nALL ENEMY CHECKS PASSED");
   else {
     console.log(`\n${fail} ENEMY CHECK(S) FAILED`);

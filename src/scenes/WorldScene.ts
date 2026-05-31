@@ -460,6 +460,7 @@ export class WorldScene extends Phaser.Scene {
   private takeHit(e: Enemy): void {
     const bite = e.bite && Math.random() < 0.28;
     if (e.hasTrait("grabber")) this.grabbedUntil = this.time.now + 700; // held in place
+    if (e.hasTrait("acidic")) this.state.player.infection = clampStat(this.state.player.infection + 4); // burns
     if (e.hasTrait("brute")) {
       const a = Math.atan2(this.player.sprite.y - e.sprite.y, this.player.sprite.x - e.sprite.x);
       this.player.sprite.setVelocity(Math.cos(a) * 260, Math.sin(a) * 260); // knocked back
@@ -505,9 +506,34 @@ export class WorldScene extends Phaser.Scene {
     if (e.hasTrait("spitter") && dist > 40 && dist < 380 && e.trySpecial(now, 2200)) {
       const a = Math.atan2(py - e.sprite.y, px - e.sprite.x);
       this.spawnAcid(e.sprite.x, e.sprite.y, a, Math.max(4, Math.round(e.damage * 0.8)), e.hasTrait("acidic") || e.hasTrait("toxic"));
+    } else if (e.hasTrait("electric") && dist < 120 && e.trySpecial(now, 1600)) {
+      this.arcZap(e);
     } else if (e.hasTrait("screamer") && dist < e.def.aggro + 60 && e.trySpecial(now, 5200)) {
       this.screamPulse(e);
     }
+  }
+
+  /** Electric enemies arc a jagged bolt to the player: damage + a brief jolt-stun. */
+  private arcZap(e: Enemy): void {
+    sfx.shot();
+    const sx = e.sprite.x;
+    const sy = e.sprite.y;
+    const ex = this.player.sprite.x;
+    const ey = this.player.sprite.y;
+    const g = this.add.graphics().setDepth(11);
+    g.lineStyle(2, 0x9be7ff, 0.9);
+    g.beginPath();
+    g.moveTo(sx, sy);
+    const segs = 5;
+    for (let i = 1; i < segs; i++) {
+      const t = i / segs;
+      g.lineTo(sx + (ex - sx) * t + (Math.random() - 0.5) * 14, sy + (ey - sy) * t + (Math.random() - 0.5) * 14);
+    }
+    g.lineTo(ex, ey);
+    g.strokePath();
+    this.tweens.add({ targets: g, alpha: 0, duration: 160, onComplete: () => g.destroy() });
+    this.grabbedUntil = Math.max(this.grabbedUntil, this.time.now + 250); // brief jolt-stun
+    this.damagePlayer(5, false, "A jolt of current arcs through you.");
   }
 
   private spawnAcid(x: number, y: number, angle: number, dmg: number, poison: boolean): void {

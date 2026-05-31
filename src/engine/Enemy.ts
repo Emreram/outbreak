@@ -126,16 +126,19 @@ export class Enemy {
       this.state = "chase";
       const inv = 1 / dist;
       this.facing = Math.atan2(dy, dx);
-      let vx = dx * inv * speed;
-      let vy = dy * inv * speed;
+      let mvSpeed = speed;
+      if (this.def.movement === "stalker") mvSpeed *= dist > 170 ? 1 : 0.4; // creep in close
+      else if (this.def.movement === "lurcher") mvSpeed *= now % 850 < 450 ? 1.5 : 0.05; // lunge-pause
+      let vx = dx * inv * mvSpeed;
+      let vy = dy * inv * mvSpeed;
       if (this.def.movement === "erratic") {
         const veer = Math.sin(now * 0.02 + this.phase) * speed * 0.5;
         vx += Math.cos(this.facing + Math.PI / 2) * veer;
         vy += Math.sin(this.facing + Math.PI / 2) * veer;
       }
       this.sprite.setVelocity(vx, vy);
-      // leaper: dash toward the player from mid-range
-      if (this.def.movement === "leaper" && dist > 70 && dist < 300 && now - this.lastLeap > 1700) {
+      // leaper (movement OR trait): dash toward the player from mid-range
+      if ((this.def.movement === "leaper" || this.hasTrait("leaper")) && dist > 70 && dist < 300 && now - this.lastLeap > 1700) {
         this.lastLeap = now;
         this.leapUntil = now + 280;
         this.sprite.setVelocity(dx * inv * speed * 2.8, dy * inv * speed * 2.8);
