@@ -43,6 +43,9 @@ export interface GameState {
   knownLocations: KnownLocation[];
   difficultyModifier: number; // set by the run's scenario
   goal?: string; // the run's short-term objective (from the AI scenario), shown in-game
+  equippedMelee?: string; // inventory item name of the equipped melee weapon
+  equippedRanged?: string; // inventory item name of the equipped gun
+  loadedAmmo?: number; // rounds in the chambered magazine of the equipped gun
 }
 
 // ---- GM turn I/O (CLAUDE.md §8.2–8.4) ----

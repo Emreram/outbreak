@@ -8,6 +8,9 @@ import { RARITIES, RARITY_META, rollRarity } from "../src/game/items/rarity";
 import { AMMO } from "../src/game/items/ammo";
 import { rollLoot } from "../src/game/items/lootTables";
 import { createRng } from "../src/game/rng";
+import { meleeOutcome } from "../src/game/combat";
+import { addItem, equipWeapon, equippedMeleeDef } from "../src/game/inventory";
+import { newGame } from "../src/game/GameState";
 
 let fail = 0;
 const ok = (cond: boolean, msg: string) => {
@@ -137,6 +140,23 @@ function main(): void {
 
   // --- isWeaponName sanity ---
   ok(isWeaponName("Katana") && !isWeaponName("Bandage"), "isWeaponName classifies correctly");
+
+  // --- equip + melee combat math ---
+  const st = newGame("combat");
+  addItem(st, "Sledgehammer", 1);
+  ok(equipWeapon(st, "Sledgehammer"), "equip a melee weapon");
+  ok(equippedMeleeDef(st).name === "Sledgehammer", "equipped melee resolves to the catalog def");
+  const hit = meleeOutcome(st, createRng("hit"));
+  ok(hit.damage >= 9 && hit.knockback > 0, "sledgehammer hit carries damage + knockback");
+  const fistHit = meleeOutcome(newGame("bare"), createRng("f"));
+  ok(fistHit.damage === 1, "fists fall back to 1 damage when unarmed");
+
+  // --- ranged equip auto-reloads from reserve ---
+  const g = newGame("gun");
+  addItem(g, "9mm Pistol", 1);
+  addItem(g, "9mm Rounds", 30);
+  ok(equipWeapon(g, "9mm Pistol"), "equip a gun");
+  ok((g.loadedAmmo ?? 0) === 12, "gun auto-reloads its magazine on equip (12)");
 
   if (fail === 0) console.log("\nALL LOOT CHECKS PASSED");
   else {

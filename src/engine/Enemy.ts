@@ -20,11 +20,12 @@ interface Params {
   scale: number;
 }
 
+// hp is now a real damage pool so weapon damage differentiates (CLAUDE.md loot system).
 const PARAMS: Record<SpawnType, Params> = {
-  zombie: { texture: ZOMBIE_KEY, speed: 55, aggro: 150, damage: 6, bite: true, hp: 2, scale: 0.8 },
-  zombie_runner: { texture: ZOMBIE_KEY, speed: 132, aggro: 240, damage: 9, bite: true, hp: 3, tint: 0xff6b6b, scale: 0.78 },
-  survivor_hostile: { texture: SURVIVOR_NPC_KEY, speed: 88, aggro: 210, damage: 8, bite: false, hp: 3, tint: 0xffae6b, scale: 0.82 },
-  survivor_friendly: { texture: SURVIVOR_NPC_KEY, speed: 38, aggro: 0, damage: 0, bite: false, hp: 1, tint: 0x9affa6, scale: 0.82 },
+  zombie: { texture: ZOMBIE_KEY, speed: 55, aggro: 150, damage: 6, bite: true, hp: 14, scale: 0.8 },
+  zombie_runner: { texture: ZOMBIE_KEY, speed: 132, aggro: 240, damage: 9, bite: true, hp: 20, tint: 0xff6b6b, scale: 0.78 },
+  survivor_hostile: { texture: SURVIVOR_NPC_KEY, speed: 88, aggro: 210, damage: 8, bite: false, hp: 26, tint: 0xffae6b, scale: 0.82 },
+  survivor_friendly: { texture: SURVIVOR_NPC_KEY, speed: 38, aggro: 0, damage: 0, bite: false, hp: 8, tint: 0x9affa6, scale: 0.82 },
 };
 
 export class Enemy {
@@ -33,12 +34,17 @@ export class Enemy {
   readonly damage: number;
   readonly bite: boolean;
   hp: number;
+  readonly maxHp: number;
   state: EnemyState = "wander";
   private lastAttack = 0;
   private wanderUntil = 0;
   private facing = 0;
   private phase = Math.random() * 6.28; // desync the shamble between enemies
   private knockedUntil = 0;
+  private bleedDps = 0;
+  private dotUntil = 0;
+  private lastDotTick = 0;
+  private stunnedUntil = 0;
   private readonly p: Params;
 
   constructor(scene: Phaser.Scene, x: number, y: number, kind: SpawnType) {
@@ -47,6 +53,7 @@ export class Enemy {
     this.damage = this.p.damage;
     this.bite = this.p.bite;
     this.hp = this.p.hp;
+    this.maxHp = this.p.hp;
 
     const tex = scene.textures.exists(this.p.texture) ? this.p.texture : PLAYER_KEY;
     this.sprite = scene.physics.add.sprite(x, y, tex);
@@ -65,7 +72,22 @@ export class Enemy {
   /** AI tick. noise widens aggro (sprinting/gunfire). Returns nothing — the scene
    *  reads state/position and applies damage on contact. */
   update(px: number, py: number, noise: number, now: number): void {
+    // damage over time (bleed / burn / poison)
+    if (this.bleedDps > 0) {
+      if (now >= this.dotUntil) {
+        this.bleedDps = 0;
+      } else if (now - this.lastDotTick >= 500) {
+        this.lastDotTick = now;
+        this.hp -= this.bleedDps * 0.5;
+        this.flash(0xff4d4d);
+      }
+    }
+
     if (now < this.knockedUntil) return; // ride out a knockback; keep current velocity
+    if (now < this.stunnedUntil) {
+      this.sprite.setVelocity(0, 0);
+      return; // stunned: frozen but DoT still ticks
+    }
 
     const dx = px - this.sprite.x;
     const dy = py - this.sprite.y;
@@ -115,16 +137,38 @@ export class Enemy {
     return false;
   }
 
-  /** Apply melee damage; returns true if this put the enemy down. */
+  /** Apply damage; returns true if this put the enemy down. */
   takeDamage(n: number): boolean {
     this.hp -= n;
     if (this.hp <= 0) return true;
-    this.sprite.setTint(0xffffff);
-    this.sprite.scene.time.delayedCall(80, () => {
+    this.flash(0xffffff);
+    return false;
+  }
+
+  /** Apply a damage-over-time effect (bleed/burn/poison): dps for ms milliseconds. */
+  applyDot(dps: number, ms: number): void {
+    if (dps <= 0 || ms <= 0) return;
+    const now = this.sprite.scene.time.now;
+    this.bleedDps = Math.max(this.bleedDps, dps);
+    this.dotUntil = Math.max(this.dotUntil, now + ms);
+  }
+
+  /** Freeze the enemy for ms milliseconds. */
+  applyStun(ms: number): void {
+    if (ms <= 0) return;
+    this.stunnedUntil = Math.max(this.stunnedUntil, this.sprite.scene.time.now + ms);
+  }
+
+  hpFrac(): number {
+    return this.maxHp > 0 ? this.hp / this.maxHp : 0;
+  }
+
+  private flash(color: number, ms = 80): void {
+    this.sprite.setTint(color);
+    this.sprite.scene.time.delayedCall(ms, () => {
       if (this.p.tint !== undefined) this.sprite.setTint(this.p.tint);
       else this.sprite.clearTint();
     });
-    return false;
   }
 
   destroy(): void {

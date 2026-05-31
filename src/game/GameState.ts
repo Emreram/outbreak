@@ -4,7 +4,7 @@
 // engine's authority over hard mechanics (CLAUDE.md §5, §14).
 
 import type { GameState, ScenarioResponse } from "../shared/contracts";
-import { addItem } from "./inventory";
+import { addItem, autoEquip } from "./inventory";
 
 export const STAT_MIN = 0;
 export const STAT_MAX = 100;
@@ -59,6 +59,7 @@ export function applyScenario(gs: GameState, sc: ScenarioResponse): void {
   if (gs.inventory.length === 0) addItem(gs, "Water Bottle", 1);
   gs.goal = sc.starting_goal || "";
   gs.recentEvents = [`Goal: ${sc.starting_goal}`];
+  for (const it of gs.inventory) autoEquip(gs, it.item); // wield any starter weapon
 }
 
 /** Append a one-line event and keep only the last ~6 (CLAUDE.md §7, §8.5). */

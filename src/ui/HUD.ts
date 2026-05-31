@@ -1,6 +1,8 @@
 import Phaser from "phaser";
 import type { GameState } from "../shared/contracts";
 import { clampStat } from "../game/GameState";
+import { ammoReserve, equippedMeleeDef, equippedRangedDef } from "../game/inventory";
+import { rarityCss } from "../game/items/rarity";
 
 // On-screen HUD (CLAUDE.md §13 Phase 3): HP / stamina / hunger / thirst /
 // infection bars + inventory + day/time, fixed to the camera. UI layer — it
@@ -37,6 +39,7 @@ export class HUD {
   private readonly bars: Phaser.GameObjects.Graphics;
   private readonly dayText: Phaser.GameObjects.Text;
   private readonly valueTexts: Phaser.GameObjects.Text[] = [];
+  private readonly weaponText: Phaser.GameObjects.Text;
   private readonly invText: Phaser.GameObjects.Text;
   private readonly logText: Phaser.GameObjects.Text;
   private readonly controlsText: Phaser.GameObjects.Text;
@@ -60,6 +63,7 @@ export class HUD {
       mk(PANEL_X + 8, y - 1, "11px", "#c8d2dc").setText(b.label); // static label
       this.valueTexts.push(mk(BAR_X + BAR_W + 8, y - 1, "11px", "#f4efe2"));
     });
+    this.weaponText = mk(PANEL_X + 8, 0, "12px", "#cdd9e5");
     this.invText = mk(PANEL_X + 8, 0, "12px", "#e8e2d0");
     this.logText = scene.add
       .text(PANEL_X + 8, 0, "", {
@@ -87,7 +91,15 @@ export class HUD {
       this.valueTexts[i].setText(String(Math.round(v)));
     });
 
-    const invY = BARS_TOP + BARS.length * (BAR_H + BAR_GAP) + 8;
+    // Equipped weapons + ammo (rarity-coloured).
+    const weaponY = BARS_TOP + BARS.length * (BAR_H + BAR_GAP) + 6;
+    const md = equippedMeleeDef(s);
+    const rd = equippedRangedDef(s);
+    let wline = `MELEE  ${md.name}`;
+    if (rd) wline += `\nGUN    ${rd.name}  ${s.loadedAmmo ?? 0}/${ammoReserve(s, rd.ammoType)}`;
+    this.weaponText.setPosition(PANEL_X + 8, weaponY).setText(wline).setColor(rarityCss((rd ?? md).rarity));
+
+    const invY = weaponY + this.weaponText.height + 8;
     const list = s.inventory.length
       ? s.inventory.map((it) => `· ${it.item} x${it.qty}`).join("\n")
       : "· (empty)";

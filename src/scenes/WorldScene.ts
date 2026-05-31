@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import type { GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
 import { generateWorld, SOLID_TILES, type Building, type WorldData } from "../game/worldgen";
-import { randomSeed } from "../game/rng";
+import { randomSeed, liveRng } from "../game/rng";
 import {
   clampStat,
   clearSave,
@@ -12,7 +12,9 @@ import {
   saveGame,
 } from "../game/GameState";
 import { applyDecay } from "../game/survival";
-import { isArmed, removeItem } from "../game/inventory";
+import { removeItem } from "../game/inventory";
+import { meleeOutcome, type MeleeHit } from "../game/combat";
+import { iconKey } from "../engine/icons";
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
@@ -67,6 +69,7 @@ export class WorldScene extends Phaser.Scene {
   private vignette!: Phaser.GameObjects.Image;
   private objBanner!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
+  private weaponSprite!: Phaser.GameObjects.Image;
   private readonly saveOnUnload = () => this.persist();
 
   constructor() {
@@ -113,6 +116,9 @@ export class WorldScene extends Phaser.Scene {
     this.player = new Player(this, startX, startY);
     this.physics.add.collider(this.player.sprite, this.worldRenderer.layer);
     setupCamera(this, this.player.sprite, worldW, worldH);
+
+    // Equipped weapon shown in-hand (icon swaps on equip; aims in Phase 4).
+    this.weaponSprite = this.add.image(startX, startY, iconKey("Fists")).setDepth(11).setScale(0.42).setVisible(false);
 
     // Enemies live in a group that collides with walls (CLAUDE.md §11).
     this.enemyGroup = this.physics.add.group();
@@ -264,6 +270,7 @@ export class WorldScene extends Phaser.Scene {
 
     // The flashlight glow tracks the player even while paused.
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
+    this.updateWeaponSprite();
 
     // Contextual "Press E" hint when standing on a building (and free to act).
     const near = !this.dead && !this.inEncounter ? this.buildingAt() : null;
@@ -288,6 +295,13 @@ export class WorldScene extends Phaser.Scene {
     for (const e of this.enemies) {
       e.update(px, py, noise, now);
       if (e.tryAttack(px, py, now)) this.takeHit(e);
+    }
+    // reap enemies finished off by bleed/burn damage-over-time
+    for (const e of [...this.enemies]) {
+      if (e.hp <= 0) {
+        bloodBurst(this, e.sprite.x, e.sprite.y, 8);
+        this.onEnemyKilled(e);
+      }
     }
   }
 
@@ -630,42 +644,94 @@ export class WorldScene extends Phaser.Scene {
   private meleeAttack(): void {
     if (this.dead || this.inEncounter) return;
     const now = this.time.now;
-    if (now - this.lastMelee < 380 || this.state.player.stamina < 4) return;
+    const hit = meleeOutcome(this.state, liveRng);
+    if (now - this.lastMelee < hit.cooldownMs || this.state.player.stamina < 4) return;
     this.lastMelee = now;
     this.state.player.stamina = clampStat(this.state.player.stamina - 6);
     sfx.swing();
 
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
-    let nearest: Enemy | null = null;
-    let best = 50;
-    for (const e of this.enemies) {
-      const d = Math.hypot(e.sprite.x - px, e.sprite.y - py);
-      if (d < best) {
-        best = d;
-        nearest = e;
-      }
-    }
     this.cameras.main.shake(50, 0.003);
     this.player.lunge();
     meleeArc(this, px, py, this.player.sprite.rotation);
-    if (!nearest) return;
 
-    const armed = isArmed(this.state);
-    if (nearest.takeDamage(armed ? 2 : 1)) {
-      const kind = nearest.kind.replace(/_/g, " ");
-      bloodBurst(this, nearest.sprite.x, nearest.sprite.y, 12);
-      this.hitstop(55);
-      this.removeEnemy(nearest); // plays the death animation
-      this.kills += 1;
-      sfx.kill();
-      pushRecentEvent(this.state, `Put down a ${kind}.`);
-    } else {
-      bloodBurst(this, nearest.sprite.x, nearest.sprite.y, 5);
-      const ang = Math.atan2(nearest.sprite.y - py, nearest.sprite.x - px);
-      nearest.knockback(Math.cos(ang), Math.sin(ang), 240, now);
-      if (!armed && Math.random() < 0.4) this.takeHit(nearest); // bare hands are risky
+    const targets = this.enemies
+      .map((e) => ({ e, d: Math.hypot(e.sprite.x - px, e.sprite.y - py) }))
+      .filter((t) => t.d <= hit.range + 16)
+      .sort((x, y) => x.d - y.d);
+    if (targets.length === 0) return;
+
+    const maxTargets = 1 + Math.max(0, hit.cleave); // cleave hits extra foes in the arc
+    let healed = 0;
+    for (let i = 0; i < targets.length && i < maxTargets; i++) {
+      this.applyMeleeHit(targets[i].e, hit, px, py);
+      healed += hit.lifestealHp;
     }
+    if (healed > 0) this.state.player.hp = clampStat(this.state.player.hp + healed);
+  }
+
+  /** Apply one melee weapon's resolved hit (damage + abilities) to a target. */
+  private applyMeleeHit(e: Enemy, hit: MeleeHit, px: number, py: number): void {
+    const execute = hit.executePct > 0 && e.hpFrac() * 100 <= hit.executePct;
+    const dead = e.takeDamage(execute ? e.hp : hit.damage);
+    bloodBurst(this, e.sprite.x, e.sprite.y, hit.crit ? 14 : dead ? 12 : 6, hit.crit ? 0xff5a6e : 0x9c1414);
+    if (hit.crit) this.floatText(e.sprite.x, e.sprite.y, "CRIT!", "#ffd23f");
+    else if (execute) this.floatText(e.sprite.x, e.sprite.y, "EXECUTE", "#ff5a6e");
+    if (hit.bleed > 0) e.applyDot(hit.bleed, hit.bleedMs);
+    if (hit.stunMs > 0) e.applyStun(hit.stunMs);
+    if (hit.knockback > 0) {
+      const ang = Math.atan2(e.sprite.y - py, e.sprite.x - px);
+      e.knockback(Math.cos(ang), Math.sin(ang), hit.knockback, this.time.now);
+    }
+    if (dead) {
+      this.hitstop(55);
+      this.onEnemyKilled(e);
+    }
+  }
+
+  private onEnemyKilled(e: Enemy): void {
+    if (this.enemies.indexOf(e) < 0) return; // already reaped this frame
+    this.kills += 1;
+    sfx.kill();
+    pushRecentEvent(this.state, `Put down a ${e.kind.replace(/_/g, " ")}.`);
+    this.dropLoot(e); // Phase 5
+    this.removeEnemy(e); // death animation
+  }
+
+  private floatText(x: number, y: number, text: string, color = "#ffffff"): void {
+    const t = this.add
+      .text(x, y - 16, text, { fontFamily: "monospace", fontSize: "13px", color, stroke: "#000000", strokeThickness: 3 })
+      .setOrigin(0.5)
+      .setDepth(60);
+    this.tweens.add({ targets: t, y: y - 42, alpha: 0, duration: 600, onComplete: () => t.destroy() });
+  }
+
+  private updateWeaponSprite(): void {
+    const name = this.state.equippedRanged ?? this.state.equippedMelee;
+    if (!name) {
+      this.weaponSprite.setVisible(false);
+      return;
+    }
+    const key = iconKey(name);
+    if (this.textures.exists(key) && this.weaponSprite.texture.key !== key) this.weaponSprite.setTexture(key);
+    const ang = this.aimAngle();
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    this.weaponSprite
+      .setPosition(px + Math.cos(ang) * 15, py + Math.sin(ang) * 15)
+      .setRotation(ang)
+      .setVisible(true);
+  }
+
+  /** Direction the weapon points — player facing for now (Phase 4 adds mouse aim). */
+  private aimAngle(): number {
+    return this.player.sprite.rotation;
+  }
+
+  /** Spawn loot where an enemy died (implemented in Phase 5). */
+  private dropLoot(_e: Enemy): void {
+    // no-op until the drop system lands
   }
 
   /** Brief physics freeze for impact weight (kills only). */
