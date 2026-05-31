@@ -1,0 +1,117 @@
+import type { ArmorDef, ConsumableDef, ItemDef, MaterialDef, Rarity, StatKey, ThrowableDef } from "./types";
+
+// Non-weapon items: medical / food / drink consumables, crafting materials,
+// armor, and throwables — all rarity-graded so loot tables + UI work uniformly.
+
+function slug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+function con(
+  name: string,
+  rarity: Rarity,
+  icon: string,
+  effects: Partial<Record<StatKey, number>>,
+  extra?: { cure?: boolean; desc?: string; tint?: number },
+): ConsumableDef {
+  const d: ConsumableDef = { id: slug(name), name, kind: "consumable", rarity, icon, effects };
+  if (extra?.cure) d.cure = true;
+  if (extra?.desc) d.desc = extra.desc;
+  if (extra?.tint !== undefined) d.tint = extra.tint;
+  return d;
+}
+function mat(name: string, rarity: Rarity, tint?: number, icon = "scrap"): MaterialDef {
+  const d: MaterialDef = { id: slug(name), name, kind: "material", rarity, icon };
+  if (tint !== undefined) d.tint = tint;
+  return d;
+}
+function arm(name: string, rarity: Rarity, defense: number, tint?: number): ArmorDef {
+  const d: ArmorDef = { id: slug(name), name, kind: "armor", rarity, icon: "armor", defense };
+  if (tint !== undefined) d.tint = tint;
+  return d;
+}
+function thr(name: string, rarity: Rarity, damage: number, radius: number, effect?: ThrowableDef["effect"]): ThrowableDef {
+  const d: ThrowableDef = { id: slug(name), name, kind: "throwable", rarity, icon: "grenade", damage, radius };
+  if (effect) d.effect = effect;
+  return d;
+}
+
+const MEDICAL: ConsumableDef[] = [
+  con("Gauze", "common", "bandage", { hp: 18 }),
+  con("Bandage", "common", "bandage", { hp: 30 }),
+  con("Painkillers", "uncommon", "pills", { hp: 14, stamina: 20 }),
+  con("Antiseptic", "uncommon", "syringe", { infection: -25 }),
+  con("First-Aid Kit", "rare", "bandage", { hp: 55 }, { tint: 0xff5555 }),
+  con("Antibiotics", "rare", "pills", { infection: -45 }),
+  con("Saline Drip", "rare", "syringe", { hp: 25, thirst: 20 }),
+  con("Adrenaline Shot", "rare", "syringe", { stamina: 60, hp: 10 }),
+  con("Trauma Kit", "epic", "bandage", { hp: 80, stamina: 10 }, { tint: 0xffd23f }),
+  con("Antiviral Serum", "legendary", "syringe", { infection: -100, hp: 20 }, { cure: true, desc: "Stops the turn cold." }),
+  con("Nanite Cure", "mythic", "syringe", { infection: -100, hp: 60 }, { cure: true, tint: 0xff5a6e, desc: "Whatever this is, it works." }),
+];
+
+const FOOD: ConsumableDef[] = [
+  con("Snacks", "common", "food", { hunger: 14 }),
+  con("Dried Fruit", "common", "food", { hunger: 16 }),
+  con("Energy Bar", "common", "food", { hunger: 18, stamina: 12 }),
+  con("Canned Food", "common", "food", { hunger: 30 }),
+  con("MRE", "uncommon", "food", { hunger: 45, thirst: 10 }),
+  con("Cooked Meal", "rare", "food", { hunger: 60, hp: 8 }),
+];
+
+const DRINK: ConsumableDef[] = [
+  con("Soda", "common", "drink", { thirst: 22, stamina: 10 }),
+  con("Water Bottle", "common", "drink", { thirst: 35 }),
+  con("Coffee", "uncommon", "drink", { stamina: 35 }),
+  con("Canteen", "uncommon", "drink", { thirst: 50 }),
+  con("Energy Drink", "uncommon", "drink", { stamina: 45, thirst: 10 }),
+  con("Purified Water", "rare", "drink", { thirst: 60, infection: -5 }),
+];
+
+const MATERIALS: MaterialDef[] = [
+  mat("Scrap Metal", "common", 0x9aa3ad),
+  mat("Cloth", "common", 0xcdb89a),
+  mat("Wood Plank", "common", 0x8a6a3a),
+  mat("Empty Bottle", "common", 0x6fc3ff),
+  mat("Loose Brick", "common", 0xb5651d),
+  mat("Duct Tape", "common", 0x4a4a4a),
+  mat("Rope", "common", 0xcdb89a),
+  mat("Blanket", "common", 0x7a6f8a),
+  mat("Batteries", "uncommon", 0x5ed66e),
+  mat("Electronics", "uncommon", 0x4aa3ff),
+  mat("Gunpowder", "uncommon", 0x2a2a2a),
+  mat("Fuel Canister", "uncommon", 0xd13a2a),
+  mat("Toolkit", "rare", 0xffd23f),
+  mat("Weapon Parts", "rare", 0x9aa3ad),
+];
+
+const ARMOR: ArmorDef[] = [
+  arm("Leather Jacket", "common", 12, 0x6b4a2a),
+  arm("Warm Coat", "common", 10, 0x3a5236),
+  arm("Helmet", "uncommon", 14, 0x5b616a),
+  arm("Gas Mask", "uncommon", 8, 0x4a4a4a),
+  arm("Padded Vest", "uncommon", 18, 0x4a4a4a),
+  arm("Kevlar Vest", "rare", 30, 0x2a2e33),
+  arm("Riot Gear", "epic", 40, 0x23262b),
+  arm("Plate Carrier", "legendary", 52, 0x1a1a1a),
+];
+
+const THROWABLES: ThrowableDef[] = [
+  thr("Rock", "common", 4, 0),
+  thr("Road Flare", "common", 2, 0, "burn"),
+  thr("Smoke Bomb", "uncommon", 0, 60),
+  thr("Molotov", "rare", 14, 70, "burn"),
+  thr("Pipe Bomb", "rare", 30, 80, "explosive"),
+  thr("Frag Grenade", "epic", 45, 90, "explosive"),
+  thr("Incendiary Grenade", "epic", 30, 80, "incendiary"),
+  thr("C4 Charge", "legendary", 80, 120, "explosive"),
+];
+
+export const MISC_ITEMS: readonly ItemDef[] = Object.freeze([
+  ...MEDICAL,
+  ...FOOD,
+  ...DRINK,
+  ...MATERIALS,
+  ...ARMOR,
+  ...THROWABLES,
+]);
