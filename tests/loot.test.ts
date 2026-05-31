@@ -11,6 +11,7 @@ import { createRng } from "../src/game/rng";
 import { meleeOutcome, shotOutcome } from "../src/game/combat";
 import { addItem, equipWeapon, equippedMeleeDef } from "../src/game/inventory";
 import { newGame } from "../src/game/GameState";
+import { applyOutcome, sanitizeGM } from "../src/game/outcomes";
 
 let fail = 0;
 const ok = (cond: boolean, msg: string) => {
@@ -162,6 +163,13 @@ function main(): void {
   equipWeapon(g, "Pump Shotgun");
   const shot = shotOutcome(g, createRng("s"));
   ok(!!shot && shot.pellets > 1, "shotgun fires multiple pellets per shot");
+
+  // --- a GM-removed equipped weapon gets unequipped (consistency) ---
+  const rm = newGame("rm");
+  addItem(rm, "Katana", 1);
+  equipWeapon(rm, "Katana");
+  applyOutcome(rm, sanitizeGM({ inventory_remove: [{ item: "Katana", qty: 1 }] }));
+  ok(rm.equippedMelee === undefined, "removing an equipped weapon unequips it");
 
   if (fail === 0) console.log("\nALL LOOT CHECKS PASSED");
   else {

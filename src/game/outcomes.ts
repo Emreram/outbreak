@@ -138,6 +138,14 @@ export function applyOutcome(state: GameState, gm: GMResponse): ApplyResult {
   for (const a of gm.inventory_add) addItem(state, a.item, a.qty, a.note);
   for (const r of gm.inventory_remove) removeItem(state, r.item, r.qty);
 
+  // keep equipment consistent: a GM-removed weapon can't stay equipped
+  const held = (name?: string) => !!name && state.inventory.some((i) => i.item === name);
+  if (!held(state.equippedMelee)) state.equippedMelee = undefined;
+  if (!held(state.equippedRanged)) {
+    state.equippedRanged = undefined;
+    state.loadedAmmo = 0;
+  }
+
   // 3) world flags — append + dedupe
   for (const f of gm.world_flags_add) {
     if (!state.worldFlags.includes(f)) state.worldFlags.push(f);

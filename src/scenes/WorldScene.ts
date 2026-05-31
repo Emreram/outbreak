@@ -875,7 +875,12 @@ export class WorldScene extends Phaser.Scene {
 
   private destroyDrop(spr: Phaser.Physics.Arcade.Image): void {
     if (!spr || !spr.active) return;
-    (spr.getData("glow") as Phaser.GameObjects.Image | undefined)?.destroy();
+    const glow = spr.getData("glow") as Phaser.GameObjects.Image | undefined;
+    this.tweens.killTweensOf(spr); // stop the infinite bob/glow tweens before destroying
+    if (glow) {
+      this.tweens.killTweensOf(glow);
+      glow.destroy();
+    }
     spr.destroy();
   }
 
@@ -937,7 +942,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Fire the equipped gun toward `angle` (one trigger pull). */
   private fire(angle: number): void {
-    if (this.dead || this.inEncounter || this.reloading) return;
+    if (this.dead || this.inEncounter || this.reloading || this.lootOpen) return;
     const plan = shotOutcome(this.state, liveRng);
     if (!plan) return; // no gun equipped
     const now = this.time.now;
