@@ -11,7 +11,8 @@ import {
   pushRecentEvent,
   saveGame,
 } from "../game/GameState";
-import { applyDecay } from "../game/survival";
+import { applyDecay, ratesFor } from "../game/survival";
+import { ammoMult, damageTakenMult, lootLuck, sprintDrainMult, type DamageKind } from "../game/perks";
 import { addItem, ammoReserve, autoEquip, equippedRangedDef, reloadEquipped, removeItem } from "../game/inventory";
 import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
 import { rollLoot } from "../game/items/lootTables";
@@ -169,6 +170,7 @@ export class WorldScene extends Phaser.Scene {
     const startX = saved ? this.state.player.x : this.world.start.x;
     const startY = saved ? this.state.player.y : this.world.start.y;
     this.player = new Player(this, startX, startY);
+    this.player.setAppearance(this.state.appearance?.color); // character-creation tint
     this.physics.add.collider(this.player.sprite, this.worldRenderer.layer);
     setupCamera(this, this.player.sprite, worldW, worldH);
 
@@ -329,7 +331,7 @@ export class WorldScene extends Phaser.Scene {
       } else {
         this.player.update(canSprint, { x: tv.x, y: tv.y, sprint: this.touch.sprintHeld });
         if (this.player.sprinting) {
-          this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012);
+          this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012 * sprintDrainMult(this.state));
         }
       }
       this.tickClouds(time);
@@ -347,7 +349,7 @@ export class WorldScene extends Phaser.Scene {
       this.decayAcc += delta;
       if (this.decayAcc >= DECAY_MS) {
         this.decayAcc -= DECAY_MS;
-        applyDecay(this.state);
+        applyDecay(this.state, ratesFor(this.state));
         if (isDead(this.state)) this.enterDeath();
       }
 
@@ -473,10 +475,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /** Apply damage to the player (shared by contact, acid, explosions, clouds). */
-  private damagePlayer(rawDmg: number, bite: boolean, msg: string): void {
+  private damagePlayer(rawDmg: number, bite: boolean, msg: string, kind: DamageKind = "physical"): void {
     if (this.dead) return;
     const p = this.state.player;
-    const dmg = Math.max(1, Math.round(rawDmg * (1 - this.playerArmorPct() / 100)));
+    const dmg = Math.max(1, Math.round(rawDmg * (1 - this.playerArmorPct() / 100) * damageTakenMult(this.state, kind)));
     p.hp = clampStat(p.hp - dmg);
     if (bite) p.infection = clampStat(p.infection + Phaser.Math.Between(8, 16));
     pushRecentEvent(this.state, msg);
@@ -533,7 +535,7 @@ export class WorldScene extends Phaser.Scene {
     g.strokePath();
     this.tweens.add({ targets: g, alpha: 0, duration: 160, onComplete: () => g.destroy() });
     this.grabbedUntil = Math.max(this.grabbedUntil, this.time.now + 250); // brief jolt-stun
-    this.damagePlayer(5, false, "A jolt of current arcs through you.");
+    this.damagePlayer(5, false, "A jolt of current arcs through you.", "shock");
   }
 
   private spawnAcid(x: number, y: number, angle: number, dmg: number, poison: boolean): void {
@@ -552,7 +554,7 @@ export class WorldScene extends Phaser.Scene {
     bloodBurst(this, spr.x, spr.y, 5, 0x8fd14a);
     if (spr.getData("poison")) this.state.player.infection = clampStat(this.state.player.infection + 4);
     this.killProjectile(spr);
-    this.damagePlayer(dmg, false, "Acid spatters across you.");
+    this.damagePlayer(dmg, false, "Acid spatters across you.", "toxic");
   }
 
   private screamPulse(e: Enemy): void {
@@ -580,7 +582,7 @@ export class WorldScene extends Phaser.Scene {
       bloodBurst(this, x, y, 16, 0x8fd14a);
       const radius = 84;
       if (Math.hypot(this.player.sprite.x - x, this.player.sprite.y - y) < radius) {
-        this.damagePlayer(Math.round(8 + e.damage * 0.5), true, "Caught in the burst.");
+        this.damagePlayer(Math.round(8 + e.damage * 0.5), true, "Caught in the burst.", "toxic");
       }
       for (const o of [...this.enemies]) {
         if (o !== e && Math.hypot(o.sprite.x - x, o.sprite.y - y) < radius && o.takeDamage(12)) this.onEnemyKilled(o);
@@ -617,7 +619,7 @@ export class WorldScene extends Phaser.Scene {
       if (now - c.last > 600 && Math.hypot(this.player.sprite.x - c.x, this.player.sprite.y - c.y) < c.r) {
         c.last = now;
         this.state.player.infection = clampStat(this.state.player.infection + 2);
-        this.damagePlayer(3, false, "The toxic air sears your lungs.");
+        this.damagePlayer(3, false, "The toxic air sears your lungs.", "toxic");
       }
     }
   }
@@ -1023,7 +1025,7 @@ export class WorldScene extends Phaser.Scene {
     const chance = e.family === "boss" ? 1 : 0.5;
     if (!liveRng.chance(chance)) return; // not every kill drops
     const n = e.family === "boss" ? 3 : 1;
-    for (const s of rollLoot("enemy:" + e.lootFamily, liveRng, n)) {
+    for (const s of rollLoot("enemy:" + e.lootFamily, liveRng, n, lootLuck(this.state))) {
       this.spawnDrop(e.sprite.x, e.sprite.y, s.item, s.qty);
     }
   }
@@ -1032,7 +1034,9 @@ export class WorldScene extends Phaser.Scene {
     if (this.itemGroup.countActive(true) > 60) return; // perf cap
     const ox = (Math.random() - 0.5) * 16;
     const oy = (Math.random() - 0.5) * 16;
-    const color = RARITY_META[defOf(item).rarity].color;
+    const def = defOf(item);
+    if (def.kind === "ammo" || def.kind === "material") qty = Math.round(qty * ammoMult(this.state)); // Scrapper perk
+    const color = RARITY_META[def.rarity].color;
     const glow = this.add.image(x + ox, y + oy, FX_GLOW).setTint(color).setScale(0.22).setDepth(6).setAlpha(0.5);
     const spr = this.itemGroup.create(x + ox, y + oy, iconKey(item)) as Phaser.Physics.Arcade.Image;
     spr.setScale(0.5).setDepth(7);
@@ -1092,7 +1096,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.state.worldFlags.includes(`chest_${chest.id}`)) this.state.worldFlags.push(`chest_${chest.id}`);
     sfx.pickup();
     this.floatText(chest.sprite.x, chest.sprite.y, "Chest opened!", "#ffd23f");
-    for (const s of rollLoot(`chest:${chest.tier}`, liveRng, 2 + chest.tier)) {
+    for (const s of rollLoot(`chest:${chest.tier}`, liveRng, 2 + chest.tier, lootLuck(this.state))) {
       this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
     }
     this.persist();

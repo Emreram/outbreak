@@ -86,6 +86,12 @@ export class Player {
     }
   }
 
+  /** Tint the survivor sprite (character-creation appearance). */
+  setAppearance(color?: number): void {
+    if (color !== undefined) this.sprite.setTint(color);
+    else this.sprite.clearTint();
+  }
+
   /** Quick squash-stretch punch when swinging a melee hit. */
   lunge(): void {
     this.sprite.scene.tweens.add({

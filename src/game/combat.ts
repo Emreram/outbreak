@@ -2,6 +2,7 @@ import type { GameState } from "../shared/contracts";
 import type { Rng } from "./rng";
 import { equippedMeleeDef, equippedRangedDef } from "./inventory";
 import type { WeaponDef } from "./items/types";
+import { cooldownMult, meleeMult, rangedMult } from "./perks";
 
 // Pure combat math: turn the equipped weapon's def + abilities into a resolved hit.
 // The scene applies the result (damage, FX, status) — keeping mechanics testable.
@@ -31,6 +32,7 @@ export function meleeOutcome(state: GameState, rng: Rng): MeleeHit {
   const critPct = val(w, "crit");
   const crit = critPct > 0 && rng.next() * 100 < critPct;
   if (crit) damage = Math.round(damage * 2);
+  damage = Math.round(damage * meleeMult(state)); // Brawler perk
   const bleed = val(w, "bleed");
   const lifesteal = val(w, "lifesteal");
   return {
@@ -45,7 +47,7 @@ export function meleeOutcome(state: GameState, rng: Rng): MeleeHit {
     executePct: val(w, "execute"),
     noise: w.noise,
     range: w.range,
-    cooldownMs: w.cooldownMs,
+    cooldownMs: Math.round(w.cooldownMs * cooldownMult(state)), // Quick perk
   };
 }
 
@@ -77,6 +79,7 @@ export function shotOutcome(state: GameState, rng: Rng): ShotPlan | undefined {
   const critPct = val(w, "crit");
   const crit = critPct > 0 && rng.next() * 100 < critPct;
   if (crit) damage = Math.round(damage * 2);
+  damage = Math.round(damage * rangedMult(state)); // Marksman perk
   const bleed = val(w, "bleed");
   return {
     weapon: w,
@@ -95,6 +98,6 @@ export function shotOutcome(state: GameState, rng: Rng): ShotPlan | undefined {
     noise: w.noise,
     range: w.range,
     speed: w.projectileSpeed ?? 700,
-    cooldownMs: w.cooldownMs,
+    cooldownMs: Math.round(w.cooldownMs * cooldownMult(state)), // Quick perk
   };
 }

@@ -149,13 +149,13 @@ function tableFor(source: string): SourceTable {
   return SOURCES[source] ?? SOURCES.street;
 }
 
-/** Roll `n` loot stacks from a named source. Merges duplicate items. */
-export function rollLoot(source: string, rng: Rng, n = 1): LootStack[] {
+/** Roll `n` loot stacks from a named source. `extraBias` (e.g. the Lucky perk) shifts toward rarer. */
+export function rollLoot(source: string, rng: Rng, n = 1, extraBias = 0): LootStack[] {
   const { weights, bias } = tableFor(source);
   const out: LootStack[] = [];
   for (let i = 0; i < n; i++) {
     const cat = pickCategory(weights, rng);
-    const d = pickFromCategory(cat, rng, bias);
+    const d = pickFromCategory(cat, rng, bias + extraBias);
     if (d) out.push({ item: d.name, qty: qtyFor(d, rng) });
   }
   const merged = new Map<string, number>();

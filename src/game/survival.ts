@@ -4,6 +4,7 @@
 
 import type { GameState } from "../shared/contracts";
 import { clampStat, pushRecentEvent } from "./GameState";
+import { decayMods } from "./perks";
 
 export interface DecayRates {
   hunger: number; // drop per tick
@@ -20,6 +21,18 @@ export const DEFAULT_DECAY: DecayRates = {
   starveDamage: 2,
   infectionTick: 1.5,
 };
+
+/** Decay rates adjusted by the player's perks (Iron Gut / Marathoner / Hardy / …). */
+export function ratesFor(s: GameState): DecayRates {
+  const m = decayMods(s);
+  return {
+    hunger: DEFAULT_DECAY.hunger * m.hunger,
+    thirst: DEFAULT_DECAY.thirst * m.thirst,
+    staminaRegen: DEFAULT_DECAY.staminaRegen * m.staminaRegen,
+    starveDamage: DEFAULT_DECAY.starveDamage,
+    infectionTick: DEFAULT_DECAY.infectionTick * m.infection,
+  };
+}
 
 /** Advance survival stats by one tick. Mutates state through clamped helpers. */
 export function applyDecay(s: GameState, rates: DecayRates = DEFAULT_DECAY): void {
