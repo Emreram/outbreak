@@ -76,7 +76,18 @@ Abomination, Patient Zero, The Colossus…). Types are **rarity-graded** and **d
 walkers early, rarer and nastier horrors as the outbreak deepens. **Health bars** show on hurt
 enemies and **name labels** mark rare/elite/boss types. Damage varies widely by type.
 
-Every run starts at **hour zero** of the outbreak (Day 0) and asks for your **name**;
+### Character creation
+"New run" opens a **creation screen**: enter a **name**, pick a **background/class** (12 — Soldier,
+Police Officer, Firefighter, Paramedic, Scavenger, Survivalist, Athlete, Mechanic, Chef, Biker,
+Doomsday Prepper, or the balanced Survivor), choose a survivor **colour**, and a **difficulty**
+(Easy → Nightmare). Each background gives a **starting loadout** (weapon + gear, auto-equipped) and
+a **signature perk that actually changes play** — e.g. Marksman (+ranged), Brawler (+melee), Tough
+(less damage), Fireproof (shrug off burn/toxic), Field Medic (meds heal more), Iron Gut (slower
+hunger/thirst), Lucky (rarer loot), Marathoner (stamina), Scrapper (more ammo/materials), Hardy
+(slower infection), Quick (faster attacks). A **Random** button rolls everything; the AI opening
+scenario reflects your chosen background.
+
+Every run starts at **hour zero** of the outbreak (Day 0) with the survivor you created;
 the streets are nearly empty at first and danger ramps as the days pass. In an
 **encounter** the world pauses and you either **type** what you do or tap one of 4
 options — while you're typing, game keys are paused so a stray key can't interrupt or
