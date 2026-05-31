@@ -2,31 +2,15 @@ import Phaser from "phaser";
 import { loadGame, saveGame } from "../game/GameState";
 import { newRunState } from "../ai/gameMaster";
 import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmError, webllmModel, loadWebLLM, warmUpWebLLM } from "../ai/webllm";
+import { CharacterCreate, type CreationResult } from "../ui/CharacterCreate";
 import { sfx } from "../engine/audio";
 
-// Title screen (CLAUDE.md §13 Phase 7). "New run" always asks for the player's
-// name first, then generates a new seed + AI scenario. "Continue" resumes a save.
-
-const NAME_STYLE_ID = "ob-name-style";
-const NAME_CSS = `
-.ob-name{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
-  background:rgba(4,6,9,.72);font-family:ui-monospace,Menlo,Consolas,monospace;padding:16px;box-sizing:border-box}
-.ob-name.ob-show{display:flex}
-.ob-namecard{width:min(420px,92vw);background:#0e1318;border:1px solid #2a3a4a;border-radius:12px;padding:20px;
-  display:flex;flex-direction:column;gap:14px;color:#e8eef4;box-shadow:0 18px 60px rgba(0,0,0,.6)}
-.ob-nametitle{font-size:18px;color:#7fd3ff}
-.ob-namesub{font-size:13px;color:#9fb3c8;margin-top:-6px}
-.ob-nameinput{background:#0a0f14;border:1px solid #34506a;border-radius:8px;color:#e8eef4;padding:12px;font:inherit;font-size:16px}
-.ob-nameinput:focus{outline:none;border-color:#7fd3ff}
-.ob-namebtn{background:#1f6feb;border:none;color:#fff;border-radius:8px;padding:12px;font:inherit;font-weight:600;font-size:15px;cursor:pointer}
-.ob-namebtn:hover{background:#2a7bff}
-`;
+// Title screen. "New run" opens the character creation screen, then generates a
+// new seed + AI scenario with the chosen survivor. "Continue" resumes a save.
 
 export class MainMenuScene extends Phaser.Scene {
   private busy = false;
-  private nameRoot?: HTMLDivElement;
-  private nameInput?: HTMLInputElement;
-  private nameBtn?: HTMLButtonElement;
+  private cc?: CharacterCreate;
   private aiBtn?: Phaser.GameObjects.Text;
   private aiHint?: Phaser.GameObjects.Text;
   private menuDestroyed = false;
@@ -69,7 +53,7 @@ export class MainMenuScene extends Phaser.Scene {
       this.button(cx, y, "Continue run", () => this.continueRun(existing.seed));
       y += 66;
     }
-    this.button(cx, y, "New run", () => this.promptName());
+    this.button(cx, y, "New run", () => this.openCreate());
 
     this.buildAiToggle(cx, h * 0.72);
 
@@ -84,8 +68,8 @@ export class MainMenuScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.menuDestroyed = true;
-      this.nameRoot?.remove();
-      this.nameRoot = undefined;
+      this.cc?.destroy();
+      this.cc = undefined;
     });
   }
 
@@ -197,61 +181,20 @@ export class MainMenuScene extends Phaser.Scene {
     this.scene.start("WorldScene");
   }
 
-  private promptName(): void {
-    if (!document.getElementById(NAME_STYLE_ID)) {
-      const style = document.createElement("style");
-      style.id = NAME_STYLE_ID;
-      style.textContent = NAME_CSS;
-      document.head.appendChild(style);
-    }
-    if (!this.nameRoot) {
-      const root = document.createElement("div");
-      root.className = "ob-name";
-      const card = document.createElement("div");
-      card.className = "ob-namecard";
-      const title = document.createElement("div");
-      title.className = "ob-nametitle";
-      title.textContent = "Who are you?";
-      const sub = document.createElement("div");
-      sub.className = "ob-namesub";
-      sub.textContent = "Enter the name of the survivor about to live (or die).";
-      const input = document.createElement("input");
-      input.className = "ob-nameinput";
-      input.type = "text";
-      input.maxLength = 24;
-      input.placeholder = "Your name";
-      input.autocomplete = "off";
-      const btn = document.createElement("button");
-      btn.className = "ob-namebtn";
-      btn.textContent = "Begin";
-      btn.addEventListener("click", () => void this.startRun());
-      input.addEventListener("keydown", (e) => {
-        e.stopPropagation();
-        if (e.key === "Enter") void this.startRun();
-      });
-      card.append(title, sub, input, btn);
-      root.append(card);
-      document.body.appendChild(root);
-      this.nameRoot = root;
-      this.nameInput = input;
-      this.nameBtn = btn;
-    }
-    this.nameRoot.classList.add("ob-show");
-    this.nameInput?.focus();
+  private openCreate(): void {
+    if (!this.cc) this.cc = new CharacterCreate();
+    this.cc.open((r) => void this.startRun(r));
   }
 
-  private async startRun(): Promise<void> {
+  private async startRun(r: CreationResult): Promise<void> {
     if (this.busy) return;
     this.busy = true;
-    const name = this.nameInput?.value.trim() ?? "";
-    if (this.nameBtn) this.nameBtn.textContent = "Entering the outbreak…";
-    const { state, intro } = await newRunState(undefined, name);
+    const { state, intro } = await newRunState(undefined, r.name, r.creation);
     saveGame(state);
     this.registry.set("seed", state.seed);
     this.registry.set("seedFromUrl", false);
     this.registry.set("intro", intro);
-    this.nameRoot?.remove();
-    this.nameRoot = undefined;
+    this.cc?.close();
     this.scene.start("WorldScene");
   }
 }
