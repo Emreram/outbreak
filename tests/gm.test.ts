@@ -8,6 +8,8 @@ import { newGame } from "../src/game/GameState";
 import { isArmed } from "../src/game/inventory";
 import { MockProvider } from "../src/ai/mockProvider";
 import { runTurn, newRunState } from "../src/ai/gameMaster";
+import { resolveBrain } from "../src/ai/provider";
+import { pickOllamaModel } from "../src/ai/ollamaProvider";
 import type { GMResponse } from "../src/shared/contracts";
 
 let fail = 0;
@@ -131,6 +133,18 @@ async function main() {
   const named = await newRunState("name-seed", "Alex");
   ok(named.state.player.name === "Alex", "newRunState applies the provided player name");
   ok(newGame("d0").day === 0, "a fresh run starts at Day 0 (outbreak hour zero)");
+
+  // Provider resolution (real-AI wiring).
+  ok(resolveBrain("mock", true) === "offline", "mock -> offline brain");
+  ok(resolveBrain("claude", false) === "claude", "claude -> claude brain");
+  ok(resolveBrain("ollama", false) === "ollama", "explicit ollama tries ollama even if probe missed");
+  ok(resolveBrain("auto", true) === "ollama", "auto + ollama up -> ollama brain");
+  ok(resolveBrain("auto", false) === "offline", "auto + ollama down -> offline brain");
+
+  // Model auto-pick: prefer a known-good family, else first installed, else default.
+  ok(pickOllamaModel(["mistral:7b", "llama3.1:8b"]) === "llama3.1:8b", "pickOllamaModel prefers llama3.1");
+  ok(pickOllamaModel(["customthing:1b"]) === "customthing:1b", "pickOllamaModel falls back to first installed");
+  ok(pickOllamaModel([]) === "llama3.1", "pickOllamaModel defaults when none installed");
 
   console.log(fail === 0 ? "ALL GM CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
   process.exit(fail === 0 ? 0 : 1);

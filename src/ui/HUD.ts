@@ -74,7 +74,7 @@ export class HUD {
     this.debugText = mk(PANEL_X + 8, 0, "11px", "#7f93a8");
   }
 
-  update(s: GameState, debug: { fps: number; tx: number; ty: number }): void {
+  update(s: GameState, debug: { fps: number; tx: number; ty: number; brain: string }): void {
     this.dayText.setText(`${s.player.name}  ·  Day ${s.day}  ·  ${s.timeOfDay}`);
 
     this.bars.clear();
@@ -106,7 +106,7 @@ export class HUD {
     const dY = cY + this.controlsText.height + 6;
     this.debugText
       .setPosition(PANEL_X + 8, dY)
-      .setText(`seed ${s.seed} · ${debug.fps} fps · tile ${debug.tx},${debug.ty}`);
+      .setText(`seed ${s.seed} · ${debug.fps} fps · GM:${debug.brain}`);
 
     const bottom = dY + this.debugText.height + 8;
     this.bg.clear();

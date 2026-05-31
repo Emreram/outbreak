@@ -56,6 +56,7 @@ export class EncounterModal {
   private typeTimer?: ReturnType<typeof setInterval>;
   private fullText = "";
   private opened = false;
+  private locked = true; // no input accepted until showResult reveals it (anti double-submit/skip)
 
   constructor() {
     if (!document.getElementById(STYLE_ID)) {
@@ -129,6 +130,7 @@ export class EncounterModal {
   /** Show the modal in the "thinking" state while the GM resolves a turn. */
   openLoading(title = "Encounter"): void {
     this.opened = true;
+    this.locked = true; // ignore any stray input/Enter while the GM is resolving
     this.titleEl.textContent = title;
     this.root.classList.add("ob-show");
     this.clearTyping();
@@ -140,43 +142,52 @@ export class EncounterModal {
     this.spinEl.classList.remove("ob-hidden");
   }
 
-  /** Render a resolved outcome: typewriter narrative, an effects line, then input/choices. */
+  /**
+   * Render a resolved outcome. The prompt, effects line, and input/choices are
+   * revealed IMMEDIATELY (so your keystrokes always land and nothing can race the
+   * reveal); the narrative then types out purely as cosmetic animation.
+   */
   showResult(narrative: string, interaction: NextInteraction, effects = ""): void {
     this.opened = true;
     this.root.classList.add("ob-show");
     this.spinEl.classList.add("ob-hidden");
-    this.choicesEl.innerHTML = "";
-    this.choicesEl.classList.add("ob-hidden");
-    this.rowEl.classList.add("ob-hidden");
-    this.promptEl.classList.add("ob-hidden");
-    this.effectsEl.classList.add("ob-hidden");
 
-    this.typewriter(narrative, () => {
-      if (effects) {
-        this.effectsEl.textContent = effects;
-        this.effectsEl.classList.remove("ob-hidden");
+    if (effects) {
+      this.effectsEl.textContent = effects;
+      this.effectsEl.classList.remove("ob-hidden");
+    } else {
+      this.effectsEl.classList.add("ob-hidden");
+    }
+
+    this.promptEl.textContent = interaction.prompt;
+    this.promptEl.classList.remove("ob-hidden");
+
+    this.choicesEl.innerHTML = "";
+    if (interaction.type === "choices" && interaction.options.length > 0) {
+      for (const opt of interaction.options) {
+        const b = document.createElement("button");
+        b.className = "ob-btn";
+        b.textContent = opt;
+        b.addEventListener("click", () => this.pick(opt));
+        this.choicesEl.appendChild(b);
       }
-      this.promptEl.textContent = interaction.prompt;
-      this.promptEl.classList.remove("ob-hidden");
-      if (interaction.type === "choices" && interaction.options.length > 0) {
-        for (const opt of interaction.options) {
-          const b = document.createElement("button");
-          b.className = "ob-btn";
-          b.textContent = opt;
-          b.addEventListener("click", () => this.pick(opt));
-          this.choicesEl.appendChild(b);
-        }
-        this.choicesEl.classList.remove("ob-hidden");
-      } else {
-        this.inputEl.value = "";
-        this.rowEl.classList.remove("ob-hidden");
-        this.inputEl.focus();
-      }
-    });
+      this.choicesEl.classList.remove("ob-hidden");
+      this.rowEl.classList.add("ob-hidden");
+    } else {
+      this.choicesEl.classList.add("ob-hidden");
+      this.inputEl.value = "";
+      this.rowEl.classList.remove("ob-hidden");
+    }
+
+    this.locked = false; // accept exactly one submission now
+    if (interaction.type !== "choices") this.inputEl.focus();
+
+    this.typewriter(narrative); // cosmetic; click narrative to finish it
   }
 
   close(): void {
     this.opened = false;
+    this.locked = true;
     this.clearTyping();
     this.root.classList.remove("ob-show");
   }
@@ -189,13 +200,17 @@ export class EncounterModal {
   // --- internals ---
 
   private submitText(): void {
+    if (this.locked) return; // one submission per prompt; no skipping/double-advance
     const v = this.inputEl.value.trim();
     if (!v) return;
+    this.locked = true;
     this.lockInputs();
     this.onAction?.({ mode: "free_text", value: v });
   }
 
   private pick(option: string): void {
+    if (this.locked) return;
+    this.locked = true;
     this.lockInputs();
     this.onAction?.({ mode: "choice", value: option });
   }
@@ -211,7 +226,7 @@ export class EncounterModal {
     this.promptEl.classList.add("ob-hidden");
   }
 
-  private typewriter(full: string, done: () => void): void {
+  private typewriter(full: string): void {
     this.clearTyping();
     this.fullText = full;
     this.narrEl.textContent = "";
@@ -222,21 +237,15 @@ export class EncounterModal {
       if (i >= full.length) {
         this.clearTyping();
         this.narrEl.textContent = full;
-        done();
       }
     }, 14);
-    this.pendingDone = done;
   }
 
-  private pendingDone?: () => void;
-
+  /** Click the narrative to finish the typewriter instantly (purely cosmetic). */
   private finishTyping(): void {
     if (this.typeTimer) {
       this.clearTyping();
       this.narrEl.textContent = this.fullText;
-      const d = this.pendingDone;
-      this.pendingDone = undefined;
-      d?.();
     }
   }
 

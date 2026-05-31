@@ -15,7 +15,7 @@ import { applyDecay } from "../game/survival";
 import { isArmed, removeItem } from "../game/inventory";
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
-import { runTurn } from "../ai/gameMaster";
+import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
 import { WorldRenderer } from "../engine/WorldRenderer";
 import { Player } from "../engine/Player";
 import { Enemy } from "../engine/Enemy";
@@ -56,6 +56,7 @@ export class WorldScene extends Phaser.Scene {
   private ambientAcc = 0;
   private ambientDelay = 30000;
   private currentBuildingId: number | null = null;
+  private aiNoticeShown = false; // show the "AI offline" toast at most once per run
   private nightOverlay!: Phaser.GameObjects.Rectangle;
   private segAcc = 0;
   private kills = 0;
@@ -75,6 +76,7 @@ export class WorldScene extends Phaser.Scene {
     this.ambientAcc = 0;
     this.ambientDelay = 30000; // set properly once state/day is known (below)
     this.currentBuildingId = null;
+    this.aiNoticeShown = false;
     this.segAcc = 0;
     this.kills = 0;
     this.lastMelee = 0;
@@ -369,9 +371,9 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({ targets: t, alpha: 0, y: 54, delay: 900, duration: 900, onComplete: () => t.destroy() });
   }
 
-  private debugInfo(): { fps: number; tx: number; ty: number } {
+  private debugInfo(): { fps: number; tx: number; ty: number; brain: string } {
     const { tx, ty } = this.player.tilePos();
-    return { fps: Math.round(this.game.loop.actualFps), tx, ty };
+    return { fps: Math.round(this.game.loop.actualFps), tx, ty, brain: getActiveBrain() };
   }
 
   // --- encounters (CLAUDE.md §2, §8) -----------------------------------------
@@ -433,6 +435,10 @@ export class WorldScene extends Phaser.Scene {
 
   private async resolveTurn(input: TurnInput): Promise<void> {
     const gm = await runTurn(this.state, input, this.encounterLoc);
+    if (!this.aiNoticeShown && consumeFellBack()) {
+      this.aiNoticeShown = true;
+      this.showToast("AI model offline — using the local director. See README to enable Ollama.");
+    }
     const result = applyOutcome(this.state, gm);
     this.spawnNear(result.spawns); // GM-decided spawns appear on the map (§8.5)
     if (gm.inventory_add.length > 0) sfx.pickup();

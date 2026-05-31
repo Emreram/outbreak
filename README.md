@@ -26,7 +26,8 @@ cloud Claude behind the same interface.
 
 - **Node.js ≥ 18** (developed on Node 22) and npm.
 - A modern browser.
-- *(Later phases only)* **Ollama** for the local AI Game Master — not needed yet.
+- *(Optional, for the real AI)* **Ollama** — the game runs fine without it on the
+  built-in offline GM; install it to have a real local LLM run the Game Master.
 
 ## Run it
 
@@ -101,16 +102,29 @@ Copy `.env.example` → `.env` to override defaults. All browser-visible vars ar
 
 | Var | Default | Purpose |
 |---|---|---|
-| `VITE_AI_PROVIDER` | `mock` | `mock` (offline GM, default), `ollama` (local), or `claude` (cloud) |
-| `VITE_OLLAMA_HOST` | `http://localhost:11434` | local Ollama HTTP API |
-| `VITE_OLLAMA_MODEL` | `llama3.1` | local model name |
+| `VITE_AI_PROVIDER` | `auto` | `auto` (use Ollama if running, else offline GM), `ollama`, `mock`, or `claude` |
+| `VITE_OLLAMA_HOST` | `/ollama` (proxied) | local Ollama; set an absolute URL to bypass the dev proxy |
+| `VITE_OLLAMA_MODEL` | _auto_ | pin a model name; unset auto-picks the first installed model |
 
-> By default OUTBREAK uses a built-in **offline procedural Game Master** so it runs
-> anywhere with no setup. To use a real local model, run `ollama run <model>`, set
-> `VITE_AI_PROVIDER=ollama` (and `OLLAMA_ORIGINS` for browser CORS, or use the
-> optional `/server` proxy). If the configured model is unreachable, the game
-> automatically falls back to the offline GM. A cloud key, if ever used, stays
-> server-side — never in the browser bundle.
+### Play with the real AI (local Ollama)
+
+OUTBREAK ships with an **offline procedural Game Master** so it runs anywhere with
+zero setup. For a genuinely AI-driven game where a real LLM decides every outcome:
+
+1. Install **Ollama** (<https://ollama.com>) and pull a model — e.g. `ollama pull llama3.1`.
+   (An *abliterated/uncensored* build narrates the horror without refusing — CLAUDE.md §8.8.)
+2. Make sure Ollama is running, then `npm run dev` and start a run.
+
+That's it — **no env edits, no CORS setup.** The game **auto-detects** Ollama and
+routes the Game Master (and the opening scenario) through it; the dev/preview server
+proxies `/ollama` → `127.0.0.1:11434` so the browser never hits a CORS wall. The
+HUD's bottom line shows the active brain — **`GM:ollama`** (real model) or
+**`GM:offline`** (procedural). If the model becomes unreachable mid-run, the game
+falls back to the offline GM and says so once.
+
+> The hosted Vercel build is static (no proxy), so the **public site uses the
+> offline GM by design** — the real LLM path is for local play. A cloud key, if ever
+> used, stays server-side, never in the browser bundle.
 
 ## License / assets
 
