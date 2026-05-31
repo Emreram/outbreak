@@ -1,6 +1,7 @@
 import type { LLMProvider } from "./provider";
 import { createRng, type Rng } from "../game/rng";
 import { WEAPON_ITEMS } from "../game/inventory";
+import { rollLoot } from "../game/items/lootTables";
 
 // Offline procedural Game Master ("the Director"). Implements LLMProvider so the
 // full AI-driven loop runs on ANY device with NO model and NO API key — the
@@ -27,16 +28,7 @@ interface TurnIn {
   theme?: string;
 }
 
-const LOOT: Record<string, string[]> = {
-  pharmacy: ["Bandage", "Antibiotics", "Painkillers", "Antiseptic"],
-  hospital: ["Bandage", "Antibiotics", "Saline Drip", "Painkillers"],
-  grocery: ["Canned Food", "Water Bottle", "Energy Bar", "Dried Fruit"],
-  gas_station: ["Snacks", "Water Bottle", "Fuel Canister", "Road Flare"],
-  hardware_store: ["Crowbar", "Hammer", "Nails", "Duct Tape", "Hatchet"],
-  police_station: ["Pistol", "Pistol Ammo", "Kevlar Vest", "Baton"],
-  house: ["Canned Food", "Water Bottle", "Kitchen Knife", "Batteries", "Blanket"],
-  street: ["Scrap Metal", "Empty Bottle", "Loose Brick", "Energy Bar"],
-};
+// Loot now comes from the rarity-weighted catalog tables (src/game/items/lootTables.ts).
 
 const FOOD = new Set(["Canned Food", "Energy Bar", "Dried Fruit", "Snacks"]);
 const DRINK = new Set(["Water Bottle", "Soda"]);
@@ -95,7 +87,6 @@ function turn(p: TurnIn, rng: Rng): object {
   const day = gs.day ?? 0;
   const night = gs.timeOfDay === "night" || gs.timeOfDay === "dusk";
   const hasWeapon = inv.some((i) => WEAPON_ITEMS.has(i.item));
-  const locLoot = LOOT[loc] ?? LOOT.street;
   const intent = classify(value);
   const careful = /quiet|sneak|careful|slow|cautious|stealth|softly/.test(value);
 
@@ -124,11 +115,11 @@ function turn(p: TurnIn, rng: Rng): object {
       o.d.stamina -= rng.int(6, 13);
       const findP = loc === "street" ? 0.4 : 0.84;
       if (rng.chance(findP)) {
-        const item = rng.pick(locLoot);
-        const qty = rng.int(1, 2);
-        o.add.push({ item, qty });
-        o.narrative = `You work through the ${prettyLoc(loc)}, prying open drawers and shoving shelves aside. Tucked away: ${qty > 1 ? `${qty} ` : "a "}${item}${qty > 1 ? "s" : ""}.`;
-        if (WEAPON_ITEMS.has(item)) o.narrative += " Finally, something to fight back with.";
+        const found = rollLoot(loc, rng, careful ? 2 : 1); // rarity-graded, location-appropriate
+        for (const s of found) o.add.push({ item: s.item, qty: s.qty });
+        const first = found[0]?.item ?? "supplies";
+        o.narrative = `You work through the ${prettyLoc(loc)}, prying open drawers and shoving shelves aside. Tucked away: ${first}.`;
+        if (found.some((s) => WEAPON_ITEMS.has(s.item))) o.narrative += " Finally, something to fight back with.";
       } else {
         o.narrative = `You ransack the ${prettyLoc(loc)}, but someone got here first — only broken glass and empty packaging.`;
       }
@@ -339,7 +330,7 @@ function scenario(theme: string, rng: Rng) {
   const NAMES = ["Mara", "Dev", "Ruiz", "Cole", "Imani", "Yuki", "Sasha", "Bishop", "Lena", "Tariq"];
   const byTheme: Record<string, { loc: string; items: string[]; goal: string; hook: string }> = {
     "winter outbreak": { loc: "a frozen transit depot", items: ["Warm Coat", "Canned Food"], goal: "Reach somewhere defensible before the cold and the crowds turn.", hook: "The platform TV is looping an emergency broadcast nobody's watching anymore." },
-    "military quarantine zone": { loc: "a checkpoint that's still half-manned", items: ["Pistol Ammo", "Gas Mask"], goal: "Get out of the cordon before it's sealed for good.", hook: "Soldiers are shouting at the crowd to stay back. A few of them already look wrong." },
+    "military quarantine zone": { loc: "a checkpoint that's still half-manned", items: ["9mm Pistol", "9mm Rounds"], goal: "Get out of the cordon before it's sealed for good.", hook: "Soldiers are shouting at the crowd to stay back. A few of them already look wrong." },
     "rural farmland collapse": { loc: "a quiet farmhouse kitchen", items: ["Hatchet", "Water Bottle"], goal: "Get the truck running and reach the highway while the roads are open.", hook: "The radio cut out mid-sentence. Out the window, a neighbor is shambling across the field." },
     "downtown high-rise": { loc: "the 14th floor of an office tower as alarms blare", items: ["Crowbar", "Energy Bar"], goal: "Get down to the street before the stairwells choke with people — and worse.", hook: "Phones are buzzing with the same three words: STAY INSIDE. NOW." },
     "overrun hospital": { loc: "a hospital ward as the first patients seize and rise", items: ["Bandage", "Antibiotics"], goal: "Grab what medicine you can and get clear before the ward turns.", hook: "Code alarms are firing in every room at once. The screaming is just starting." },
@@ -353,7 +344,7 @@ function scenario(theme: string, rng: Rng) {
     intro_narrative: `It's hour zero. ${name} is in ${t.loc} when it all goes sideways. ${t.hook} The infection is spreading fast — minutes ago this was an ordinary day. Whatever you do next is on you.`,
     player_name: name,
     start_location: t.loc,
-    starting_items: t.items.map((item) => ({ item, qty: 1 })),
+    starting_items: t.items.map((item) => ({ item, qty: /Rounds|Shells|Ammo|Arrows|Bolts|Nails|Cells/.test(item) ? 24 : 1 })),
     starting_goal: t.goal,
     difficulty_modifier: Math.round(rng.range(0.85, 1.3) * 100) / 100,
   };

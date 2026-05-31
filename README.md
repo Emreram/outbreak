@@ -43,11 +43,25 @@ Open the URL Vite prints (default **http://localhost:5173/**).
 |---|---|
 | Move | **WASD** / **arrows** · on-screen **joystick** (mobile) |
 | Sprint | hold **Shift** · push the joystick to its edge |
-| Act / open an encounter | **E** · the **ACT** button |
-| Attack (melee) | **SPACE** / **F** · the **HIT** button |
-| Menu / new run | **R** |
+| Aim + fire gun | **mouse** aim + hold **left-click** · the **FIRE** button (auto-aims) |
+| Reload | **R** · the **RELOAD** button |
+| Melee attack | **SPACE** / **F** · the **HIT** button |
+| Act / open chest / search | **E** · the **ACT** button |
+| Inventory / equip / loot screen | **I** · the **BAG** button |
+| Menu / new run | **ESC** |
 | Quick item use | **1** eat · **2** drink · **3** hurt · **4** bandage |
 | Reproduce a specific city | add `?seed=<value>` to the URL, e.g. `…/?seed=alpha` |
+
+### Loot, weapons & rarity
+Scavenge **200+ hand-authored weapons** across 6 rarities (common → mythic) — blades, axes,
+blunts, spears, bows, and real guns (pistols/SMGs/shotguns/rifles/snipers/LMGs/launchers/
+flamethrower…). Each has its own damage, range, fire rate and **abilities** (bleed, cleave,
+knockback, stun, crit, lifesteal, execute, pierce, explosive, burn…). **Guns are real ranged
+combat** — aim, fire projectiles, manage ammo + reloads. Find loot by **searching buildings**
+(location-appropriate tables — police → guns/ammo, pharmacy → meds, hardware → melee), **opening
+chests** inside buildings, or as **drops from kills**. Walk over a drop to grab it; open the
+**loot screen** (`I` / BAG) to compare, **equip** a melee + a gun, read tooltips, use consumables,
+or drop items. Rarity is colour-coded everywhere (icons, drops, the HUD, tooltips).
 
 Every run starts at **hour zero** of the outbreak (Day 0) and asks for your **name**;
 the streets are nearly empty at first and danger ramps as the days pass. In an
