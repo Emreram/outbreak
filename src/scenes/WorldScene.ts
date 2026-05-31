@@ -35,6 +35,7 @@ import { Enemy } from "../engine/Enemy";
 import { setupCamera } from "../engine/Camera";
 import { HUD } from "../ui/HUD";
 import { EncounterModal } from "../ui/EncounterModal";
+import { LootModal } from "../ui/LootModal";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
 import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
@@ -81,6 +82,8 @@ export class WorldScene extends Phaser.Scene {
   private worldRenderer!: WorldRenderer;
   private hud!: HUD;
   private modal!: EncounterModal;
+  private loot!: LootModal;
+  private lootOpen = false;
   private touch!: TouchControls;
   private state!: GameState;
   private decayAcc = 0;
@@ -119,6 +122,7 @@ export class WorldScene extends Phaser.Scene {
   create(): void {
     this.dead = false;
     this.inEncounter = false;
+    this.lootOpen = false;
     this.decayAcc = 0;
     this.saveAcc = 0;
     this.enemies = [];
@@ -258,10 +262,17 @@ export class WorldScene extends Phaser.Scene {
       (input) => this.onEncounterAction(input),
       () => this.onEncounterLeave(),
     );
+    this.loot = new LootModal();
+    this.loot.setOnClose(() => {
+      this.lootOpen = false;
+      this.setGameKeys(true);
+    });
     this.touch = new TouchControls();
     this.touch.setHandlers(
       () => this.tryInteract(),
       () => this.meleeAttack(),
+      () => this.tryReload(),
+      () => this.toggleLoot(),
     );
     this.bindKeys();
 
@@ -274,6 +285,7 @@ export class WorldScene extends Phaser.Scene {
       window.removeEventListener("beforeunload", this.saveOnUnload);
       this.scale.off("resize", this.onResize, this);
       this.modal.destroy();
+      this.loot.destroy();
       this.touch.destroy();
       this.persist();
     });
@@ -293,8 +305,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   override update(time: number, delta: number): void {
-    // The world pauses during an encounter (CLAUDE.md §2).
-    if (!this.dead && !this.inEncounter) {
+    // The world pauses during an encounter or while the loot screen is open.
+    if (!this.dead && !this.inEncounter && !this.lootOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
       this.player.update(canSprint, { x: tv.x, y: tv.y, sprint: this.touch.sprintHeld });
@@ -310,6 +322,7 @@ export class WorldScene extends Phaser.Scene {
       }
 
       if (this.firing) this.fire(this.aimAngle()); // auto-fire while mouse held
+      if (this.touch.fireHeld) this.fireAuto(); // mobile FIRE button: auto-aim nearest
 
       this.decayAcc += delta;
       if (this.decayAcc >= DECAY_MS) {
@@ -589,6 +602,23 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private toggleLoot(): void {
+    if (this.dead) return;
+    if (this.lootOpen) {
+      this.loot.close();
+      return;
+    }
+    if (this.inEncounter) return;
+    this.lootOpen = true;
+    this.setGameKeys(false);
+    this.firing = false;
+    this.player.sprite.setVelocity(0, 0);
+    this.loot.open(this.state, () => {
+      this.hud.update(this.state, this.debugInfo());
+      this.persist();
+    });
+  }
+
   private startEncounter(loc: string, openingValue: string, title: string): void {
     if (this.dead || this.inEncounter) return;
     this.inEncounter = true;
@@ -664,8 +694,9 @@ export class WorldScene extends Phaser.Scene {
     const kb = this.input.keyboard;
     if (!kb) return;
 
-    // R = reload the equipped gun. ESC = back to the menu (new run).
+    // R = reload the equipped gun. I = inventory/loot. ESC = menu (new run).
     kb.on("keydown-R", () => this.tryReload());
+    kb.on("keydown-I", () => this.toggleLoot());
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
@@ -928,6 +959,30 @@ export class WorldScene extends Phaser.Scene {
       this.spawnProjectile(px, py, angle + jitter, plan);
     }
     if ((this.state.loadedAmmo ?? 0) <= 0) this.tryReload();
+  }
+
+  /** Mobile auto-aim fire: shoot toward the nearest enemy. */
+  private fireAuto(): void {
+    const e = this.nearestEnemy(620);
+    const angle = e
+      ? Math.atan2(e.sprite.y - this.player.sprite.y, e.sprite.x - this.player.sprite.x)
+      : this.player.sprite.rotation;
+    this.fire(angle);
+  }
+
+  private nearestEnemy(maxDist: number): Enemy | null {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: Enemy | null = null;
+    let bestD = maxDist;
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.sprite.x - px, e.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
   }
 
   private projTexture(wclass: string): string {

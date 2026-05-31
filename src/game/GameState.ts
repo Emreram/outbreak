@@ -4,7 +4,8 @@
 // engine's authority over hard mechanics (CLAUDE.md §5, §14).
 
 import type { GameState, ScenarioResponse } from "../shared/contracts";
-import { addItem, autoEquip } from "./inventory";
+import { addItem, autoEquip, hasItem, removeItem } from "./inventory";
+import { getItemDef } from "./items/catalog";
 
 export const STAT_MIN = 0;
 export const STAT_MAX = 100;
@@ -60,6 +61,19 @@ export function applyScenario(gs: GameState, sc: ScenarioResponse): void {
   gs.goal = sc.starting_goal || "";
   gs.recentEvents = [`Goal: ${sc.starting_goal}`];
   for (const it of gs.inventory) autoEquip(gs, it.item); // wield any starter weapon
+}
+
+/** Use one consumable from the inventory, applying its clamped effects. */
+export function useConsumable(s: GameState, name: string): boolean {
+  const d = getItemDef(name);
+  if (!d || d.kind !== "consumable" || !hasItem(s, name)) return false;
+  removeItem(s, name, 1);
+  const p = s.player;
+  for (const k of Object.keys(d.effects) as (keyof typeof d.effects)[]) {
+    p[k] = clampStat(p[k] + (d.effects[k] ?? 0));
+  }
+  if (d.cure) p.infection = 0;
+  return true;
 }
 
 /** Append a one-line event and keep only the last ~6 (CLAUDE.md §7, §8.5). */
