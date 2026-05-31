@@ -89,6 +89,8 @@ const ENEMY: Record<string, SourceTable> = {
   zombie: { weights: { material: 4, ammo: 2, medical: 1, food: 1 }, bias: 0 },
   zombie_runner: { weights: { ammo: 3, medical: 2, melee: 1, material: 2 }, bias: 0.2 },
   survivor_hostile: { weights: { pistol: 2, ammo: 3, medical: 2, melee: 2, armor: 1, rifle: 1 }, bias: 0.35 },
+  elite: { weights: { pistol: 2, rifle: 1, shotgun: 1, ammo: 3, medical: 2, melee: 2, armor: 1, special: 1 }, bias: 0.7 },
+  boss: { weights: { pistol: 2, rifle: 2, sniper: 1, special: 1, ammo: 3, medical: 2, armor: 2, melee: 1 }, bias: 1.4 },
 };
 
 function pickCategory(weights: Partial<Record<Category, number>>, rng: Rng): Category {

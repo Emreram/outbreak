@@ -32,6 +32,9 @@ import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
 import { WorldRenderer } from "../engine/WorldRenderer";
 import { Player } from "../engine/Player";
 import { Enemy } from "../engine/Enemy";
+import type { ZombieDef } from "../game/enemies/types";
+import { rollAmbientUndead, rollZombie } from "../game/enemies/spawnTable";
+import { getZombie } from "../game/enemies/catalog";
 import { setupCamera } from "../engine/Camera";
 import { HUD } from "../ui/HUD";
 import { EncounterModal } from "../ui/EncounterModal";
@@ -105,8 +108,11 @@ export class WorldScene extends Phaser.Scene {
   private firing = false;
   private reloading = false;
   private projectileGroup!: Phaser.Physics.Arcade.Group;
+  private enemyProjGroup!: Phaser.Physics.Arcade.Group;
   private itemGroup!: Phaser.Physics.Arcade.Group;
   private chests: Chest[] = [];
+  private grabbedUntil = 0;
+  private clouds: { x: number; y: number; r: number; until: number; last: number }[] = [];
   private lastStep = 0;
   private glow!: Phaser.GameObjects.Image;
   private vignette!: Phaser.GameObjects.Image;
@@ -123,6 +129,8 @@ export class WorldScene extends Phaser.Scene {
     this.dead = false;
     this.inEncounter = false;
     this.lootOpen = false;
+    this.grabbedUntil = 0;
+    this.clouds = [];
     this.decayAcc = 0;
     this.saveAcc = 0;
     this.enemies = [];
@@ -175,6 +183,13 @@ export class WorldScene extends Phaser.Scene {
     this.projectileGroup = this.physics.add.group();
     this.physics.add.overlap(this.projectileGroup, this.enemyGroup, (a, b) => this.onProjectileHit(a, b));
     this.physics.add.collider(this.projectileGroup, this.worldRenderer.layer, (obj) =>
+      this.killProjectile(obj as unknown as Phaser.Physics.Arcade.Image),
+    );
+
+    // Enemy projectiles (spitter acid) hit the player.
+    this.enemyProjGroup = this.physics.add.group();
+    this.physics.add.overlap(this.player.sprite, this.enemyProjGroup, (_p, pr) => this.onEnemyProjHit(pr));
+    this.physics.add.collider(this.enemyProjGroup, this.worldRenderer.layer, (obj) =>
       this.killProjectile(obj as unknown as Phaser.Physics.Arcade.Image),
     );
 
@@ -309,10 +324,15 @@ export class WorldScene extends Phaser.Scene {
     if (!this.dead && !this.inEncounter && !this.lootOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
-      this.player.update(canSprint, { x: tv.x, y: tv.y, sprint: this.touch.sprintHeld });
-      if (this.player.sprinting) {
-        this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012);
+      if (time < this.grabbedUntil) {
+        this.player.sprite.setVelocity(0, 0); // held fast by a grabber
+      } else {
+        this.player.update(canSprint, { x: tv.x, y: tv.y, sprint: this.touch.sprintHeld });
+        if (this.player.sprinting) {
+          this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012);
+        }
       }
+      this.tickClouds(time);
       this.updateEnemies(time);
       this.checkBuildingTrigger();
 
@@ -384,6 +404,7 @@ export class WorldScene extends Phaser.Scene {
     for (const e of this.enemies) {
       e.update(px, py, noise, now);
       if (e.tryAttack(px, py, now)) this.takeHit(e);
+      this.enemySpecials(e, px, py, now);
     }
     // reap enemies finished off by bleed/burn damage-over-time
     for (const e of [...this.enemies]) {
@@ -437,14 +458,26 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private takeHit(e: Enemy): void {
-    const p = this.state.player;
-    const dmg = Math.max(1, Math.round(e.damage * this.state.difficultyModifier));
-    p.hp = clampStat(p.hp - dmg);
-    let msg = "Claws and teeth find you.";
-    if (e.bite && Math.random() < 0.28) {
-      p.infection = clampStat(p.infection + Phaser.Math.Between(8, 16));
-      msg = "Bitten — the wound burns hot.";
+    const bite = e.bite && Math.random() < 0.28;
+    if (e.hasTrait("grabber")) this.grabbedUntil = this.time.now + 700; // held in place
+    if (e.hasTrait("brute")) {
+      const a = Math.atan2(this.player.sprite.y - e.sprite.y, this.player.sprite.x - e.sprite.x);
+      this.player.sprite.setVelocity(Math.cos(a) * 260, Math.sin(a) * 260); // knocked back
     }
+    this.damagePlayer(
+      Math.round(e.damage * this.state.difficultyModifier),
+      bite,
+      bite ? "Bitten — the wound burns hot." : "Claws and teeth find you.",
+    );
+  }
+
+  /** Apply damage to the player (shared by contact, acid, explosions, clouds). */
+  private damagePlayer(rawDmg: number, bite: boolean, msg: string): void {
+    if (this.dead) return;
+    const p = this.state.player;
+    const dmg = Math.max(1, Math.round(rawDmg * (1 - this.playerArmorPct() / 100)));
+    p.hp = clampStat(p.hp - dmg);
+    if (bite) p.infection = clampStat(p.infection + Phaser.Math.Between(8, 16));
     pushRecentEvent(this.state, msg);
     sfx.hurt();
     bloodBurst(this, this.player.sprite.x, this.player.sprite.y, 6, 0xcc2222);
@@ -454,13 +487,122 @@ export class WorldScene extends Phaser.Scene {
     if (isDead(this.state)) this.enterDeath();
   }
 
+  /** Best armor the player is carrying (worn) reduces incoming damage. */
+  private playerArmorPct(): number {
+    let best = 0;
+    for (const it of this.state.inventory) {
+      const d = defOf(it.item);
+      if (d.kind === "armor") best = Math.max(best, d.defense);
+    }
+    return best;
+  }
+
+  // --- enemy special abilities (scene-orchestrated) --------------------------
+
+  private enemySpecials(e: Enemy, px: number, py: number, now: number): void {
+    if (this.inEncounter || this.lootOpen || this.dead) return;
+    const dist = Math.hypot(px - e.sprite.x, py - e.sprite.y);
+    if (e.hasTrait("spitter") && dist > 40 && dist < 380 && e.trySpecial(now, 2200)) {
+      const a = Math.atan2(py - e.sprite.y, px - e.sprite.x);
+      this.spawnAcid(e.sprite.x, e.sprite.y, a, Math.max(4, Math.round(e.damage * 0.8)), e.hasTrait("acidic") || e.hasTrait("toxic"));
+    } else if (e.hasTrait("screamer") && dist < e.def.aggro + 60 && e.trySpecial(now, 5200)) {
+      this.screamPulse(e);
+    }
+  }
+
+  private spawnAcid(x: number, y: number, angle: number, dmg: number, poison: boolean): void {
+    const spr = this.enemyProjGroup.create(x + Math.cos(angle) * 16, y + Math.sin(angle) * 16, PROJ_PELLET) as Phaser.Physics.Arcade.Image;
+    spr.setTint(0x8fd14a).setScale(1.5).setDepth(9);
+    this.physics.velocityFromRotation(angle, 320, (spr.body as Phaser.Physics.Arcade.Body).velocity);
+    spr.setData("dmg", dmg);
+    spr.setData("poison", poison);
+    this.time.delayedCall(1700, () => this.killProjectile(spr));
+  }
+
+  private onEnemyProjHit(projObj: unknown): void {
+    const spr = projObj as Phaser.Physics.Arcade.Image;
+    if (!spr.active) return;
+    const dmg = (spr.getData("dmg") as number) ?? 5;
+    bloodBurst(this, spr.x, spr.y, 5, 0x8fd14a);
+    if (spr.getData("poison")) this.state.player.infection = clampStat(this.state.player.infection + 4);
+    this.killProjectile(spr);
+    this.damagePlayer(dmg, false, "Acid spatters across you.");
+  }
+
+  private screamPulse(e: Enemy): void {
+    sfx.ui();
+    const ring = this.add.circle(e.sprite.x, e.sprite.y, 80, 0xff5a6e, 0).setStrokeStyle(3, 0xff8aa0, 0.7).setDepth(7).setScale(0.1);
+    this.tweens.add({ targets: ring, scale: 1, alpha: 0, duration: 500, onComplete: () => ring.destroy() });
+    const base = getZombie("shambler");
+    if (base) {
+      const tx = Math.floor(e.sprite.x / TILE_SIZE);
+      const ty = Math.floor(e.sprite.y / TILE_SIZE);
+      const k = Phaser.Math.Between(1, 2);
+      for (let i = 0; i < k; i++) {
+        const tile = this.findWalkableNear(tx, ty, 2, 5);
+        if (tile) this.spawnEnemy(base, tile.x, tile.y);
+      }
+    }
+  }
+
+  private onDeathTraits(e: Enemy): void {
+    const x = e.sprite.x;
+    const y = e.sprite.y;
+    if (e.hasTrait("exploder")) {
+      sfx.boom();
+      this.cameras.main.shake(120, 0.01);
+      bloodBurst(this, x, y, 16, 0x8fd14a);
+      const radius = 84;
+      if (Math.hypot(this.player.sprite.x - x, this.player.sprite.y - y) < radius) {
+        this.damagePlayer(Math.round(8 + e.damage * 0.5), true, "Caught in the burst.");
+      }
+      for (const o of [...this.enemies]) {
+        if (o !== e && Math.hypot(o.sprite.x - x, o.sprite.y - y) < radius && o.takeDamage(12)) this.onEnemyKilled(o);
+      }
+    }
+    if (e.hasTrait("bloated") || e.hasTrait("toxic")) this.spawnToxicCloud(x, y);
+    if (e.hasTrait("splitter")) {
+      const base = getZombie("crawler") ?? getZombie("shambler");
+      if (base) {
+        const tx = Math.floor(x / TILE_SIZE);
+        const ty = Math.floor(y / TILE_SIZE);
+        const k = Phaser.Math.Between(2, 3);
+        for (let i = 0; i < k; i++) {
+          const tile = this.findWalkableNear(tx, ty, 1, 4);
+          if (tile) this.spawnEnemy(base, tile.x, tile.y);
+        }
+      }
+    }
+  }
+
+  private spawnToxicCloud(x: number, y: number): void {
+    const g = this.add.circle(x, y, 38, 0x8fd14a, 0.18).setDepth(6);
+    this.tweens.add({ targets: g, alpha: 0, duration: 4000, onComplete: () => g.destroy() });
+    this.clouds.push({ x, y, r: 42, until: this.time.now + 4000, last: 0 });
+  }
+
+  private tickClouds(now: number): void {
+    for (let i = this.clouds.length - 1; i >= 0; i--) {
+      const c = this.clouds[i];
+      if (now > c.until) {
+        this.clouds.splice(i, 1);
+        continue;
+      }
+      if (now - c.last > 600 && Math.hypot(this.player.sprite.x - c.x, this.player.sprite.y - c.y) < c.r) {
+        c.last = now;
+        this.state.player.infection = clampStat(this.state.player.infection + 2);
+        this.damagePlayer(3, false, "The toxic air sears your lungs.");
+      }
+    }
+  }
+
   private freezeEnemies(): void {
     for (const e of this.enemies) e.sprite.setVelocity(0, 0);
   }
 
-  private spawnEnemy(kind: Spawn["type"], x: number, y: number): void {
+  private spawnEnemy(def: ZombieDef, x: number, y: number): void {
     if (this.enemies.length >= 40) return; // safety cap
-    const e = new Enemy(this, x, y, kind);
+    const e = new Enemy(this, x, y, def);
     this.enemyGroup.add(e.sprite);
     this.enemies.push(e);
     spawnPopIn(this, e.sprite);
@@ -472,7 +614,7 @@ export class WorldScene extends Phaser.Scene {
     for (const s of spawns) {
       for (let i = 0; i < s.count; i++) {
         const tile = this.findWalkableNear(ptx, pty, 3, 8);
-        if (tile) this.spawnEnemy(s.type, tile.x, tile.y);
+        if (tile) this.spawnEnemy(rollZombie(s.type, liveRng, this.state.day), tile.x, tile.y);
       }
     }
   }
@@ -482,7 +624,7 @@ export class WorldScene extends Phaser.Scene {
     const pty = this.player.tilePos().ty;
     for (let i = 0; i < n; i++) {
       const tile = this.findWalkableFar(ptx, pty, 12);
-      if (tile) this.spawnEnemy("zombie", tile.x, tile.y);
+      if (tile) this.spawnEnemy(rollAmbientUndead(liveRng, this.state.day), tile.x, tile.y);
     }
   }
 
@@ -807,8 +949,9 @@ export class WorldScene extends Phaser.Scene {
     if (this.enemies.indexOf(e) < 0) return; // already reaped this frame
     this.kills += 1;
     sfx.kill();
-    pushRecentEvent(this.state, `Put down a ${e.kind.replace(/_/g, " ")}.`);
-    this.dropLoot(e); // Phase 5
+    pushRecentEvent(this.state, `Put down a ${e.def.name}.`);
+    this.onDeathTraits(e); // exploder / splitter / bloated bursts
+    this.dropLoot(e);
     this.removeEnemy(e); // death animation
   }
 
@@ -850,9 +993,11 @@ export class WorldScene extends Phaser.Scene {
 
   /** Roll + scatter loot where an enemy died. */
   private dropLoot(e: Enemy): void {
-    if (e.kind === "survivor_friendly") return;
-    if (!liveRng.chance(0.5)) return; // not every kill drops
-    for (const s of rollLoot("enemy:" + e.kind, liveRng, 1)) {
+    if (e.family === "survivor_friendly") return;
+    const chance = e.family === "boss" ? 1 : 0.5;
+    if (!liveRng.chance(chance)) return; // not every kill drops
+    const n = e.family === "boss" ? 3 : 1;
+    for (const s of rollLoot("enemy:" + e.lootFamily, liveRng, n)) {
       this.spawnDrop(e.sprite.x, e.sprite.y, s.item, s.qty);
     }
   }
@@ -1114,6 +1259,7 @@ export class WorldScene extends Phaser.Scene {
   private removeEnemy(e: Enemy): void {
     const i = this.enemies.indexOf(e);
     if (i >= 0) this.enemies.splice(i, 1);
+    e.cleanupUi(); // remove the health bar + name label
     const body = e.sprite.body as Phaser.Physics.Arcade.Body | null;
     if (body) body.enable = false;
     deathFade(this, e.sprite); // fades + spins out, then destroys the sprite

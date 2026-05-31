@@ -1,104 +1,145 @@
 import Phaser from "phaser";
-import type { SpawnType } from "../shared/contracts";
-import { PLAYER_KEY, SURVIVOR_NPC_KEY, ZOMBIE_KEY } from "./textures";
+import type { EnemyFamily, LootFamily, ZombieDef, ZombieTrait } from "../game/enemies/types";
+import { zombieTextureKey } from "./zombieSprites";
+import { ZOMBIE_KEY, PLAYER_KEY } from "./textures";
+import { RARITY_META, rarityRank } from "../game/items/rarity";
 
-// Enemy/NPC state machine (CLAUDE.md §11): wander -> alerted -> chase -> attack.
-// Walkers are slow/common, runners fast/rare. Hostile survivors behave like fast
-// humans. Friendly survivors mill about and never attack. Engine-only: it moves
-// and faces; the SCENE applies any damage to GameState (three-layer rule §5).
+// Def-driven enemy (CLAUDE.md §11 + the 102-type catalog). Movement + defensive
+// traits live here; offensive traits (spitter/exploder/splitter/screamer/grabber/
+// toxic) are orchestrated by the SCENE (three-layer rule §5). Keeps the combat
+// surface the loot system depends on: takeDamage / applyDot / applyStun / knockback
+// / hpFrac / tryAttack / update.
 
 export type EnemyState = "wander" | "chase";
 
-interface Params {
-  texture: string;
-  speed: number;
-  aggro: number; // px detection radius
-  damage: number; // hp per hit (0 = harmless)
-  bite: boolean; // can transmit infection
-  hp: number; // melee hits to put down
-  tint?: number;
-  scale: number;
-}
-
-// hp is now a real damage pool so weapon damage differentiates (CLAUDE.md loot system).
-const PARAMS: Record<SpawnType, Params> = {
-  zombie: { texture: ZOMBIE_KEY, speed: 55, aggro: 150, damage: 6, bite: true, hp: 14, scale: 0.8 },
-  zombie_runner: { texture: ZOMBIE_KEY, speed: 132, aggro: 240, damage: 9, bite: true, hp: 20, tint: 0xff6b6b, scale: 0.78 },
-  survivor_hostile: { texture: SURVIVOR_NPC_KEY, speed: 88, aggro: 210, damage: 8, bite: false, hp: 26, tint: 0xffae6b, scale: 0.82 },
-  survivor_friendly: { texture: SURVIVOR_NPC_KEY, speed: 38, aggro: 0, damage: 0, bite: false, hp: 8, tint: 0x9affa6, scale: 0.82 },
-};
-
 export class Enemy {
   readonly sprite: Phaser.Physics.Arcade.Sprite;
-  readonly kind: SpawnType;
+  readonly def: ZombieDef;
+  readonly family: EnemyFamily;
+  readonly lootFamily: LootFamily;
+  readonly traits: ReadonlySet<ZombieTrait>;
   readonly damage: number;
   readonly bite: boolean;
   hp: number;
   readonly maxHp: number;
   state: EnemyState = "wander";
+
+  private readonly scene: Phaser.Scene;
   private lastAttack = 0;
   private wanderUntil = 0;
   private facing = 0;
-  private phase = Math.random() * 6.28; // desync the shamble between enemies
+  private phase = Math.random() * 6.28;
   private knockedUntil = 0;
   private bleedDps = 0;
   private dotUntil = 0;
   private lastDotTick = 0;
   private stunnedUntil = 0;
-  private readonly p: Params;
+  private lastDamaged = -9999;
+  private lastRegen = 0;
+  private leapUntil = 0;
+  private lastLeap = 0;
+  private lastSpecial = 0;
+  private revived = false;
+  private healthBar?: Phaser.GameObjects.Graphics;
+  private label?: Phaser.GameObjects.Text;
 
-  constructor(scene: Phaser.Scene, x: number, y: number, kind: SpawnType) {
-    this.kind = kind;
-    this.p = PARAMS[kind] ?? PARAMS.zombie;
-    this.damage = this.p.damage;
-    this.bite = this.p.bite;
-    this.hp = this.p.hp;
-    this.maxHp = this.p.hp;
+  constructor(scene: Phaser.Scene, x: number, y: number, def: ZombieDef) {
+    this.scene = scene;
+    this.def = def;
+    this.family = def.family;
+    this.lootFamily = def.lootFamily;
+    this.traits = new Set(def.traits);
+    this.damage = def.damage;
+    this.bite = def.bite;
+    this.hp = def.hp;
+    this.maxHp = def.hp;
 
-    const tex = scene.textures.exists(this.p.texture) ? this.p.texture : PLAYER_KEY;
+    const key = zombieTextureKey(def.id);
+    const tex = scene.textures.exists(key) ? key : scene.textures.exists(ZOMBIE_KEY) ? ZOMBIE_KEY : PLAYER_KEY;
     this.sprite = scene.physics.add.sprite(x, y, tex);
     this.sprite.setOrigin(0.5, 0.5);
-    this.sprite.setScale(this.p.scale);
+    this.sprite.setScale(def.scale);
     this.sprite.setDepth(8);
     this.sprite.setCollideWorldBounds(true);
-    if (this.p.tint !== undefined) this.sprite.setTint(this.p.tint);
 
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
-    const size = 18;
+    const size = Math.round(16 * def.scale + 6);
     body.setSize(size, size);
     body.setOffset((this.sprite.width - size) / 2, (this.sprite.height - size) / 2);
+
+    // Rarity name label for notable types (rare+); cheap, only a handful on screen.
+    if (rarityRank(def.rarity) >= 2) {
+      this.label = scene.add
+        .text(x, y, def.name, { fontFamily: "monospace", fontSize: "10px", color: RARITY_META[def.rarity].css, stroke: "#000", strokeThickness: 3 })
+        .setOrigin(0.5, 1)
+        .setDepth(9);
+    }
   }
 
-  /** AI tick. noise widens aggro (sprinting/gunfire). Returns nothing — the scene
-   *  reads state/position and applies damage on contact. */
+  hasTrait(t: ZombieTrait): boolean {
+    return this.traits.has(t);
+  }
+
+  /** Contact reach scales with body size. */
+  private get reach(): number {
+    return 20 + this.def.scale * 12;
+  }
+
   update(px: number, py: number, noise: number, now: number): void {
-    // damage over time (bleed / burn / poison)
+    // damage over time
     if (this.bleedDps > 0) {
-      if (now >= this.dotUntil) {
-        this.bleedDps = 0;
-      } else if (now - this.lastDotTick >= 500) {
+      if (now >= this.dotUntil) this.bleedDps = 0;
+      else if (now - this.lastDotTick >= 500) {
         this.lastDotTick = now;
         this.hp -= this.bleedDps * 0.5;
         this.flash(0xff4d4d);
       }
     }
+    // regeneration
+    if (this.hasTrait("regenerator") && this.hp < this.maxHp && now - this.lastDamaged > 1600 && now - this.lastRegen > 500) {
+      this.lastRegen = now;
+      this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.02);
+    }
 
-    if (now < this.knockedUntil) return; // ride out a knockback; keep current velocity
+    if (now < this.knockedUntil) {
+      this.drawUi();
+      return;
+    }
     if (now < this.stunnedUntil) {
       this.sprite.setVelocity(0, 0);
-      return; // stunned: frozen but DoT still ticks
+      this.drawUi();
+      return;
+    }
+    if (now < this.leapUntil) {
+      this.applySway(now);
+      this.drawUi();
+      return; // ride out the leap
     }
 
     const dx = px - this.sprite.x;
     const dy = py - this.sprite.y;
-    const dist = Math.hypot(dx, dy);
-    const aggro = this.p.aggro + noise;
+    const dist = Math.hypot(dx, dy) || 1;
+    const aggro = this.def.aggro + noise;
+    const speed = this.def.speed * this.frenzyMult();
 
-    if (this.p.aggro > 0 && dist < aggro) {
+    if (this.def.aggro > 0 && dist < aggro) {
       this.state = "chase";
-      const inv = 1 / (dist || 1);
-      this.sprite.setVelocity(dx * inv * this.p.speed, dy * inv * this.p.speed);
+      const inv = 1 / dist;
       this.facing = Math.atan2(dy, dx);
+      let vx = dx * inv * speed;
+      let vy = dy * inv * speed;
+      if (this.def.movement === "erratic") {
+        const veer = Math.sin(now * 0.02 + this.phase) * speed * 0.5;
+        vx += Math.cos(this.facing + Math.PI / 2) * veer;
+        vy += Math.sin(this.facing + Math.PI / 2) * veer;
+      }
+      this.sprite.setVelocity(vx, vy);
+      // leaper: dash toward the player from mid-range
+      if (this.def.movement === "leaper" && dist > 70 && dist < 300 && now - this.lastLeap > 1700) {
+        this.lastLeap = now;
+        this.leapUntil = now + 280;
+        this.sprite.setVelocity(dx * inv * speed * 2.8, dy * inv * speed * 2.8);
+      }
     } else {
       this.state = "wander";
       if (now > this.wanderUntil) {
@@ -107,56 +148,100 @@ export class Enemy {
           this.sprite.setVelocity(0, 0);
         } else {
           const a = Math.random() * Math.PI * 2;
-          const s = this.p.speed * 0.35;
+          const s = this.def.speed * 0.35;
           this.sprite.setVelocity(Math.cos(a) * s, Math.sin(a) * s);
           this.facing = a;
         }
       }
     }
 
-    // Shamble: walkers sway slowly, runners jitter — around the facing, every frame.
-    const fast = this.kind === "zombie_runner";
-    const sway = Math.sin(now * (fast ? 0.022 : 0.008) + this.phase) * (fast ? 0.22 : 0.12);
-    this.sprite.setRotation(this.facing + sway);
+    this.applySway(now);
+    this.drawUi();
   }
 
-  /** Shove the enemy in a direction for a short while (melee knockback). */
+  private frenzyMult(): number {
+    return this.hasTrait("frenzied") ? 1 + (1 - this.hpFrac()) * 0.7 : 1;
+  }
+
+  private applySway(now: number): void {
+    const fast = this.family === "zombie_runner" || this.hasTrait("fast");
+    const wide = this.def.movement === "crawler";
+    const amp = wide ? 0.2 : fast ? 0.22 : 0.12;
+    const freq = fast ? 0.022 : 0.008;
+    this.sprite.setRotation(this.facing + Math.sin(now * freq + this.phase) * amp);
+  }
+
+  private drawUi(): void {
+    const s = this.sprite;
+    if (this.label) this.label.setPosition(s.x, s.y - s.displayHeight * 0.5 - 4);
+    if (this.hp < this.maxHp) {
+      if (!this.healthBar) this.healthBar = this.scene.add.graphics().setDepth(9);
+      const w = Math.max(16, s.displayWidth * 0.7);
+      const frac = Math.max(0, this.hpFrac());
+      const bx = s.x - w / 2;
+      const by = s.y - s.displayHeight * 0.5 - (this.label ? 14 : 6);
+      this.healthBar.clear();
+      this.healthBar.fillStyle(0x1a1a1a, 0.85).fillRect(bx - 1, by - 1, w + 2, 4);
+      this.healthBar.fillStyle(frac > 0.5 ? 0x6ed16e : frac > 0.25 ? 0xffd23f : 0xff5555, 1).fillRect(bx, by, w * frac, 2);
+    } else if (this.healthBar) {
+      this.healthBar.clear();
+    }
+  }
+
   knockback(dirX: number, dirY: number, force: number, now: number): void {
+    if (this.hasTrait("brute") || this.family === "boss") force *= 0.4; // heavy enemies resist
     this.sprite.setVelocity(dirX * force, dirY * force);
     this.knockedUntil = now + 160;
   }
 
-  /** True if this enemy can land a hit now (within range + off cooldown). */
   tryAttack(px: number, py: number, now: number): boolean {
     if (this.damage <= 0) return false;
     const dist = Math.hypot(px - this.sprite.x, py - this.sprite.y);
-    if (dist <= 24 && now - this.lastAttack >= 850) {
+    if (dist <= this.reach && now - this.lastAttack >= 850) {
       this.lastAttack = now;
       return true;
     }
     return false;
   }
 
-  /** Apply damage; returns true if this put the enemy down. */
+  /** Off-cooldown gate for scene-driven special abilities (spit/scream). */
+  trySpecial(now: number, cooldownMs: number): boolean {
+    if (now - this.lastSpecial >= cooldownMs) {
+      this.lastSpecial = now;
+      return true;
+    }
+    return false;
+  }
+
   takeDamage(n: number): boolean {
-    this.hp -= n;
-    if (this.hp <= 0) return true;
+    let dmg = n;
+    if (this.hasTrait("armored")) dmg *= 0.6;
+    if (this.hasTrait("shielded")) dmg *= 0.78;
+    this.hp -= dmg;
+    this.lastDamaged = this.scene.time.now;
+    if (this.hp <= 0) {
+      if (this.hasTrait("undying") && !this.revived) {
+        this.revived = true;
+        this.hp = Math.max(1, this.maxHp * 0.3);
+        this.flash(0x6fc3ff, 140);
+        return false;
+      }
+      return true;
+    }
     this.flash(0xffffff);
     return false;
   }
 
-  /** Apply a damage-over-time effect (bleed/burn/poison): dps for ms milliseconds. */
   applyDot(dps: number, ms: number): void {
     if (dps <= 0 || ms <= 0) return;
-    const now = this.sprite.scene.time.now;
+    const now = this.scene.time.now;
     this.bleedDps = Math.max(this.bleedDps, dps);
     this.dotUntil = Math.max(this.dotUntil, now + ms);
   }
 
-  /** Freeze the enemy for ms milliseconds. */
   applyStun(ms: number): void {
     if (ms <= 0) return;
-    this.stunnedUntil = Math.max(this.stunnedUntil, this.sprite.scene.time.now + ms);
+    this.stunnedUntil = Math.max(this.stunnedUntil, this.scene.time.now + ms);
   }
 
   hpFrac(): number {
@@ -166,12 +251,20 @@ export class Enemy {
   private flash(color: number, ms = 80): void {
     this.sprite.setTint(color);
     this.sprite.scene.time.delayedCall(ms, () => {
-      if (this.p.tint !== undefined) this.sprite.setTint(this.p.tint);
-      else this.sprite.clearTint();
+      if (this.sprite.active) this.sprite.clearTint();
     });
   }
 
+  /** Remove the UI bits (call when the body starts its death animation). */
+  cleanupUi(): void {
+    this.healthBar?.destroy();
+    this.healthBar = undefined;
+    this.label?.destroy();
+    this.label = undefined;
+  }
+
   destroy(): void {
+    this.cleanupUi();
     this.sprite.destroy();
   }
 }
