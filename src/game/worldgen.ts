@@ -58,6 +58,14 @@ export interface Building {
   center: { x: number; y: number };
 }
 
+export interface Container {
+  id: number;
+  tx: number; // tile coords
+  ty: number;
+  tier: number; // 0..4 loot quality (by building type)
+  type: BuildingType;
+}
+
 export interface WorldData {
   seed: string;
   tileSize: number;
@@ -65,8 +73,19 @@ export interface WorldData {
   height: number; // tiles
   grid: Tile[][]; // grid[row][col]
   buildings: Building[];
+  containers: Container[]; // lootable chests placed inside buildings
   start: { x: number; y: number }; // player spawn, world pixels
 }
+
+const CONTAINER_TIER: Record<BuildingType, number> = {
+  house: 0,
+  grocery: 1,
+  gas_station: 1,
+  pharmacy: 1,
+  hardware_store: 2,
+  hospital: 2,
+  police_station: 3,
+};
 
 export interface WorldGenOptions {
   width?: number;
@@ -123,7 +142,35 @@ export function generateWorld(seed: string, opts: WorldGenOptions = {}): WorldDa
   // 5) Spawn the player on a central road tile (always walkable).
   const start = centralRoad(grid, width, height, tileSize);
 
-  return { seed, tileSize, width, height, grid, buildings, start };
+  // 6) Loot containers: 1–2 chests on interior floor tiles per building.
+  const containers: Container[] = [];
+  let cid = 0;
+  for (const b of buildings) {
+    const n = 1 + (rng.chance(0.35) ? 1 : 0);
+    const used = new Set<string>();
+    for (let i = 0; i < n; i++) {
+      const tile = floorTileIn(grid, b, rng, used);
+      if (tile) {
+        used.add(`${tile.x},${tile.y}`);
+        containers.push({ id: cid++, tx: tile.x, ty: tile.y, tier: CONTAINER_TIER[b.type] ?? 1, type: b.type });
+      }
+    }
+  }
+
+  return { seed, tileSize, width, height, grid, buildings, containers, start };
+}
+
+/** A random interior Floor tile of a building, avoiding the door and used tiles. */
+function floorTileIn(grid: Tile[][], b: Building, rng: Rng, used: Set<string>): { x: number; y: number } | null {
+  const candidates: { x: number; y: number }[] = [];
+  for (let y = b.ty + 1; y < b.ty + b.th - 1; y++) {
+    for (let x = b.tx + 1; x < b.tx + b.tw - 1; x++) {
+      if (grid[y]?.[x] === Tile.Floor && !(x === b.door.x && y === b.door.y) && !used.has(`${x},${y}`)) {
+        candidates.push({ x, y });
+      }
+    }
+  }
+  return candidates.length ? rng.pick(candidates) : null;
 }
 
 // --- helpers ---------------------------------------------------------------

@@ -25,6 +25,19 @@ function check(seed: string): { buildings: number; errs: string[] } {
 
   if (w.buildings.length < 5) errs.push(`too few buildings: ${w.buildings.length}`);
 
+  // loot containers (chests) sit on interior Floor tiles
+  if (w.containers.length < 3) errs.push(`too few containers: ${w.containers.length}`);
+  for (const c of w.containers) {
+    if (c.tx < 0 || c.ty < 0 || c.tx >= w.width || c.ty >= w.height) {
+      errs.push("container out of bounds");
+      break;
+    }
+    if (w.grid[c.ty][c.tx] !== Tile.Floor) {
+      errs.push("container not on a floor tile");
+      break;
+    }
+  }
+
   let doorTileOk = 0;
   let doorReach = 0;
   for (const b of w.buildings) {

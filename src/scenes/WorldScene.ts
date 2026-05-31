@@ -12,9 +12,20 @@ import {
   saveGame,
 } from "../game/GameState";
 import { applyDecay } from "../game/survival";
-import { ammoReserve, equippedRangedDef, reloadEquipped, removeItem } from "../game/inventory";
+import { addItem, ammoReserve, autoEquip, equippedRangedDef, reloadEquipped, removeItem } from "../game/inventory";
 import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
-import { iconKey, PROJ_ARROW, PROJ_BULLET, PROJ_PELLET, PROJ_ROCKET } from "../engine/icons";
+import { rollLoot } from "../game/items/lootTables";
+import { defOf } from "../game/items/catalog";
+import { RARITY_META } from "../game/items/rarity";
+import {
+  CHEST_CLOSED,
+  CHEST_OPEN,
+  iconKey,
+  PROJ_ARROW,
+  PROJ_BULLET,
+  PROJ_PELLET,
+  PROJ_ROCKET,
+} from "../engine/icons";
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
@@ -26,10 +37,17 @@ import { HUD } from "../ui/HUD";
 import { EncounterModal } from "../ui/EncounterModal";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
 import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../game/constants";
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
+
+interface Chest {
+  id: number;
+  sprite: Phaser.GameObjects.Image;
+  tier: number;
+  opened: boolean;
+}
 
 interface ProjData {
   damage: number;
@@ -84,6 +102,8 @@ export class WorldScene extends Phaser.Scene {
   private firing = false;
   private reloading = false;
   private projectileGroup!: Phaser.Physics.Arcade.Group;
+  private itemGroup!: Phaser.Physics.Arcade.Group;
+  private chests: Chest[] = [];
   private lastStep = 0;
   private glow!: Phaser.GameObjects.Image;
   private vignette!: Phaser.GameObjects.Image;
@@ -153,6 +173,20 @@ export class WorldScene extends Phaser.Scene {
     this.physics.add.collider(this.projectileGroup, this.worldRenderer.layer, (obj) =>
       this.killProjectile(obj as unknown as Phaser.Physics.Arcade.Image),
     );
+
+    // Dropped loot: walk over it to pick it up.
+    this.itemGroup = this.physics.add.group();
+    this.physics.add.overlap(this.player.sprite, this.itemGroup, (_p, item) =>
+      this.pickupDrop(item as unknown as Phaser.Physics.Arcade.Image),
+    );
+
+    // Chests inside buildings (skip ones already looted this run).
+    this.chests = [];
+    for (const c of this.world.containers) {
+      if (this.state.worldFlags.includes(`chest_${c.id}`)) continue;
+      const spr = this.add.image((c.tx + 0.5) * TILE_SIZE, (c.ty + 0.5) * TILE_SIZE, CHEST_CLOSED).setDepth(6);
+      this.chests.push({ id: c.id, sprite: spr, tier: c.tier, opened: false });
+    }
 
     // Day/night tint overlay (screen-space, above the world, below HUD).
     this.nightOverlay = this.add
@@ -308,10 +342,16 @@ export class WorldScene extends Phaser.Scene {
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
     this.updateWeaponSprite();
 
-    // Contextual "Press E" hint when standing on a building (and free to act).
-    const near = !this.dead && !this.inEncounter ? this.buildingAt() : null;
-    this.hintText.setVisible(!!near);
-    if (near) this.hintText.setText(`Press E to enter the ${near.type.replace(/_/g, " ")}`);
+    // Contextual "Press E" hint (chest > building) when free to act.
+    if (!this.dead && !this.inEncounter) {
+      const chest = this.nearestChest(42);
+      const near = chest ? null : this.buildingAt();
+      if (chest) this.hintText.setText("Press E to open the chest").setVisible(true);
+      else if (near) this.hintText.setText(`Press E to enter the ${near.type.replace(/_/g, " ")}`).setVisible(true);
+      else this.hintText.setVisible(false);
+    } else {
+      this.hintText.setVisible(false);
+    }
 
     this.hud.update(this.state, this.debugInfo());
   }
@@ -535,6 +575,11 @@ export class WorldScene extends Phaser.Scene {
 
   /** Press E to act on the current surroundings. */
   private tryInteract(): void {
+    const chest = this.nearestChest(42);
+    if (chest) {
+      this.openChest(chest);
+      return;
+    }
     const b = this.buildingAt();
     if (b) {
       const name = b.type.replace(/_/g, " ");
@@ -770,9 +815,80 @@ export class WorldScene extends Phaser.Scene {
     return this.player.sprite.rotation;
   }
 
-  /** Spawn loot where an enemy died (implemented in Phase 5). */
-  private dropLoot(_e: Enemy): void {
-    // no-op until the drop system lands
+  // --- world loot: drops + chests --------------------------------------------
+
+  /** Roll + scatter loot where an enemy died. */
+  private dropLoot(e: Enemy): void {
+    if (e.kind === "survivor_friendly") return;
+    if (!liveRng.chance(0.5)) return; // not every kill drops
+    for (const s of rollLoot("enemy:" + e.kind, liveRng, 1)) {
+      this.spawnDrop(e.sprite.x, e.sprite.y, s.item, s.qty);
+    }
+  }
+
+  private spawnDrop(x: number, y: number, item: string, qty: number): void {
+    if (this.itemGroup.countActive(true) > 60) return; // perf cap
+    const ox = (Math.random() - 0.5) * 16;
+    const oy = (Math.random() - 0.5) * 16;
+    const color = RARITY_META[defOf(item).rarity].color;
+    const glow = this.add.image(x + ox, y + oy, FX_GLOW).setTint(color).setScale(0.22).setDepth(6).setAlpha(0.5);
+    const spr = this.itemGroup.create(x + ox, y + oy, iconKey(item)) as Phaser.Physics.Arcade.Image;
+    spr.setScale(0.5).setDepth(7);
+    spr.setData("item", item);
+    spr.setData("qty", qty);
+    spr.setData("glow", glow);
+    this.tweens.add({ targets: [spr, glow], y: "-=4", duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+    this.tweens.add({ targets: glow, alpha: 0.2, duration: 600, yoyo: true, repeat: -1 });
+    this.time.delayedCall(45000, () => this.destroyDrop(spr));
+  }
+
+  private destroyDrop(spr: Phaser.Physics.Arcade.Image): void {
+    if (!spr || !spr.active) return;
+    (spr.getData("glow") as Phaser.GameObjects.Image | undefined)?.destroy();
+    spr.destroy();
+  }
+
+  private pickupDrop(spr: Phaser.Physics.Arcade.Image): void {
+    if (!spr.active) return;
+    const item = spr.getData("item") as string;
+    const qty = (spr.getData("qty") as number) ?? 1;
+    const meta = RARITY_META[defOf(item).rarity];
+    addItem(this.state, item, qty);
+    const equipped = autoEquip(this.state, item);
+    sfx.pickup();
+    this.floatText(this.player.sprite.x, this.player.sprite.y - 6, `+${qty > 1 ? qty + " " : ""}${item}`, meta.css);
+    if (equipped) this.showToast(`Equipped ${item}`);
+    this.destroyDrop(spr);
+    this.persist();
+  }
+
+  private nearestChest(maxDist: number): Chest | null {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: Chest | null = null;
+    let bestD = maxDist;
+    for (const c of this.chests) {
+      if (c.opened) continue;
+      const d = Math.hypot(c.sprite.x - px, c.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  private openChest(chest: Chest): void {
+    if (chest.opened) return;
+    chest.opened = true;
+    chest.sprite.setTexture(CHEST_OPEN);
+    if (!this.state.worldFlags.includes(`chest_${chest.id}`)) this.state.worldFlags.push(`chest_${chest.id}`);
+    sfx.pickup();
+    this.floatText(chest.sprite.x, chest.sprite.y, "Chest opened!", "#ffd23f");
+    for (const s of rollLoot(`chest:${chest.tier}`, liveRng, 2 + chest.tier)) {
+      this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
+    }
+    this.persist();
   }
 
   // --- ranged combat ---------------------------------------------------------
