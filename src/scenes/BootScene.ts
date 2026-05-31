@@ -3,6 +3,7 @@ import { TILE_SIZE } from "../game/constants";
 import { ASSET_PATHS, generatePlayerTexture, generateTileTexture } from "../engine/textures";
 import { generateFxTextures } from "../engine/fx";
 import { generateAllIcons, generateLootWorldTextures } from "../engine/icons";
+import { generateZombieTextures } from "../engine/zombieSprites";
 import { saveGame } from "../game/GameState";
 import { newRunState } from "../ai/gameMaster";
 
@@ -26,6 +27,7 @@ export class BootScene extends Phaser.Scene {
     generateFxTextures(this);
     generateAllIcons(this);
     generateLootWorldTextures(this);
+    generateZombieTextures(this);
 
     const urlSeed = new URLSearchParams(window.location.search).get("seed");
     if (urlSeed !== null) {
