@@ -12,9 +12,9 @@ import {
   saveGame,
 } from "../game/GameState";
 import { applyDecay } from "../game/survival";
-import { removeItem } from "../game/inventory";
-import { meleeOutcome, type MeleeHit } from "../game/combat";
-import { iconKey } from "../engine/icons";
+import { ammoReserve, equippedRangedDef, reloadEquipped, removeItem } from "../game/inventory";
+import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
+import { iconKey, PROJ_ARROW, PROJ_BULLET, PROJ_PELLET, PROJ_ROCKET } from "../engine/icons";
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
@@ -30,6 +30,22 @@ import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUS
 import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../game/constants";
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
+
+interface ProjData {
+  damage: number;
+  pierce: number;
+  knockback: number;
+  bleed: number;
+  bleedMs: number;
+  stunMs: number;
+  burn: number;
+  explosive: number;
+  executePct: number;
+  crit: boolean;
+  dirX: number;
+  dirY: number;
+  hits: Set<Enemy>;
+}
 
 // The open world (CLAUDE.md §13 Phases 1–3): a walkable seeded city plus the
 // authoritative GameState, survival decay, HUD, and localStorage persistence.
@@ -64,6 +80,10 @@ export class WorldScene extends Phaser.Scene {
   private segAcc = 0;
   private kills = 0;
   private lastMelee = 0;
+  private lastShot = 0;
+  private firing = false;
+  private reloading = false;
+  private projectileGroup!: Phaser.Physics.Arcade.Group;
   private lastStep = 0;
   private glow!: Phaser.GameObjects.Image;
   private vignette!: Phaser.GameObjects.Image;
@@ -89,6 +109,9 @@ export class WorldScene extends Phaser.Scene {
     this.segAcc = 0;
     this.kills = 0;
     this.lastMelee = 0;
+    this.lastShot = 0;
+    this.firing = false;
+    this.reloading = false;
     this.lastStep = 0;
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
@@ -123,6 +146,13 @@ export class WorldScene extends Phaser.Scene {
     // Enemies live in a group that collides with walls (CLAUDE.md §11).
     this.enemyGroup = this.physics.add.group();
     this.physics.add.collider(this.enemyGroup, this.worldRenderer.layer);
+
+    // Bullets/arrows/rockets: hit enemies, stop on walls.
+    this.projectileGroup = this.physics.add.group();
+    this.physics.add.overlap(this.projectileGroup, this.enemyGroup, (a, b) => this.onProjectileHit(a, b));
+    this.physics.add.collider(this.projectileGroup, this.worldRenderer.layer, (obj) =>
+      this.killProjectile(obj as unknown as Phaser.Physics.Arcade.Image),
+    );
 
     // Day/night tint overlay (screen-space, above the world, below HUD).
     this.nightOverlay = this.add
@@ -201,6 +231,10 @@ export class WorldScene extends Phaser.Scene {
     );
     this.bindKeys();
 
+    // Desktop: hold left mouse to fire the equipped gun toward the cursor.
+    this.input.on("pointerdown", this.onPointerDown, this);
+    this.input.on("pointerup", this.onPointerUp, this);
+
     window.addEventListener("beforeunload", this.saveOnUnload);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener("beforeunload", this.saveOnUnload);
@@ -240,6 +274,8 @@ export class WorldScene extends Phaser.Scene {
         this.lastStep = time;
         dustPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 2);
       }
+
+      if (this.firing) this.fire(this.aimAngle()); // auto-fire while mouse held
 
       this.decayAcc += delta;
       if (this.decayAcc >= DECAY_MS) {
@@ -583,8 +619,9 @@ export class WorldScene extends Phaser.Scene {
     const kb = this.input.keyboard;
     if (!kb) return;
 
-    // R = back to the menu to begin a fresh, named run.
-    kb.on("keydown-R", () => this.scene.start("MainMenuScene"));
+    // R = reload the equipped gun. ESC = back to the menu (new run).
+    kb.on("keydown-R", () => this.tryReload());
+    kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
     kb.on("keydown-E", () => this.tryInteract());
@@ -724,14 +761,169 @@ export class WorldScene extends Phaser.Scene {
       .setVisible(true);
   }
 
-  /** Direction the weapon points — player facing for now (Phase 4 adds mouse aim). */
+  /** Direction the equipped weapon points — toward the mouse on desktop. */
   private aimAngle(): number {
+    const p = this.input.activePointer;
+    if (p && !p.wasTouch) {
+      return Math.atan2(p.worldY - this.player.sprite.y, p.worldX - this.player.sprite.x);
+    }
     return this.player.sprite.rotation;
   }
 
   /** Spawn loot where an enemy died (implemented in Phase 5). */
   private dropLoot(_e: Enemy): void {
     // no-op until the drop system lands
+  }
+
+  // --- ranged combat ---------------------------------------------------------
+
+  private onPointerDown(ptr: Phaser.Input.Pointer): void {
+    if (ptr.wasTouch) return; // touch uses the FIRE button (Phase 6)
+    if (ptr.leftButtonDown()) {
+      this.firing = true;
+      this.fire(this.aimAngle());
+    }
+  }
+  private onPointerUp(ptr: Phaser.Input.Pointer): void {
+    if (!ptr.wasTouch) this.firing = false;
+  }
+
+  /** Fire the equipped gun toward `angle` (one trigger pull). */
+  private fire(angle: number): void {
+    if (this.dead || this.inEncounter || this.reloading) return;
+    const plan = shotOutcome(this.state, liveRng);
+    if (!plan) return; // no gun equipped
+    const now = this.time.now;
+    if (now - this.lastShot < plan.cooldownMs) return;
+    if ((this.state.loadedAmmo ?? 0) <= 0) {
+      this.tryReload();
+      return;
+    }
+    this.lastShot = now;
+    this.state.loadedAmmo = (this.state.loadedAmmo ?? 0) - 1;
+    sfx.shot();
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    this.spawnMuzzle(px, py, angle);
+    this.cameras.main.shake(40, 0.0018);
+    const pellets = Math.max(1, plan.pellets);
+    for (let i = 0; i < pellets; i++) {
+      const jitter = pellets > 1 ? (Math.random() - 0.5) * plan.spread * 2 : (Math.random() - 0.5) * 0.05;
+      this.spawnProjectile(px, py, angle + jitter, plan);
+    }
+    if ((this.state.loadedAmmo ?? 0) <= 0) this.tryReload();
+  }
+
+  private projTexture(wclass: string): string {
+    if (wclass === "shotgun") return PROJ_PELLET;
+    if (wclass === "bow" || wclass === "crossbow") return PROJ_ARROW;
+    if (wclass === "launcher") return PROJ_ROCKET;
+    return PROJ_BULLET;
+  }
+
+  private spawnProjectile(px: number, py: number, angle: number, plan: ShotPlan): void {
+    const spr = this.projectileGroup.create(
+      px + Math.cos(angle) * 16,
+      py + Math.sin(angle) * 16,
+      this.projTexture(plan.weapon.wclass),
+    ) as Phaser.Physics.Arcade.Image;
+    spr.setRotation(angle).setDepth(9);
+    this.physics.velocityFromRotation(angle, plan.speed, (spr.body as Phaser.Physics.Arcade.Body).velocity);
+    const data: ProjData = {
+      damage: plan.damage,
+      pierce: plan.pierce,
+      knockback: plan.knockback,
+      bleed: plan.bleed,
+      bleedMs: plan.bleedMs,
+      stunMs: plan.stunMs,
+      burn: plan.burn,
+      explosive: plan.explosive,
+      executePct: plan.executePct,
+      crit: plan.crit,
+      dirX: Math.cos(angle),
+      dirY: Math.sin(angle),
+      hits: new Set<Enemy>(),
+    };
+    spr.setData("p", data);
+    const lifeMs = Math.min(2000, (plan.range / plan.speed) * 1000);
+    this.time.delayedCall(lifeMs, () => this.killProjectile(spr));
+  }
+
+  private onProjectileHit(projObj: unknown, enemyObj: unknown): void {
+    const spr = projObj as Phaser.Physics.Arcade.Image;
+    const data = spr.getData("p") as ProjData | undefined;
+    if (!data) return;
+    const enemy = this.enemies.find((e) => e.sprite === enemyObj);
+    if (!enemy || data.hits.has(enemy)) return;
+    data.hits.add(enemy);
+    this.applyShotHit(enemy, data);
+    if (data.explosive > 0) {
+      this.explode(spr.x, spr.y, data);
+      this.killProjectile(spr);
+      return;
+    }
+    data.pierce -= 1;
+    if (data.pierce < 0) this.killProjectile(spr);
+  }
+
+  private applyShotHit(e: Enemy, data: ProjData): void {
+    const execute = data.executePct > 0 && e.hpFrac() * 100 <= data.executePct;
+    const dead = e.takeDamage(execute ? e.hp : data.damage);
+    bloodBurst(this, e.sprite.x, e.sprite.y, data.crit ? 12 : 6, data.crit ? 0xff5a6e : 0x9c1414);
+    if (data.crit) this.floatText(e.sprite.x, e.sprite.y, "CRIT!", "#ffd23f");
+    if (data.bleed > 0) e.applyDot(data.bleed, data.bleedMs);
+    if (data.burn > 0) e.applyDot(data.burn, 3000);
+    if (data.stunMs > 0) e.applyStun(data.stunMs);
+    if (data.knockback > 0) e.knockback(data.dirX, data.dirY, data.knockback, this.time.now);
+    if (dead) this.onEnemyKilled(e);
+  }
+
+  private explode(x: number, y: number, data: ProjData): void {
+    sfx.boom();
+    this.cameras.main.shake(140, 0.012);
+    bloodBurst(this, x, y, 18, 0xffa23f);
+    for (const e of [...this.enemies]) {
+      if (data.hits.has(e)) continue;
+      if (Math.hypot(e.sprite.x - x, e.sprite.y - y) <= data.explosive) {
+        const dead = e.takeDamage(Math.round(data.damage * 0.7));
+        if (data.burn > 0) e.applyDot(data.burn, 3000);
+        if (dead) this.onEnemyKilled(e);
+      }
+    }
+  }
+
+  private killProjectile(spr: Phaser.Physics.Arcade.Image): void {
+    if (!spr || !spr.active) return;
+    spr.destroy();
+  }
+
+  private spawnMuzzle(px: number, py: number, angle: number): void {
+    const f = this.add
+      .image(px + Math.cos(angle) * 20, py + Math.sin(angle) * 20, PROJ_PELLET)
+      .setTint(0xffe08a)
+      .setScale(2.4)
+      .setDepth(11);
+    this.tweens.add({ targets: f, alpha: 0, scale: 0.5, duration: 90, onComplete: () => f.destroy() });
+  }
+
+  private tryReload(): void {
+    if (this.reloading) return;
+    const w = equippedRangedDef(this.state);
+    if (!w) return;
+    if ((this.state.loadedAmmo ?? 0) >= (w.magSize ?? 0)) return;
+    if (ammoReserve(this.state, w.ammoType) <= 0) {
+      this.showToast("No ammo in reserve");
+      return;
+    }
+    this.reloading = true;
+    sfx.reload();
+    this.showToast("Reloading…");
+    this.time.delayedCall(w.reloadMs ?? 1800, () => {
+      this.reloading = false;
+      if (this.dead) return;
+      reloadEquipped(this.state);
+      sfx.reload();
+    });
   }
 
   /** Brief physics freeze for impact weight (kills only). */

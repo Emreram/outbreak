@@ -55,6 +55,15 @@ class Sfx {
   death(): void {
     this.tone(200, 0.5, "sawtooth", 0.09, 40);
   }
+  shot(): void {
+    this.tone(180, 0.07, "square", 0.06, 70);
+  }
+  reload(): void {
+    this.tone(320, 0.05, "square", 0.04, 240);
+  }
+  boom(): void {
+    this.tone(70, 0.42, "sawtooth", 0.12, 28);
+  }
 }
 
 export const sfx = new Sfx();

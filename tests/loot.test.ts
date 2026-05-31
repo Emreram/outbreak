@@ -8,7 +8,7 @@ import { RARITIES, RARITY_META, rollRarity } from "../src/game/items/rarity";
 import { AMMO } from "../src/game/items/ammo";
 import { rollLoot } from "../src/game/items/lootTables";
 import { createRng } from "../src/game/rng";
-import { meleeOutcome } from "../src/game/combat";
+import { meleeOutcome, shotOutcome } from "../src/game/combat";
 import { addItem, equipWeapon, equippedMeleeDef } from "../src/game/inventory";
 import { newGame } from "../src/game/GameState";
 
@@ -157,6 +157,11 @@ function main(): void {
   addItem(g, "9mm Rounds", 30);
   ok(equipWeapon(g, "9mm Pistol"), "equip a gun");
   ok((g.loadedAmmo ?? 0) === 12, "gun auto-reloads its magazine on equip (12)");
+  addItem(g, "Pump Shotgun", 1);
+  addItem(g, "Shotgun Shells", 12);
+  equipWeapon(g, "Pump Shotgun");
+  const shot = shotOutcome(g, createRng("s"));
+  ok(!!shot && shot.pellets > 1, "shotgun fires multiple pellets per shot");
 
   if (fail === 0) console.log("\nALL LOOT CHECKS PASSED");
   else {

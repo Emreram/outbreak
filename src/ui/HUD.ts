@@ -113,7 +113,7 @@ export class HUD {
 
     this.controlsText
       .setPosition(PANEL_X + 8, cY)
-      .setText("WASD/arrows move · E act · SPACE/F hit\nShift sprint · R menu · [1-4] use items");
+      .setText("WASD move · MOUSE aim/fire · SPACE/F melee · E act\nShift run · R reload · ESC menu · [1-4] items");
 
     const dY = cY + this.controlsText.height + 6;
     this.debugText
