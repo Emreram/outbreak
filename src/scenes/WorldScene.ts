@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import type { GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
-import { generateWorld, SOLID_TILES, type Building, type WorldData } from "../game/worldgen";
+import type { Building } from "../game/worldgen";
 import { randomSeed, liveRng } from "../game/rng";
 import {
   clampStat,
@@ -19,7 +19,6 @@ import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
 import { RARITY_META } from "../game/items/rarity";
 import {
-  CHEST_CLOSED,
   CHEST_OPEN,
   iconKey,
   PROJ_ARROW,
@@ -30,7 +29,8 @@ import {
 import { applyOutcome } from "../game/outcomes";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
-import { WorldRenderer } from "../engine/WorldRenderer";
+import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
+import type { ColliderSpec } from "../engine/ChunkRenderer";
 import { Player } from "../engine/Player";
 import { Enemy } from "../engine/Enemy";
 import type { ZombieDef } from "../game/enemies/types";
@@ -43,16 +43,7 @@ import { LootModal } from "../ui/LootModal";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
 import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
-import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../game/constants";
-
-const SOLID = new Set<number>(SOLID_TILES as number[]);
-
-interface Chest {
-  id: number;
-  sprite: Phaser.GameObjects.Image;
-  tier: number;
-  opened: boolean;
-}
+import { TILE_SIZE } from "../game/constants";
 
 interface ProjData {
   damage: number;
@@ -82,8 +73,7 @@ const SEG_MS = 45000; // real seconds per time-of-day segment
 
 export class WorldScene extends Phaser.Scene {
   private player!: Player;
-  private world!: WorldData;
-  private worldRenderer!: WorldRenderer;
+  private chunks!: ChunkManager;
   private hud!: HUD;
   private modal!: EncounterModal;
   private loot!: LootModal;
@@ -99,7 +89,7 @@ export class WorldScene extends Phaser.Scene {
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private ambientAcc = 0;
   private ambientDelay = 30000;
-  private currentBuildingId: number | null = null;
+  private currentBuildingId: string | null = null;
   private aiNoticeShown = false; // show the "AI offline" toast at most once per run
   private nightOverlay!: Phaser.GameObjects.Rectangle;
   private segAcc = 0;
@@ -111,7 +101,6 @@ export class WorldScene extends Phaser.Scene {
   private projectileGroup!: Phaser.Physics.Arcade.Group;
   private enemyProjGroup!: Phaser.Physics.Arcade.Group;
   private itemGroup!: Phaser.Physics.Arcade.Group;
-  private chests: Chest[] = [];
   private grabbedUntil = 0;
   private clouds: { x: number; y: number; r: number; until: number; last: number }[] = [];
   private lastStep = 0;
@@ -154,60 +143,50 @@ export class WorldScene extends Phaser.Scene {
     const saved = fromUrl ? null : loadGame();
     this.state = saved ?? newGame(seed);
 
-    this.world = generateWorld(this.state.seed, {
-      width: MAP_WIDTH,
-      height: MAP_HEIGHT,
-      tileSize: TILE_SIZE,
+    // Groups first so the chunk streamer can collide every loaded layer against
+    // them. The `collide` array is populated below (once the player exists) and
+    // read lazily by the manager when it loads a chunk.
+    this.enemyGroup = this.physics.add.group();
+    this.projectileGroup = this.physics.add.group();
+    this.enemyProjGroup = this.physics.add.group();
+    this.itemGroup = this.physics.add.group();
+
+    const collide: ColliderSpec[] = [];
+    this.chunks = new ChunkManager(this, this.state.seed, {
+      collide,
+      isChestLooted: (gid) => this.state.worldFlags.includes(`chest_${gid}`),
     });
 
-    const worldW = this.world.width * this.world.tileSize;
-    const worldH = this.world.height * this.world.tileSize;
-    this.physics.world.setBounds(0, 0, worldW, worldH);
-
-    this.worldRenderer = new WorldRenderer(this, this.world);
-
-    // New runs spawn at the world's central road; resumed runs keep their spot.
-    const startX = saved ? this.state.player.x : this.world.start.x;
-    const startY = saved ? this.state.player.y : this.world.start.y;
+    // New runs spawn at the spawn-chunk's central road; resumed runs keep their spot.
+    const startX = saved ? this.state.player.x : this.chunks.start.x;
+    const startY = saved ? this.state.player.y : this.chunks.start.y;
     this.player = new Player(this, startX, startY);
     this.player.setAppearance(this.state.appearance?.color); // character-creation tint
-    this.physics.add.collider(this.player.sprite, this.worldRenderer.layer);
+
+    const { w: worldW, h: worldH } = this.chunks.worldPxBounds();
+    this.physics.world.setBounds(0, 0, worldW, worldH);
     setupCamera(this, this.player.sprite, worldW, worldH);
 
-    // Equipped weapon shown in-hand (icon swaps on equip; aims in Phase 4).
+    // Equipped weapon shown in-hand (icon swaps on equip).
     this.weaponSprite = this.add.image(startX, startY, iconKey("Fists")).setDepth(11).setScale(0.42).setVisible(false);
 
-    // Enemies live in a group that collides with walls (CLAUDE.md §11).
-    this.enemyGroup = this.physics.add.group();
-    this.physics.add.collider(this.enemyGroup, this.worldRenderer.layer);
+    // Collider specs applied to every streamed chunk layer (walls/water/trees).
+    collide.push(
+      { target: this.player.sprite },
+      { target: this.enemyGroup },
+      { target: this.projectileGroup, callback: (o) => this.killProjectile(o as unknown as Phaser.Physics.Arcade.Image) },
+      { target: this.enemyProjGroup, callback: (o) => this.killProjectile(o as unknown as Phaser.Physics.Arcade.Image) },
+    );
 
-    // Bullets/arrows/rockets: hit enemies, stop on walls.
-    this.projectileGroup = this.physics.add.group();
+    // Projectiles hit enemies; enemy acid + dropped loot overlap the player.
     this.physics.add.overlap(this.projectileGroup, this.enemyGroup, (a, b) => this.onProjectileHit(a, b));
-    this.physics.add.collider(this.projectileGroup, this.worldRenderer.layer, (obj) =>
-      this.killProjectile(obj as unknown as Phaser.Physics.Arcade.Image),
-    );
-
-    // Enemy projectiles (spitter acid) hit the player.
-    this.enemyProjGroup = this.physics.add.group();
     this.physics.add.overlap(this.player.sprite, this.enemyProjGroup, (_p, pr) => this.onEnemyProjHit(pr));
-    this.physics.add.collider(this.enemyProjGroup, this.worldRenderer.layer, (obj) =>
-      this.killProjectile(obj as unknown as Phaser.Physics.Arcade.Image),
-    );
-
-    // Dropped loot: walk over it to pick it up.
-    this.itemGroup = this.physics.add.group();
     this.physics.add.overlap(this.player.sprite, this.itemGroup, (_p, item) =>
       this.pickupDrop(item as unknown as Phaser.Physics.Arcade.Image),
     );
 
-    // Chests inside buildings (skip ones already looted this run).
-    this.chests = [];
-    for (const c of this.world.containers) {
-      if (this.state.worldFlags.includes(`chest_${c.id}`)) continue;
-      const spr = this.add.image((c.tx + 0.5) * TILE_SIZE, (c.ty + 0.5) * TILE_SIZE, CHEST_CLOSED).setDepth(6);
-      this.chests.push({ id: c.id, sprite: spr, tier: c.tier, opened: false });
-    }
+    // Stream the initial ring of chunks (and their chests) around the spawn.
+    this.chunks.ensureAround(startX, startY);
 
     // Day/night tint overlay (screen-space, above the world, below HUD).
     this.nightOverlay = this.add
@@ -304,6 +283,7 @@ export class WorldScene extends Phaser.Scene {
       this.modal.destroy();
       this.loot.destroy();
       this.touch.destroy();
+      this.chunks.destroy();
       this.persist();
     });
 
@@ -334,6 +314,7 @@ export class WorldScene extends Phaser.Scene {
           this.state.player.stamina = clampStat(this.state.player.stamina - delta * 0.012 * sprintDrainMult(this.state));
         }
       }
+      this.chunks.ensureAround(this.player.sprite.x, this.player.sprite.y);
       this.tickClouds(time);
       this.updateEnemies(time);
       this.checkBuildingTrigger();
@@ -567,7 +548,7 @@ export class WorldScene extends Phaser.Scene {
       const ty = Math.floor(e.sprite.y / TILE_SIZE);
       const k = Phaser.Math.Between(1, 2);
       for (let i = 0; i < k; i++) {
-        const tile = this.findWalkableNear(tx, ty, 2, 5);
+        const tile = this.chunks.walkableNear(tx, ty, 2, 5);
         if (tile) this.spawnEnemy(base, tile.x, tile.y);
       }
     }
@@ -596,7 +577,7 @@ export class WorldScene extends Phaser.Scene {
         const ty = Math.floor(y / TILE_SIZE);
         const k = Phaser.Math.Between(2, 3);
         for (let i = 0; i < k; i++) {
-          const tile = this.findWalkableNear(tx, ty, 1, 4);
+          const tile = this.chunks.walkableNear(tx, ty, 1, 4);
           if (tile) this.spawnEnemy(base, tile.x, tile.y);
         }
       }
@@ -636,80 +617,54 @@ export class WorldScene extends Phaser.Scene {
     spawnPopIn(this, e.sprite);
   }
 
+  /** Effective danger driver for spawns: the day plus the local distance/biome tier. */
+  private effDay(): number {
+    return this.state.day + this.chunks.dangerTier(this.player.sprite.x, this.player.sprite.y);
+  }
+
   private spawnNear(spawns: Spawn[]): void {
     const ptx = this.player.tilePos().tx;
     const pty = this.player.tilePos().ty;
+    const day = this.effDay();
     for (const s of spawns) {
       for (let i = 0; i < s.count; i++) {
-        const tile = this.findWalkableNear(ptx, pty, 3, 8);
-        if (tile) this.spawnEnemy(rollZombie(s.type, liveRng, this.state.day), tile.x, tile.y);
+        const tile = this.chunks.walkableNear(ptx, pty, 3, 8);
+        if (tile) this.spawnEnemy(rollZombie(s.type, liveRng, day), tile.x, tile.y);
       }
     }
   }
 
   private spawnAmbientWalkers(n: number): void {
-    const ptx = this.player.tilePos().tx;
-    const pty = this.player.tilePos().ty;
+    const day = this.effDay();
     for (let i = 0; i < n; i++) {
-      const tile = this.findWalkableFar(ptx, pty, 12);
-      if (tile) this.spawnEnemy(rollAmbientUndead(liveRng, this.state.day), tile.x, tile.y);
+      const tile = this.chunks.randomWalkableInView(this.player.sprite.x, this.player.sprite.y, 12);
+      if (tile) this.spawnEnemy(rollAmbientUndead(liveRng, day), tile.x, tile.y);
     }
   }
 
-  /** Starting walker count — near-empty at day 0, busier as the outbreak spreads. */
+  /** Starting walker count — near-empty at day 0 (the calm start); ongoing
+   *  threats (ambientEvent/GM spawns) scale with distance as you explore out. */
   private ambientStartCount(): number {
     return Math.min(1 + this.state.day * 2, 16);
   }
 
-  /** Time to the next ambient threat — rare at day 0, more frequent later/at night. */
+  /** Time to the next ambient threat — rare early, more frequent later/at night/far out. */
   private scheduleAmbientMs(): number {
     const base = nextAmbientDelayMs();
-    const dayFactor = this.state.day === 0 ? 2.6 : 1 / (1 + this.state.day * 0.12);
+    const day = this.effDay();
+    const dayFactor = day === 0 ? 2.6 : 1 / (1 + day * 0.12);
     return base * dayFactor * (this.isNight() ? 0.6 : 1);
   }
 
   private ambientEvent(): void {
+    const day = this.effDay();
     const extra = this.state.difficultyModifier > 1.15 ? 1 : 0;
-    const dayBonus = Math.floor(this.state.day / 3);
-    const n = Math.min(Phaser.Math.Between(1, 2) + extra + dayBonus, 5);
-    const runnerChance = this.isNight() ? 0.32 : 0.12 + this.state.day * 0.02;
+    const dayBonus = Math.floor(day / 3);
+    const n = Math.min(Phaser.Math.Between(1, 2) + extra + dayBonus, 6);
+    const runnerChance = this.isNight() ? 0.32 : 0.12 + day * 0.02;
     const kind: Spawn["type"] = Math.random() < runnerChance ? "zombie_runner" : "zombie";
     this.spawnNear([{ type: kind, count: n }]);
     this.showToast("You hear shuffling nearby…");
-  }
-
-  private walkable(tx: number, ty: number): boolean {
-    if (tx < 0 || ty < 0 || tx >= this.world.width || ty >= this.world.height) return false;
-    return !SOLID.has(this.world.grid[ty][tx]);
-  }
-
-  private findWalkableNear(
-    tx: number,
-    ty: number,
-    minR: number,
-    maxR: number,
-  ): { x: number; y: number } | null {
-    for (let tries = 0; tries < 40; tries++) {
-      const r = Phaser.Math.Between(minR, maxR);
-      const a = Math.random() * Math.PI * 2;
-      const nx = Math.round(tx + Math.cos(a) * r);
-      const ny = Math.round(ty + Math.sin(a) * r);
-      if (this.walkable(nx, ny)) {
-        return { x: (nx + 0.5) * TILE_SIZE, y: (ny + 0.5) * TILE_SIZE };
-      }
-    }
-    return null;
-  }
-
-  private findWalkableFar(tx: number, ty: number, minR: number): { x: number; y: number } | null {
-    for (let tries = 0; tries < 60; tries++) {
-      const nx = Phaser.Math.Between(0, this.world.width - 1);
-      const ny = Phaser.Math.Between(0, this.world.height - 1);
-      if (Math.hypot(nx - tx, ny - ty) >= minR && this.walkable(nx, ny)) {
-        return { x: (nx + 0.5) * TILE_SIZE, y: (ny + 0.5) * TILE_SIZE };
-      }
-    }
-    return null;
   }
 
   private showToast(msg: string): void {
@@ -737,20 +692,17 @@ export class WorldScene extends Phaser.Scene {
   /** The building whose interior the player stands in, or null on the street. */
   private buildingAt(): Building | null {
     const { tx, ty } = this.player.tilePos();
-    for (const b of this.world.buildings) {
-      if (tx >= b.tx && tx <= b.tx + b.tw - 1 && ty >= b.ty && ty <= b.ty + b.th - 1) return b;
-    }
-    return null;
+    return this.chunks.buildingAt(tx, ty);
   }
 
   /** Entering a building fires a one-time GM encounter (then it stays "cleared"). */
   private checkBuildingTrigger(): void {
     const b = this.buildingAt();
-    const id = b ? b.id : null;
-    if (id === this.currentBuildingId) return;
-    this.currentBuildingId = id;
-    if (b && !this.state.worldFlags.includes(buildingEnteredFlag(b.id))) {
-      this.state.worldFlags.push(buildingEnteredFlag(b.id));
+    const gid = b ? b.gid : null;
+    if (gid === this.currentBuildingId) return;
+    this.currentBuildingId = gid;
+    if (b && !this.state.worldFlags.includes(buildingEnteredFlag(b.gid))) {
+      this.state.worldFlags.push(buildingEnteredFlag(b.gid));
       const name = b.type.replace(/_/g, " ");
       this.startEncounter(b.type, `I step inside the ${name}, staying alert.`, name);
     }
@@ -768,7 +720,8 @@ export class WorldScene extends Phaser.Scene {
       const name = b.type.replace(/_/g, " ");
       this.startEncounter(b.type, `I search the ${name}.`, name);
     } else {
-      this.startEncounter("street", "I scan the ruined street and the buildings around me.", "The street");
+      const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+      this.startEncounter(biome, "I scan the area and the way ahead.", "The area");
     }
   }
 
@@ -1025,7 +978,8 @@ export class WorldScene extends Phaser.Scene {
     const chance = e.family === "boss" ? 1 : 0.5;
     if (!liveRng.chance(chance)) return; // not every kill drops
     const n = e.family === "boss" ? 3 : 1;
-    for (const s of rollLoot("enemy:" + e.lootFamily, liveRng, n, lootLuck(this.state))) {
+    const bias = lootLuck(this.state) + this.chunks.lootBias(e.sprite.x, e.sprite.y);
+    for (const s of rollLoot("enemy:" + e.lootFamily, liveRng, n, bias)) {
       this.spawnDrop(e.sprite.x, e.sprite.y, s.item, s.qty);
     }
   }
@@ -1073,12 +1027,12 @@ export class WorldScene extends Phaser.Scene {
     this.persist();
   }
 
-  private nearestChest(maxDist: number): Chest | null {
+  private nearestChest(maxDist: number): ActiveChest | null {
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
-    let best: Chest | null = null;
+    let best: ActiveChest | null = null;
     let bestD = maxDist;
-    for (const c of this.chests) {
+    for (const c of this.chunks.activeChests()) {
       if (c.opened) continue;
       const d = Math.hypot(c.sprite.x - px, c.sprite.y - py);
       if (d < bestD) {
@@ -1089,14 +1043,15 @@ export class WorldScene extends Phaser.Scene {
     return best;
   }
 
-  private openChest(chest: Chest): void {
+  private openChest(chest: ActiveChest): void {
     if (chest.opened) return;
     chest.opened = true;
     chest.sprite.setTexture(CHEST_OPEN);
-    if (!this.state.worldFlags.includes(`chest_${chest.id}`)) this.state.worldFlags.push(`chest_${chest.id}`);
+    if (!this.state.worldFlags.includes(`chest_${chest.gid}`)) this.state.worldFlags.push(`chest_${chest.gid}`);
     sfx.pickup();
     this.floatText(chest.sprite.x, chest.sprite.y, "Chest opened!", "#ffd23f");
-    for (const s of rollLoot(`chest:${chest.tier}`, liveRng, 2 + chest.tier, lootLuck(this.state))) {
+    const bias = lootLuck(this.state) + this.chunks.lootBias(chest.sprite.x, chest.sprite.y);
+    for (const s of rollLoot(`chest:${chest.tier}`, liveRng, 2 + chest.tier, bias)) {
       this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
     }
     this.persist();
@@ -1302,7 +1257,7 @@ export class WorldScene extends Phaser.Scene {
     this.player.sprite.setVelocity(0, 0);
     this.freezeEnemies();
     const b = this.buildingAt();
-    this.encounterLoc = b ? b.type : "street";
+    this.encounterLoc = b ? b.type : this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
     this.modal.showResult(intro, { type: "free_text", prompt: "What do you do?", options: [] });
   }
 

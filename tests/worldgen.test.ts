@@ -1,83 +1,96 @@
-// Phase 1 — procedural city invariants (CLAUDE.md §10).
-// Verifies a generated city is well-formed: walkable spawn, reachable doors,
-// in-bounds buildings, reproducible by seed, and varied across seeds.
+// Per-chunk procedural invariants (CLAUDE.md §10), now chunk-based.
+// Verifies each generated chunk is well-formed: in-range tiles, in-bounds
+// buildings with reachable Door tiles, containers on walkable tiles, and
+// reproducibility by (seed, cx, cy).
 
-import { generateWorld, Tile, SOLID_TILES } from "../src/game/worldgen";
+import { generateChunk, Tile, SOLID_TILES, TILE_COUNT, chunkStartPx } from "../src/game/worldgen";
+import { biomeAt } from "../src/game/world/biomes";
+import { CHUNK_TILES } from "../src/game/constants";
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
 const walkable = (t: number) => !SOLID.has(t);
 
-function check(seed: string): { buildings: number; errs: string[] } {
-  const w = generateWorld(seed, { width: 80, height: 80, tileSize: 32 });
+function checkChunk(seed: string, cx: number, cy: number): string[] {
+  const c = generateChunk(seed, cx, cy);
   const errs: string[] = [];
+  const gx0 = cx * c.size;
+  const gy0 = cy * c.size;
 
-  if (w.grid.length !== w.height) errs.push("grid height mismatch");
-  if (w.grid.some((r) => r.length !== w.width)) errs.push("grid width mismatch");
+  if (c.grid.length !== c.size) errs.push("grid height");
+  if (c.grid.some((r) => r.length !== c.size)) errs.push("grid width");
 
   let bad = 0;
-  for (const row of w.grid) for (const t of row) if (t < 0 || t > 5) bad++;
-  if (bad) errs.push(`${bad} out-of-range tile values`);
+  for (const row of c.grid) for (const t of row) if (t < 0 || t >= TILE_COUNT) bad++;
+  if (bad) errs.push(`${bad} out-of-range tiles`);
 
-  const stx = Math.floor(w.start.x / 32);
-  const sty = Math.floor(w.start.y / 32);
-  if (stx < 0 || sty < 0 || stx >= w.width || sty >= w.height) errs.push("spawn out of bounds");
-  else if (!walkable(w.grid[sty][stx])) errs.push("spawn not walkable");
-
-  if (w.buildings.length < 5) errs.push(`too few buildings: ${w.buildings.length}`);
-
-  // loot containers (chests) sit on interior Floor tiles
-  if (w.containers.length < 3) errs.push(`too few containers: ${w.containers.length}`);
-  for (const c of w.containers) {
-    if (c.tx < 0 || c.ty < 0 || c.tx >= w.width || c.ty >= w.height) {
-      errs.push("container out of bounds");
-      break;
+  for (const b of c.buildings) {
+    if (b.tx < gx0 || b.ty < gy0 || b.tx + b.tw - 1 >= gx0 + c.size || b.ty + b.th - 1 >= gy0 + c.size) {
+      errs.push(`building ${b.gid} OOB`);
+      continue;
     }
-    if (w.grid[c.ty][c.tx] !== Tile.Floor) {
-      errs.push("container not on a floor tile");
-      break;
-    }
+    const lx = b.door.x - gx0;
+    const ly = b.door.y - gy0;
+    if (c.grid[ly]?.[lx] !== Tile.Door) errs.push(`building ${b.gid} door not a Door tile`);
+    const neigh: Array<[number, number]> = [[lx - 1, ly], [lx + 1, ly], [lx, ly - 1], [lx, ly + 1]];
+    const reachable = neigh.some(([nx, ny]) => {
+      const t = c.grid[ny]?.[nx];
+      return t !== undefined && walkable(t) && t !== Tile.Door;
+    });
+    if (!reachable) errs.push(`building ${b.gid} door unreachable`);
   }
 
-  let doorTileOk = 0;
-  let doorReach = 0;
-  for (const b of w.buildings) {
-    const { x, y } = b.door;
-    if (b.tx + b.tw - 1 > w.width || b.ty + b.th - 1 > w.height) errs.push(`building ${b.id} OOB`);
-    if (w.grid[y][x] === Tile.Door) doorTileOk++;
-    const onPerim = x === b.tx || x === b.tx + b.tw - 1 || y === b.ty || y === b.ty + b.th - 1;
-    if (!onPerim) errs.push(`building ${b.id} door not on perimeter`);
-    const neigh: Array<[number, number]> = [
-      [x - 1, y],
-      [x + 1, y],
-      [x, y - 1],
-      [x, y + 1],
-    ];
-    if (neigh.some(([nx, ny]) => walkable(w.grid[ny]?.[nx] ?? Tile.Wall) && w.grid[ny][nx] !== Tile.Door)) {
-      doorReach++;
-    }
+  for (const ct of c.containers) {
+    const lx = ct.tx - gx0;
+    const ly = ct.ty - gy0;
+    const t = c.grid[ly]?.[lx];
+    if (t === undefined) errs.push(`container ${ct.gid} OOB`);
+    else if (!walkable(t)) errs.push(`container ${ct.gid} on a solid tile`);
   }
-  if (doorTileOk !== w.buildings.length) errs.push(`doors not all Door tiles: ${doorTileOk}/${w.buildings.length}`);
-  if (doorReach !== w.buildings.length) errs.push(`doors not all reachable: ${doorReach}/${w.buildings.length}`);
 
-  return { buildings: w.buildings.length, errs };
+  return errs;
 }
 
 let failed = 0;
-for (const seed of ["alpha", "bravo", "charlie", "delta", "echo"]) {
-  const { buildings, errs } = check(seed);
-  if (errs.length) failed++;
-  console.log(`seed=${seed.padEnd(8)} buildings=${String(buildings).padStart(3)} ${errs.length ? "FAIL " + errs.join("; ") : "ok"}`);
-}
 
-const a = generateWorld("repro-seed");
-const b = generateWorld("repro-seed");
-const reproducible = JSON.stringify(a.grid) === JSON.stringify(b.grid) && a.buildings.length === b.buildings.length;
-const c = generateWorld("seed-A");
-const d = generateWorld("seed-B");
-const varied = JSON.stringify(c.grid) !== JSON.stringify(d.grid);
-console.log(`reproducible(same seed)=${reproducible}  varied(diff seeds)=${varied}`);
+// A patch of interior chunks around spawn (none are the ocean edge).
+let totalBuildings = 0;
+let sawNewTerrain = false;
+const biomesSeen = new Set<string>();
+for (let cy = 16; cy <= 24; cy++) {
+  for (let cx = 16; cx <= 24; cx++) {
+    const errs = checkChunk("alpha", cx, cy);
+    if (errs.length) {
+      failed++;
+      console.log(`chunk ${cx},${cy} FAIL ${errs.join("; ")}`);
+    }
+    const c = generateChunk("alpha", cx, cy);
+    totalBuildings += c.buildings.length;
+    biomesSeen.add(c.biome);
+    if (c.grid.some((r) => r.some((t) => t > Tile.Grass))) sawNewTerrain = true;
+  }
+}
+console.log(`81 chunks · buildings=${totalBuildings} · biomes=${biomesSeen.size} · newTerrain=${sawNewTerrain}`);
+if (totalBuildings < 10) { failed++; console.log("FAIL: too few buildings across the patch"); }
+if (!sawNewTerrain) { failed++; console.log("FAIL: no new biome terrain appeared"); }
+if (biomesSeen.size < 4) { failed++; console.log("FAIL: too few biomes in the patch"); }
+
+// Reproducible by (seed, cx, cy); varies across coords.
+const a = generateChunk("repro", 20, 20);
+const b = generateChunk("repro", 20, 20);
+const reproducible = JSON.stringify(a.grid) === JSON.stringify(b.grid) && a.biome === b.biome;
+const d = generateChunk("repro", 21, 20);
+const varied = JSON.stringify(a.grid) !== JSON.stringify(d.grid);
+console.log(`reproducible=${reproducible}  varied=${varied}`);
 if (!reproducible) failed++;
 if (!varied) failed++;
+
+// Spawn point is walkable.
+const start = chunkStartPx(generateChunk("alpha", 20, 20));
+const stx = Math.floor(start.x / 32) - 20 * CHUNK_TILES;
+const sty = Math.floor(start.y / 32) - 20 * CHUNK_TILES;
+const startWalkable = walkable(generateChunk("alpha", 20, 20).grid[sty][stx]);
+console.log(`spawn walkable=${startWalkable} (biome ${biomeAt("alpha", 20, 20).id})`);
+if (!startWalkable) failed++;
 
 console.log(failed === 0 ? "ALL WORLDGEN CHECKS PASSED" : `${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

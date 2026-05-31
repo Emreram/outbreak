@@ -78,6 +78,28 @@ const SOURCES: Record<string, SourceTable> = {
   house: { weights: { food: 2, drink: 2, material: 2, melee: 2, medical: 1, armor: 1 }, bias: 0 },
   military: { weights: { rifle: 4, sniper: 1, auto: 1, ammo: 4, armor: 2, special: 1, throwable: 1 }, bias: 0.4 },
   street: { weights: { material: 4, melee: 2, food: 1, drink: 1, throwable: 1 }, bias: 0 },
+  // biome building types
+  barn: { weights: { food: 3, material: 3, melee: 2, throwable: 1 }, bias: 0 },
+  silo: { weights: { food: 4, material: 2, drink: 1 }, bias: 0 },
+  warehouse: { weights: { material: 4, melee: 2, ammo: 2, special: 1, armor: 1 }, bias: 0.2 },
+  port_warehouse: { weights: { material: 4, ammo: 2, special: 1, armor: 1, throwable: 1 }, bias: 0.25 },
+  factory: { weights: { material: 5, melee: 2, special: 1, throwable: 1 }, bias: 0.15 },
+  school: { weights: { food: 2, drink: 2, material: 2, medical: 1, melee: 1 }, bias: 0 },
+  church: { weights: { food: 1, drink: 1, material: 2, medical: 1, melee: 1 }, bias: 0 },
+  mall: { weights: { food: 3, drink: 2, armor: 2, melee: 2, material: 2, medical: 1 }, bias: 0.15 },
+  motel: { weights: { food: 2, drink: 2, medical: 1, material: 1, pistol: 1 }, bias: 0 },
+  diner: { weights: { food: 6, drink: 3, melee: 1 }, bias: 0 },
+  bunker: { weights: { rifle: 2, ammo: 4, armor: 2, medical: 2, special: 1, throwable: 1 }, bias: 0.5 },
+  military_depot: { weights: { rifle: 4, sniper: 1, auto: 2, ammo: 5, armor: 3, special: 2, throwable: 2 }, bias: 0.7 },
+  fire_station: { weights: { melee: 2, armor: 2, medical: 2, material: 2, special: 1 }, bias: 0.2 },
+  lab: { weights: { medical: 5, special: 1, material: 2, armor: 1 }, bias: 0.45 },
+  cabin: { weights: { food: 2, drink: 1, melee: 2, material: 2, bow: 1, medical: 1 }, bias: 0 },
+  ranger_station: { weights: { bow: 2, rifle: 1, ammo: 2, food: 1, medical: 1, melee: 1 }, bias: 0.2 },
+  office: { weights: { food: 1, drink: 1, material: 2, medical: 1, melee: 1 }, bias: 0 },
+  // biome open-ground (street) sources
+  forest: { weights: { material: 3, bow: 1, melee: 2, food: 1, medical: 1 }, bias: 0.05 },
+  farm: { weights: { food: 4, material: 2, melee: 1, drink: 1 }, bias: 0 },
+  industrial: { weights: { material: 5, melee: 2, special: 1, ammo: 1, throwable: 1 }, bias: 0.15 },
 };
 
 const CHEST_WEIGHTS: Partial<Record<Category, number>> = {

@@ -113,7 +113,7 @@ export function pushRecentEvent(s: GameState, line: string, keep = 6): void {
 
 // --- persistence (localStorage; CLAUDE.md §4, §7) --------------------------
 
-const SAVE_KEY = "outbreak_save_v1";
+const SAVE_KEY = "outbreak_save_v2"; // v2: chunked world (string building/chest gids)
 
 export function saveGame(s: GameState): void {
   try {

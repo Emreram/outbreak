@@ -8,8 +8,11 @@ cloud Claude behind the same interface.
 - **Full design spec:** [`CLAUDE.md`](./CLAUDE.md)
 - **Build roadmap & verification plan:** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md)
 
-> **Current status: MVP complete (Phases 0–7).**
-> A seeded procedural city in **CC0 Kenney art**; an animated survivor with movement,
+> **Current status: MVP complete (Phases 0–7) + a huge streamed open world.**
+> A **vast, finite, seamless overworld** of **22 biomes** (city, forest, farmland, coast,
+> industrial, military, and more) streamed in chunks as you walk — generated
+> deterministically from the run seed, with **distance-scaled danger & loot** (the farther
+> you roam, the tougher the dead and the better the haul); an animated survivor with movement,
 > sprint, and **melee**; **zombies** (walkers + runners) that wander and chase; an **AI
 > Game Master** that resolves free-text or 4-choice actions into validated outcomes
 > (the engine clamps/validates everything); a live **HUD**; **survival** (hunger /
@@ -50,7 +53,7 @@ Open the URL Vite prints (default **http://localhost:5173/**).
 | Inventory / equip / loot screen | **I** · the **BAG** button |
 | Menu / new run | **ESC** |
 | Quick item use | **1** eat · **2** drink · **3** hurt · **4** bandage |
-| Reproduce a specific city | add `?seed=<value>` to the URL, e.g. `…/?seed=alpha` |
+| Reproduce a specific world | add `?seed=<value>` to the URL, e.g. `…/?seed=alpha` |
 
 ### Loot, weapons & rarity
 Scavenge **200+ hand-authored weapons** across 6 rarities (common → mythic) — blades, axes,
@@ -87,6 +90,23 @@ hunger/thirst), Lucky (rarer loot), Marathoner (stamina), Scrapper (more ammo/ma
 (slower infection), Quick (faster attacks). A **Random** button rolls everything; the AI opening
 scenario reflects your chosen background.
 
+### The world — a huge, seamless overworld
+The map is an **enormous, finite, seamless world** (≈1920×1920 tiles) streamed in **chunks** as
+you move — **no loading screens, no area transitions**, just keep walking. It's built from **22
+biomes** assigned by seeded noise so they form **contiguous regions that blend** as you travel:
+**downtown, suburbs, commercial strips, industrial & warehouse districts, hospital and police
+zones, military checkpoints, school campuses, malls, trainyards, construction sites, forests and
+deep woods, farmland, grassland, riverbanks, lakes, marshes, coastline, quarries, and parks** —
+each with its own terrain (roads, water, trees, dirt, rail, rubble, sand, crops…), buildings,
+**scattered props** (cars, trees, crates, barrels, wrecks…), and **rare landmark set-pieces**
+(crashed helicopter, derailed train, lighthouse, radio tower, survivor camp…). Every chunk has
+something to find — it never feels empty. The world has a **real edge** (open water) you can reach.
+
+**Distance-scaled danger & loot:** near your spawn the streets are calm and loot is ordinary;
+the **farther out you push, the tougher the enemies** (runners, elites, bosses appear) **and the
+richer the loot** (rarer weapons, more ammo, better gear) — stacking with the day counter and your
+perks. Same `?seed=` reproduces the exact same world; a new run rolls an entirely new one.
+
 Every run starts at **hour zero** of the outbreak (Day 0) with the survivor you created;
 the streets are nearly empty at first and danger ramps as the days pass. In an
 **encounter** the world pauses and you either **type** what you do or tap one of 4
@@ -117,7 +137,7 @@ src/
 │   ├── textures.ts        # CC0 asset paths + placeholder fallback
 │   ├── Player.ts · Camera.ts · WorldRenderer.ts
 ├── game/                  # hard mechanics (authoritative)
-│   ├── constants.ts · rng.ts (seeded) · worldgen.ts (seeded city)
+│   ├── constants.ts · rng.ts (seeded) · worldgen.ts (seeded chunks)
 │   ├── GameState.ts (state + clamp + save/load) · survival.ts · inventory.ts
 ├── ai/                    # swappable GM brain (LLMProvider)
 │   ├── provider.ts · ollamaProvider.ts (default) · claudeProvider.ts (optional stub)

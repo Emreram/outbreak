@@ -3,8 +3,8 @@
 // this module owns the WHEN, kept tiny and pure.
 
 /** Flag set the first time a building is entered, so it triggers only once. */
-export function buildingEnteredFlag(id: number): string {
-  return `entered_building_${id}`;
+export function buildingEnteredFlag(gid: string): string {
+  return `entered_building_${gid}`;
 }
 
 /** Milliseconds until the next ambient threat (a wandering spawn near the player). */

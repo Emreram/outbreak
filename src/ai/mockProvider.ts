@@ -114,7 +114,7 @@ function turn(p: TurnIn, rng: Rng): object {
   switch (intent) {
     case "search": {
       o.d.stamina -= rng.int(6, 13);
-      const findP = loc === "street" ? 0.4 : 0.84;
+      const findP = OPEN_LOCS.has(loc) ? 0.4 : 0.84;
       if (rng.chance(findP)) {
         const found = rollLoot(loc, rng, careful ? 2 : 1); // rarity-graded, location-appropriate
         for (const s of found) o.add.push({ item: s.item, qty: s.qty });
@@ -320,6 +320,13 @@ function cleanAction(raw: string): string {
   s = s.charAt(0).toLowerCase() + s.slice(1);
   return s.length > 80 ? s.slice(0, 80) : s;
 }
+
+// Open-ground locations (street + outdoor biomes) — scavenging is leaner here
+// than inside a building.
+const OPEN_LOCS = new Set<string>([
+  "street", "forest", "dense_woods", "grassland", "farmland", "riverbank", "lake",
+  "marsh", "coast", "quarry", "parkland", "construction_site", "ocean",
+]);
 
 function prettyLoc(loc: string): string {
   return loc.replace(/_/g, " ");
