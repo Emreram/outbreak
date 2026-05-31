@@ -36,6 +36,7 @@ const CSS = `
 .ob-send:hover{background:#2a7bff}
 .ob-leave{align-self:flex-end;background:none;border:none;color:#8398ac;font:inherit;font-size:12px;cursor:pointer;text-decoration:underline}
 .ob-leave:hover{color:#cdd9e5}
+.ob-tip{font-size:11px;color:#6f8296}
 .ob-hidden{display:none!important}
 `;
 
@@ -46,9 +47,11 @@ export class EncounterModal {
   private readonly effectsEl: HTMLDivElement;
   private readonly promptEl: HTMLDivElement;
   private readonly spinEl: HTMLDivElement;
+  private readonly spinTextEl: HTMLSpanElement;
   private readonly choicesEl: HTMLDivElement;
   private readonly rowEl: HTMLDivElement;
   private readonly inputEl: HTMLInputElement;
+  private readonly tipEl: HTMLDivElement;
   private readonly leaveEl: HTMLButtonElement;
 
   private onAction?: ActionHandler;
@@ -57,6 +60,7 @@ export class EncounterModal {
   private fullText = "";
   private opened = false;
   private locked = true; // no input accepted until showResult reveals it (anti double-submit/skip)
+  private revealedAt = 0; // when the current prompt's input became live (arm window)
 
   constructor() {
     if (!document.getElementById(STYLE_ID)) {
@@ -74,7 +78,9 @@ export class EncounterModal {
     this.promptEl = el("div", "ob-prompt");
 
     this.spinEl = el("div", "ob-spin");
-    this.spinEl.append(el("span", "ob-dot"), text("the world reacts…"));
+    this.spinTextEl = document.createElement("span");
+    this.spinTextEl.textContent = "the world reacts…";
+    this.spinEl.append(el("span", "ob-dot"), this.spinTextEl);
 
     this.choicesEl = el("div", "ob-choices");
 
@@ -82,19 +88,26 @@ export class EncounterModal {
     this.inputEl = document.createElement("input");
     this.inputEl.className = "ob-input";
     this.inputEl.type = "text";
-    this.inputEl.placeholder = "What do you do?";
+    this.inputEl.placeholder = "Type anything you want to do…";
     this.inputEl.autocomplete = "off";
     const send = document.createElement("button");
     send.className = "ob-send";
     send.textContent = "Act";
     send.addEventListener("click", () => this.submitText());
     // Keep keystrokes inside the box: stop them reaching the game's key handlers,
-    // and never let a stray key cancel what you're typing.
+    // ignore IME composition, and ignore an Enter carried over from the last turn.
     this.inputEl.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter") this.submitText();
+      if (e.isComposing) return;
+      if (e.key === "Enter") {
+        if (performance.now() - this.revealedAt < 250) return;
+        this.submitText();
+      }
     });
     this.rowEl.append(this.inputEl, send);
+
+    this.tipEl = el("div", "ob-tip");
+    this.tipEl.textContent = "Free text — describe any action, then press Enter.";
 
     this.leaveEl = document.createElement("button");
     this.leaveEl.className = "ob-leave";
@@ -112,6 +125,7 @@ export class EncounterModal {
       this.promptEl,
       this.choicesEl,
       this.rowEl,
+      this.tipEl,
       this.leaveEl,
     );
     this.root.append(panel);
@@ -128,10 +142,11 @@ export class EncounterModal {
   }
 
   /** Show the modal in the "thinking" state while the GM resolves a turn. */
-  openLoading(title = "Encounter"): void {
+  openLoading(title = "Encounter", message?: string): void {
     this.opened = true;
     this.locked = true; // ignore any stray input/Enter while the GM is resolving
     this.titleEl.textContent = title;
+    this.spinTextEl.textContent = message ?? "the world reacts…";
     this.root.classList.add("ob-show");
     this.clearTyping();
     this.narrEl.textContent = "";
@@ -139,6 +154,7 @@ export class EncounterModal {
     this.promptEl.classList.add("ob-hidden");
     this.choicesEl.classList.add("ob-hidden");
     this.rowEl.classList.add("ob-hidden");
+    this.tipEl.classList.add("ob-hidden");
     this.spinEl.classList.remove("ob-hidden");
   }
 
@@ -173,12 +189,15 @@ export class EncounterModal {
       }
       this.choicesEl.classList.remove("ob-hidden");
       this.rowEl.classList.add("ob-hidden");
+      this.tipEl.classList.add("ob-hidden");
     } else {
       this.choicesEl.classList.add("ob-hidden");
       this.inputEl.value = "";
       this.rowEl.classList.remove("ob-hidden");
+      this.tipEl.classList.remove("ob-hidden");
     }
 
+    this.revealedAt = performance.now();
     this.locked = false; // accept exactly one submission now
     if (interaction.type !== "choices") this.inputEl.focus();
 
@@ -223,6 +242,7 @@ export class EncounterModal {
   private lockInputs(): void {
     this.choicesEl.classList.add("ob-hidden");
     this.rowEl.classList.add("ob-hidden");
+    this.tipEl.classList.add("ob-hidden");
     this.promptEl.classList.add("ob-hidden");
   }
 
@@ -261,7 +281,4 @@ function el(tag: string, className: string): HTMLDivElement {
   const e = document.createElement(tag) as HTMLDivElement;
   e.className = className;
   return e;
-}
-function text(s: string): Text {
-  return document.createTextNode(s);
 }

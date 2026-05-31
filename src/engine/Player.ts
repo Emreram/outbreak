@@ -78,12 +78,36 @@ export class Player {
       this.sprite.setVelocity((vx / len) * speed, (vy / len) * speed);
       this.facing = Math.atan2(vy, vx); // turn to face the direction of travel
       this.walkT += sprint ? 2 : 1;
-      this.sprite.setScale(1 + 0.03 * Math.sin(this.walkT * 0.35)); // subtle walk bob
+      // Walk lean/sway via rotation — scale is left free for the hit/lunge tweens.
+      this.sprite.setRotation(this.facing + Math.sin(this.walkT * 0.35) * 0.07);
     } else {
       this.sprite.setVelocity(0, 0);
-      this.sprite.setScale(1);
+      this.sprite.setRotation(this.facing);
     }
-    this.sprite.setRotation(this.facing);
+  }
+
+  /** Quick squash-stretch punch when swinging a melee hit. */
+  lunge(): void {
+    this.sprite.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: 1.18,
+      scaleY: 0.88,
+      duration: 90,
+      yoyo: true,
+      ease: "Quad.easeOut",
+    });
+  }
+
+  /** Recoil pop when taking a hit. */
+  recoil(): void {
+    this.sprite.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: 1.25,
+      scaleY: 1.25,
+      duration: 100,
+      yoyo: true,
+      ease: "Quad.easeOut",
+    });
   }
 
   /** True while sprinting this frame (drains stamina, widens enemy aggro). */

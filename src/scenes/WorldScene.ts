@@ -24,6 +24,7 @@ import { HUD } from "../ui/HUD";
 import { EncounterModal } from "../ui/EncounterModal";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
+import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_VIGNETTE } from "../engine/fx";
 import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../game/constants";
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
@@ -61,6 +62,11 @@ export class WorldScene extends Phaser.Scene {
   private segAcc = 0;
   private kills = 0;
   private lastMelee = 0;
+  private lastStep = 0;
+  private glow!: Phaser.GameObjects.Image;
+  private vignette!: Phaser.GameObjects.Image;
+  private objBanner!: Phaser.GameObjects.Text;
+  private hintText!: Phaser.GameObjects.Text;
   private readonly saveOnUnload = () => this.persist();
 
   constructor() {
@@ -80,6 +86,7 @@ export class WorldScene extends Phaser.Scene {
     this.segAcc = 0;
     this.kills = 0;
     this.lastMelee = 0;
+    this.lastStep = 0;
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
     const fromUrl = this.registry.get("seedFromUrl") === true;
@@ -117,6 +124,55 @@ export class WorldScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setScrollFactor(0)
       .setDepth(500);
+
+    // Atmosphere (procedural): drifting motes, a flashlight glow that brightens at
+    // night, and a vignette. All camera-fixed except the glow, which follows the player.
+    this.add
+      .particles(0, 0, FX_DUST, {
+        x: { min: 0, max: this.scale.width },
+        y: { min: 0, max: this.scale.height },
+        lifespan: 7000,
+        speedX: { min: -14, max: -3 },
+        speedY: { min: -3, max: 3 },
+        scale: { min: 0.6, max: 1.8 },
+        alpha: { start: 0.1, end: 0 },
+        tint: 0x9aa3ad,
+        frequency: 340,
+        quantity: 1,
+      })
+      .setScrollFactor(0)
+      .setDepth(510);
+    this.glow = makeGlow(this, this.player.sprite.x, this.player.sprite.y);
+    this.vignette = this.add.image(0, 0, FX_VIGNETTE).setOrigin(0, 0).setScrollFactor(0).setDepth(540);
+    this.vignette.setDisplaySize(this.scale.width, this.scale.height);
+
+    // Minimal guides: a persistent objective banner + a contextual "Press E" hint.
+    this.objBanner = this.add
+      .text(this.scale.width / 2, 8, "", {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#cfe6ff",
+        backgroundColor: "#0b1622",
+        padding: { x: 10, y: 4 },
+        align: "center",
+      })
+      .setOrigin(0.5, 0)
+      .setScrollFactor(0)
+      .setDepth(950);
+    this.hintText = this.add
+      .text(this.scale.width / 2, this.scale.height - 96, "", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#ffe6a8",
+        stroke: "#000000",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(950)
+      .setVisible(false);
+    this.updateObjective();
+
     this.scale.on("resize", this.onResize, this);
     this.applyPhaseVisual();
 
@@ -174,6 +230,11 @@ export class WorldScene extends Phaser.Scene {
       this.updateEnemies(time);
       this.checkBuildingTrigger();
 
+      if (this.player.isMoving() && time - this.lastStep > 300) {
+        this.lastStep = time;
+        dustPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 2);
+      }
+
       this.decayAcc += delta;
       if (this.decayAcc >= DECAY_MS) {
         this.decayAcc -= DECAY_MS;
@@ -201,7 +262,20 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
+    // The flashlight glow tracks the player even while paused.
+    this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
+
+    // Contextual "Press E" hint when standing on a building (and free to act).
+    const near = !this.dead && !this.inEncounter ? this.buildingAt() : null;
+    this.hintText.setVisible(!!near);
+    if (near) this.hintText.setText(`Press E to enter the ${near.type.replace(/_/g, " ")}`);
+
     this.hud.update(this.state, this.debugInfo());
+  }
+
+  private updateObjective(): void {
+    const g = this.state.goal ?? "";
+    this.objBanner.setText(g ? `Objective: ${g}` : "").setVisible(!!g);
   }
 
   // --- enemies (CLAUDE.md §11) -----------------------------------------------
@@ -247,10 +321,16 @@ export class WorldScene extends Phaser.Scene {
     const v = tints[this.state.timeOfDay] ?? tints.day;
     this.nightOverlay.setFillStyle(v.color, 1);
     this.tweens.add({ targets: this.nightOverlay, alpha: v.alpha, duration: 1200 });
+
+    const glowAlpha: Record<string, number> = { dawn: 0.22, day: 0, dusk: 0.5, night: 0.72 };
+    if (this.glow) this.tweens.add({ targets: this.glow, alpha: glowAlpha[this.state.timeOfDay] ?? 0, duration: 1200 });
   }
 
   private onResize(size: Phaser.Structs.Size): void {
     this.nightOverlay?.setSize(size.width, size.height);
+    this.vignette?.setDisplaySize(size.width, size.height);
+    this.objBanner?.setPosition(size.width / 2, 8);
+    this.hintText?.setPosition(size.width / 2, size.height - 96);
   }
 
   private takeHit(e: Enemy): void {
@@ -264,6 +344,8 @@ export class WorldScene extends Phaser.Scene {
     }
     pushRecentEvent(this.state, msg);
     sfx.hurt();
+    bloodBurst(this, this.player.sprite.x, this.player.sprite.y, 6, 0xcc2222);
+    this.player.recoil();
     this.cameras.main.shake(120, 0.006);
     this.cameras.main.flash(110, 120, 0, 0);
     if (isDead(this.state)) this.enterDeath();
@@ -278,6 +360,7 @@ export class WorldScene extends Phaser.Scene {
     const e = new Enemy(this, x, y, kind);
     this.enemyGroup.add(e.sprite);
     this.enemies.push(e);
+    spawnPopIn(this, e.sprite);
   }
 
   private spawnNear(spawns: Spawn[]): void {
@@ -419,7 +502,7 @@ export class WorldScene extends Phaser.Scene {
     this.freezeEnemies();
     this.encounterLoc = loc;
     sfx.ui();
-    this.modal.openLoading(title);
+    this.modal.openLoading(title, this.thinkingMsg());
     void this.resolveTurn({ mode: "free_text", value: openingValue });
   }
 
@@ -429,8 +512,13 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private onEncounterAction(input: TurnInput): void {
-    this.modal.openLoading();
+    this.modal.openLoading("Encounter", this.thinkingMsg());
     void this.resolveTurn(input);
+  }
+
+  /** Spinner copy: a real model (WebLLM/Ollama) can be slow, so say it's thinking. */
+  private thinkingMsg(): string | undefined {
+    return getActiveBrain() === "offline" ? undefined : "the AI is thinking…";
   }
 
   private async resolveTurn(input: TurnInput): Promise<void> {
@@ -559,24 +647,42 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     this.cameras.main.shake(50, 0.003);
+    this.player.lunge();
+    meleeArc(this, px, py, this.player.sprite.rotation);
     if (!nearest) return;
 
     const armed = isArmed(this.state);
     if (nearest.takeDamage(armed ? 2 : 1)) {
       const kind = nearest.kind.replace(/_/g, " ");
-      this.removeEnemy(nearest);
+      bloodBurst(this, nearest.sprite.x, nearest.sprite.y, 12);
+      this.hitstop(55);
+      this.removeEnemy(nearest); // plays the death animation
       this.kills += 1;
       sfx.kill();
       pushRecentEvent(this.state, `Put down a ${kind}.`);
-    } else if (!armed && Math.random() < 0.4) {
-      this.takeHit(nearest); // bare hands are risky
+    } else {
+      bloodBurst(this, nearest.sprite.x, nearest.sprite.y, 5);
+      const ang = Math.atan2(nearest.sprite.y - py, nearest.sprite.x - px);
+      nearest.knockback(Math.cos(ang), Math.sin(ang), 240, now);
+      if (!armed && Math.random() < 0.4) this.takeHit(nearest); // bare hands are risky
     }
+  }
+
+  /** Brief physics freeze for impact weight (kills only). */
+  private hitstop(ms: number): void {
+    if (this.physics.world.isPaused) return;
+    this.physics.world.isPaused = true;
+    this.time.delayedCall(ms, () => {
+      this.physics.world.isPaused = false;
+    });
   }
 
   private removeEnemy(e: Enemy): void {
     const i = this.enemies.indexOf(e);
     if (i >= 0) this.enemies.splice(i, 1);
-    e.destroy();
+    const body = e.sprite.body as Phaser.Physics.Arcade.Body | null;
+    if (body) body.enable = false;
+    deathFade(this, e.sprite); // fades + spins out, then destroys the sprite
   }
 
   /** Open the run with its AI-authored scenario intro; first action goes to the GM. */

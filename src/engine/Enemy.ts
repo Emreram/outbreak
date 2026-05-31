@@ -36,6 +36,9 @@ export class Enemy {
   state: EnemyState = "wander";
   private lastAttack = 0;
   private wanderUntil = 0;
+  private facing = 0;
+  private phase = Math.random() * 6.28; // desync the shamble between enemies
+  private knockedUntil = 0;
   private readonly p: Params;
 
   constructor(scene: Phaser.Scene, x: number, y: number, kind: SpawnType) {
@@ -62,6 +65,8 @@ export class Enemy {
   /** AI tick. noise widens aggro (sprinting/gunfire). Returns nothing — the scene
    *  reads state/position and applies damage on contact. */
   update(px: number, py: number, noise: number, now: number): void {
+    if (now < this.knockedUntil) return; // ride out a knockback; keep current velocity
+
     const dx = px - this.sprite.x;
     const dy = py - this.sprite.y;
     const dist = Math.hypot(dx, dy);
@@ -71,7 +76,7 @@ export class Enemy {
       this.state = "chase";
       const inv = 1 / (dist || 1);
       this.sprite.setVelocity(dx * inv * this.p.speed, dy * inv * this.p.speed);
-      this.sprite.setRotation(Math.atan2(dy, dx));
+      this.facing = Math.atan2(dy, dx);
     } else {
       this.state = "wander";
       if (now > this.wanderUntil) {
@@ -82,10 +87,21 @@ export class Enemy {
           const a = Math.random() * Math.PI * 2;
           const s = this.p.speed * 0.35;
           this.sprite.setVelocity(Math.cos(a) * s, Math.sin(a) * s);
-          this.sprite.setRotation(a);
+          this.facing = a;
         }
       }
     }
+
+    // Shamble: walkers sway slowly, runners jitter — around the facing, every frame.
+    const fast = this.kind === "zombie_runner";
+    const sway = Math.sin(now * (fast ? 0.022 : 0.008) + this.phase) * (fast ? 0.22 : 0.12);
+    this.sprite.setRotation(this.facing + sway);
+  }
+
+  /** Shove the enemy in a direction for a short while (melee knockback). */
+  knockback(dirX: number, dirY: number, force: number, now: number): void {
+    this.sprite.setVelocity(dirX * force, dirY * force);
+    this.knockedUntil = now + 160;
   }
 
   /** True if this enemy can land a hit now (within range + off cooldown). */

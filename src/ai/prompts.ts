@@ -27,9 +27,23 @@ You receive the full GAME STATE (JSON) and the player's INPUT — either free te
 - Fair difficulty: scale danger to the player's CURRENT condition.
 - Brevity: narrative is 2-4 tight, vivid sentences.
 - Choices (when used): EXACTLY 4, meaningfully distinct, each with upside AND risk.
-- Stat changes are DELTAS. The engine clamps and validates everything.`;
+- Stat changes are DELTAS. The engine clamps and validates everything.
+# OUTPUT SCHEMA (return EXACTLY one JSON object — no markdown, no prose outside it)
+{"narrative": string,
+ "state_changes": {"hp": int, "stamina": int, "hunger": int, "thirst": int, "infection": int},
+ "inventory_add": [{"item": string, "qty": int}],
+ "inventory_remove": [{"item": string, "qty": int}],
+ "world_flags_add": [string],
+ "spawns": [{"type": "zombie"|"zombie_runner"|"survivor_hostile"|"survivor_friendly", "count": int}],
+ "next_interaction": {"type": "free_text"|"choices", "prompt": string, "options": string[]},
+ "game_over": boolean}
+"options" MUST hold EXACTLY 4 strings when type is "choices", else []. Deltas are 0 when unchanged.
+EXAMPLE: {"narrative":"You pry the pharmacy door and slip inside. Dust, and a single intact first-aid kit behind the counter.","state_changes":{"hp":0,"stamina":-8,"hunger":-2,"thirst":-3,"infection":0},"inventory_add":[{"item":"Bandage","qty":2}],"inventory_remove":[],"world_flags_add":["searched_pharmacy"],"spawns":[],"next_interaction":{"type":"free_text","prompt":"What do you do?","options":[]},"game_over":false}`;
 
 export const SCENARIO_SYSTEM_PROMPT = `Generate a unique opening scenario for a new run of OUTBREAK. Given the THEME, define:
 who the player is (one line), where they start, the immediate threat, ONE starting
-advantage (a single useful item or trait), and a short-term goal. Make it distinct and
-atmospheric. Return ONLY JSON matching the schema.`;
+advantage (a single useful item or trait), and a short-term goal. It is HOUR ZERO of the
+outbreak — the infection is just spreading. Make it distinct and atmospheric.
+Return EXACTLY one JSON object (no markdown):
+{"intro_narrative": string (3-5 sentences), "player_name": string, "start_location": string,
+ "starting_items": [{"item": string, "qty": int}], "starting_goal": string, "difficulty_modifier": number}`;

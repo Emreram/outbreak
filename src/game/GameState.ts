@@ -46,6 +46,7 @@ export function newGame(seed: string): GameState {
     recentEvents: [],
     knownLocations: [],
     difficultyModifier: 1.0,
+    goal: "",
   };
 }
 
@@ -56,6 +57,7 @@ export function applyScenario(gs: GameState, sc: ScenarioResponse): void {
   gs.inventory = [];
   for (const it of sc.starting_items) addItem(gs, it.item, it.qty, it.note);
   if (gs.inventory.length === 0) addItem(gs, "Water Bottle", 1);
+  gs.goal = sc.starting_goal || "";
   gs.recentEvents = [`Goal: ${sc.starting_goal}`];
 }
 

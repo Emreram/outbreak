@@ -132,6 +132,7 @@ async function main() {
 
   const named = await newRunState("name-seed", "Alex");
   ok(named.state.player.name === "Alex", "newRunState applies the provided player name");
+  ok((named.state.goal ?? "").length > 0, "newRunState sets a run objective (goal) for the HUD");
   ok(newGame("d0").day === 0, "a fresh run starts at Day 0 (outbreak hour zero)");
 
   // Provider resolution (real-AI wiring).

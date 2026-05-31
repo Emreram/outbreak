@@ -42,6 +42,7 @@ export interface GameState {
   recentEvents: string[]; // rolling last ~6 events for GM context
   knownLocations: KnownLocation[];
   difficultyModifier: number; // set by the run's scenario
+  goal?: string; // the run's short-term objective (from the AI scenario), shown in-game
 }
 
 // ---- GM turn I/O (CLAUDE.md §8.2–8.4) ----

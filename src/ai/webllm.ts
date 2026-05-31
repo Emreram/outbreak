@@ -1,4 +1,4 @@
-import type { MLCEngine, InitProgressReport } from "@mlc-ai/web-llm";
+import type { MLCEngine, InitProgressReport, ChatCompletionMessageParam } from "@mlc-ai/web-llm";
 import type { LLMProvider } from "./provider";
 
 // In-browser Game Master brain (WebLLM / WebGPU). Runs a real LLM entirely on the
@@ -78,20 +78,48 @@ export async function loadWebLLM(onProgress?: (r: InitProgressReport) => void): 
 
 export class WebLLMProvider implements LLMProvider {
   async generate(systemPrompt: string, payload: object, schema: object): Promise<string> {
-    if (!engine) throw new Error("WebLLM engine not loaded");
-    const reply = await engine.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: JSON.stringify(payload) },
-      ],
-      temperature: 0.8,
-      max_tokens: 1024, // headroom so the constrained JSON never truncates mid-object
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(payload) },
+    ];
+    try {
       // Constrained JSON decoding — the cloud/Ollama "format" analog (CLAUDE.md §8.4).
-      response_format: { type: "json_object", schema: JSON.stringify(schema) },
+      return await complete(messages, { type: "json_object", schema: JSON.stringify(schema) });
+    } catch {
+      // XGrammar can reject an over-complex schema — fall back to plain JSON mode.
+      // The GM prompt already describes the schema and gameMaster validates/repairs.
+      return await complete(messages, { type: "json_object" });
+    }
+  }
+}
+
+async function complete(
+  messages: ChatCompletionMessageParam[],
+  responseFormat: { type: "json_object"; schema?: string },
+): Promise<string> {
+  if (!engine) throw new Error("WebLLM engine not loaded");
+  const reply = await engine.chat.completions.create({
+    messages,
+    temperature: 0.8,
+    max_tokens: 1024, // headroom so the JSON never truncates mid-object
+    response_format: responseFormat,
+  });
+  const content = reply.choices[0]?.message?.content ?? "";
+  if (!content) throw new Error("WebLLM returned empty content");
+  return content;
+}
+
+/** Best-effort tiny generation so WebGPU shaders compile now, not on the first turn. */
+export async function warmUpWebLLM(): Promise<void> {
+  if (!engine) return;
+  try {
+    await engine.chat.completions.create({
+      messages: [{ role: "user", content: 'Reply with {"ok":true}' }],
+      max_tokens: 8,
+      response_format: { type: "json_object" },
     });
-    const content = reply.choices[0]?.message?.content ?? "";
-    if (!content) throw new Error("WebLLM returned empty content");
-    return content;
+  } catch {
+    /* best-effort */
   }
 }
 

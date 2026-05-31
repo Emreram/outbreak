@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { loadGame, saveGame } from "../game/GameState";
 import { newRunState } from "../ai/gameMaster";
-import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmError, webllmModel, loadWebLLM } from "../ai/webllm";
+import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmError, webllmModel, loadWebLLM, warmUpWebLLM } from "../ai/webllm";
 import { sfx } from "../engine/audio";
 
 // Title screen (CLAUDE.md §13 Phase 7). "New run" always asks for the player's
@@ -162,6 +162,8 @@ export class MainMenuScene extends Phaser.Scene {
         this.aiHint?.setText(`${pct}%  ${r.text}`.slice(0, 56));
         this.refreshAiToggle();
       });
+      if (!this.menuDestroyed) this.aiHint?.setText("warming up the model…");
+      await warmUpWebLLM(); // compile shaders now so the first in-game turn is fast
     } catch {
       /* state=error; refreshAiToggle shows retry + reason */
     }
