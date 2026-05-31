@@ -61,7 +61,20 @@ combat** — aim, fire projectiles, manage ammo + reloads. Find loot by **search
 (location-appropriate tables — police → guns/ammo, pharmacy → meds, hardware → melee), **opening
 chests** inside buildings, or as **drops from kills**. Walk over a drop to grab it; open the
 **loot screen** (`I` / BAG) to compare, **equip** a melee + a gun, read tooltips, use consumables,
-or drop items. Rarity is colour-coded everywhere (icons, drops, the HUD, tooltips).
+or drop items. Rarity is colour-coded everywhere (icons, drops, the HUD, tooltips). Equipped
+**armor** reduces the damage you take.
+
+### The bestiary — 100+ enemy types
+Over **100 hand-authored zombie/enemy types**, each with a **procedurally distinct look** (14
+body archetypes × rot palettes × features: bone, blood, spikes, glowing eyes, bloat sacs, armor
+plates, tatters, horns…), its own **movement/animation** (shamblers, runners, crawlers, leapers
+that dash, erratic skitterers) and **unique behaviour**: spitters fling acid, screamers summon a
+horde, exploders burst for area damage, splitters spawn crawlers when killed, bloated/toxic types
+leave damaging clouds, grabbers pin you in place, brutes knock you back, armored/regenerating/
+undying types are hard to put down — up to **elites and bosses** (Tank, Behemoth, Brood Mother,
+Abomination, Patient Zero, The Colossus…). Types are **rarity-graded** and **day-gated**: common
+walkers early, rarer and nastier horrors as the outbreak deepens. **Health bars** show on hurt
+enemies and **name labels** mark rare/elite/boss types. Damage varies widely by type.
 
 Every run starts at **hour zero** of the outbreak (Day 0) and asks for your **name**;
 the streets are nearly empty at first and danger ramps as the days pass. In an
