@@ -122,8 +122,10 @@ function isRoad(seed: string, axis: string, g: number): boolean {
   const s = roadStart(seed, axis, band);
   return g === s || g === s + 1;
 }
-const isRoadCol = (seed: string, gx: number): boolean => isRoad(seed, "x", gx);
-const isRoadRow = (seed: string, gy: number): boolean => isRoad(seed, "y", gy);
+// Exported so other deterministic systems (e.g. vehicle placement, Feature 4) can
+// land entities on guaranteed-walkable road tiles without touching the tile grid.
+export const isRoadCol = (seed: string, gx: number): boolean => isRoad(seed, "x", gx);
+export const isRoadRow = (seed: string, gy: number): boolean => isRoad(seed, "y", gy);
 
 // ---------------------------------------------------------------------------
 

@@ -1,7 +1,20 @@
 import Phaser from "phaser";
-import type { FarmPlot, GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
+import type { FarmPlot, GameState, GMResponse, Spawn, TurnInput, Vehicle } from "../shared/contracts";
 import { Tile, type Building } from "../game/worldgen";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
+import {
+  chunkVehicles,
+  fitPart,
+  isDrivable,
+  isRepaired,
+  nextNeed,
+  resolveVehicle,
+  upsertVehicle,
+  vehicleChunkOf,
+  vehicleDef,
+  FUEL_MAX,
+  FUEL_PER_CAN,
+} from "../game/vehicles";
 import { isWet, rollWeather } from "../game/weather";
 import { addXp, SKILL_NAMES, type SkillId } from "../game/skills";
 import { propKey } from "../engine/propSprites";
@@ -38,6 +51,7 @@ import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
 import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
 import type { ColliderSpec } from "../engine/ChunkRenderer";
 import { Player } from "../engine/Player";
+import { PLAYER_KEY } from "../engine/textures";
 import { Enemy } from "../engine/Enemy";
 import { Animal, ANIMALS, type AnimalKind } from "../engine/Animal";
 import type { ZombieDef } from "../game/enemies/types";
@@ -53,7 +67,15 @@ import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
 import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
-import { TILE_SIZE } from "../game/constants";
+import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
+
+/** A streamed, parked vehicle sprite + its live persisted condition (Feature 4). */
+interface ActiveVehicle {
+  gid: string;
+  type: string;
+  sprite: Phaser.GameObjects.Image;
+  data: Vehicle;
+}
 
 interface ProjData {
   damage: number;
@@ -143,6 +165,12 @@ export class WorldScene extends Phaser.Scene {
   private hotbar!: HotBar;
   private selectedQuick = 0; // hotbar quick-use slot under the scroll-wheel cursor (0–3)
   private readonly farmSprites = new Map<string, { soil: Phaser.GameObjects.Image; crop?: Phaser.GameObjects.Image }>();
+  // Vehicles (Feature 4): parked sprites streamed per chunk (mirrors farmSprites/chests).
+  private readonly vehicleSprites = new Map<string, ActiveVehicle>();
+  private driving: ActiveVehicle | null = null;
+  private vehiclesDirty = false; // force a reconcile after repair/fuel/park
+  private lastVehCx = NaN;
+  private lastVehCy = NaN;
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -181,6 +209,12 @@ export class WorldScene extends Phaser.Scene {
       r.crop?.destroy();
     }
     this.farmSprites.clear();
+    for (const av of this.vehicleSprites.values()) av.sprite.destroy();
+    this.vehicleSprites.clear();
+    this.driving = null;
+    this.vehiclesDirty = false;
+    this.lastVehCx = NaN;
+    this.lastVehCy = NaN;
     this.weatherRect = undefined; // re-created on the fresh uiLayer below
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
@@ -260,6 +294,7 @@ export class WorldScene extends Phaser.Scene {
 
     // Stream the initial ring of chunks (and their chests) around the spawn.
     this.chunks.ensureAround(startX, startY);
+    this.reconcileVehicles(true); // place any cars in the opening view
 
     // Day/night tint: a flat darkening rect kept on the MAIN camera (below the
     // player glow at depth 520) so the additive flashlight glow still cuts through
@@ -437,6 +472,8 @@ export class WorldScene extends Phaser.Scene {
         }
       }
       this.chunks.ensureAround(this.player.sprite.x, this.player.sprite.y);
+      this.reconcileVehicles();
+      if (this.driving) this.driveTick(delta);
       this.tickClouds(time);
       this.updateEnemies(time);
       this.updateAnimals(time);
@@ -487,13 +524,18 @@ export class WorldScene extends Phaser.Scene {
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
     this.updateWeaponSprite();
 
-    // Contextual "Press E" hint (chest > building) — encounters are opt-in, so this
-    // is the invitation to engage; exploring never forces one.
-    if (!this.dead && !this.inEncounter) {
-      const chest = this.nearestChest(42);
-      const farm = chest ? null : this.farmHint();
-      const near = chest || farm ? null : this.buildingAt();
-      if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
+    // Contextual "Press E" hint (driving > vehicle > chest > farm > building) —
+    // encounters are opt-in, so this is the invitation to engage; exploring never
+    // forces one.
+    if (!this.dead && this.driving) {
+      this.hintText.setText(`Driving — Fuel ${Math.ceil(this.driving.data.fuel)}%  ·  Press E to park`).setVisible(true);
+    } else if (!this.dead && !this.inEncounter) {
+      const veh = this.nearestVehicle(52);
+      const chest = veh ? null : this.nearestChest(42);
+      const farm = veh || chest ? null : this.farmHint();
+      const near = veh || chest || farm ? null : this.buildingAt();
+      if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
+      else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
       else if (farm) this.hintText.setText(farm).setVisible(true);
       else if (near) this.hintText.setText(`Press E to search the ${near.type.replace(/_/g, " ")}`).setVisible(true);
       else this.hintText.setVisible(false);
@@ -519,11 +561,12 @@ export class WorldScene extends Phaser.Scene {
   private updateEnemies(now: number): void {
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
+    const engine = this.driving && this.player.isMoving() ? 240 : 0; // a running car is LOUD
     const noise =
-      (this.player.isMoving() ? 45 : 0) + (this.player.sprinting ? 70 : 0) + this.nightNoise();
+      (this.player.isMoving() ? 45 : 0) + (this.player.sprinting ? 70 : 0) + this.nightNoise() + engine;
     for (const e of this.enemies) {
       e.update(px, py, noise, now);
-      if (e.tryAttack(px, py, now)) this.takeHit(e);
+      if (e.tryAttack(px, py, now) && !this.driving) this.takeHit(e); // in a car you're out of reach
       this.enemySpecials(e, px, py, now);
     }
     // reap enemies finished off by bleed/burn damage-over-time
@@ -942,6 +985,15 @@ export class WorldScene extends Phaser.Scene {
   /** Press E to act on the current surroundings. Encounters are OPT-IN — exploring
    *  never forces a prompt; you engage the AI Game Master only when you choose to. */
   private tryInteract(): void {
+    if (this.driving) {
+      this.exitVehicle();
+      return;
+    }
+    const veh = this.nearestVehicle(52);
+    if (veh) {
+      this.tryVehicleAction(veh);
+      return;
+    }
     const chest = this.nearestChest(42);
     if (chest) {
       this.openChest(chest);
@@ -1062,6 +1114,219 @@ export class WorldScene extends Phaser.Scene {
     else rec.crop.setTexture(tex);
     if (stage === 3 && plot.crop && CROPS[plot.crop]) rec.crop.setTint(CROPS[plot.crop].color);
     else rec.crop.clearTint();
+  }
+
+  // --- vehicles (Feature 4): find → fix → fuel → drive → park -----------------
+
+  private playerChunk(): { cx: number; cy: number } {
+    const CHUNK_PX = CHUNK_TILES * TILE_SIZE;
+    return { cx: Math.floor(this.player.sprite.x / CHUNK_PX), cy: Math.floor(this.player.sprite.y / CHUNK_PX) };
+  }
+
+  /** Every vehicle that should currently have a sprite, keyed by gid: deterministic
+   *  spawns in range (unless driven elsewhere) + any persisted car parked into range. */
+  private computeWantedVehicles(): Map<string, Vehicle> {
+    const seed = this.state.seed;
+    const { cx, cy } = this.playerChunk();
+    const R = CHUNK_LOAD_RADIUS;
+    const wanted = new Map<string, Vehicle>();
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
+        const ccx = cx + dx;
+        const ccy = cy + dy;
+        if (ccx < 0 || ccy < 0 || ccx >= WORLD_CHUNKS_X || ccy >= WORLD_CHUNKS_Y) continue;
+        for (const sp of chunkVehicles(seed, ccx, ccy)) {
+          const v = resolveVehicle(this.state, seed, sp);
+          const vc = vehicleChunkOf(v);
+          if (vc.cx === ccx && vc.cy === ccy) wanted.set(v.gid, v); // skip cars driven away
+        }
+      }
+    }
+    for (const v of this.state.vehicles ?? []) {
+      if (wanted.has(v.gid)) continue; // persisted car parked away from its spawn chunk
+      const vc = vehicleChunkOf(v);
+      if (Math.abs(vc.cx - cx) <= R && Math.abs(vc.cy - cy) <= R) wanted.set(v.gid, v);
+    }
+    return wanted;
+  }
+
+  /** Stream parked-vehicle sprites in/out as the player crosses chunks (cheap; gated). */
+  private reconcileVehicles(force = false): void {
+    const { cx, cy } = this.playerChunk();
+    if (!force && !this.vehiclesDirty && cx === this.lastVehCx && cy === this.lastVehCy) return;
+    this.lastVehCx = cx;
+    this.lastVehCy = cy;
+    this.vehiclesDirty = false;
+    const wanted = this.computeWantedVehicles();
+    for (const [gid, av] of [...this.vehicleSprites]) {
+      if (!wanted.has(gid) && this.driving?.gid !== gid) {
+        av.sprite.destroy();
+        this.vehicleSprites.delete(gid);
+      }
+    }
+    for (const [gid, v] of wanted) {
+      if (this.driving?.gid === gid) continue; // hidden while you're driving it
+      const existing = this.vehicleSprites.get(gid);
+      if (existing) {
+        existing.data = v;
+        this.styleVehicleSprite(existing);
+      } else {
+        this.spawnVehicleSprite(v);
+      }
+    }
+  }
+
+  private spawnVehicleSprite(v: Vehicle): ActiveVehicle {
+    const key = propKey(`veh_${v.type}`);
+    const tex = this.textures.exists(key) ? key : propKey("car");
+    const spr = this.add.image(v.x, v.y, tex).setDepth(6);
+    const av: ActiveVehicle = { gid: v.gid, type: v.type, sprite: spr, data: v };
+    this.styleVehicleSprite(av);
+    this.vehicleSprites.set(v.gid, av);
+    return av;
+  }
+
+  private styleVehicleSprite(av: ActiveVehicle): void {
+    const def = vehicleDef(av.type);
+    av.sprite.setScale(def.scale).setTint(def.tint).setPosition(av.data.x, av.data.y);
+    av.sprite.setAlpha(isRepaired(av.data) ? 1 : 0.82); // wrecks look duller until fixed
+  }
+
+  private nearestVehicle(maxDist: number): ActiveVehicle | null {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: ActiveVehicle | null = null;
+    let bestD = maxDist;
+    for (const av of this.vehicleSprites.values()) {
+      const d = Math.hypot(av.sprite.x - px, av.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = av;
+      }
+    }
+    return best;
+  }
+
+  private vehicleHint(av: ActiveVehicle): string {
+    const name = vehicleDef(av.type).name;
+    if (!isRepaired(av.data)) return `Press E to fit ${nextNeed(av.data)} — ${name} needs: ${av.data.needs.join(", ")}`;
+    if (av.data.fuel <= 0) return `Press E to fuel the ${name} (Fuel Canister)`;
+    return `Press E to drive the ${name}`;
+  }
+
+  private tryVehicleAction(av: ActiveVehicle): void {
+    if (!isRepaired(av.data)) {
+      this.tryRepairVehicle(av);
+      return;
+    }
+    if (av.data.fuel <= 0) {
+      this.tryFuelVehicle(av);
+      return;
+    }
+    this.enterVehicle(av);
+  }
+
+  private tryRepairVehicle(av: ActiveVehicle): void {
+    const part = nextNeed(av.data);
+    if (!part) return;
+    if (!hasItem(this.state, part)) {
+      this.showToast(`Need ${part} to repair the ${vehicleDef(av.type).name}`);
+      sfx.ui();
+      return;
+    }
+    removeItem(this.state, part, 1);
+    fitPart(av.data, part);
+    sfx.swing();
+    this.floatText(av.sprite.x, av.sprite.y - 12, `Fitted ${part}`, "#9ef0a0");
+    this.grantXp("mechanics", 5);
+    if (isRepaired(av.data)) {
+      this.showToast("The engine turns over — it just needs fuel.");
+      pushRecentEvent(this.state, `Repaired a ${vehicleDef(av.type).name}.`);
+    }
+    upsertVehicle(this.state, av.data);
+    this.styleVehicleSprite(av);
+    this.vehiclesDirty = true;
+    this.persist();
+  }
+
+  private tryFuelVehicle(av: ActiveVehicle): void {
+    if (!hasItem(this.state, "Fuel Canister")) {
+      this.showToast("Need a Fuel Canister to fuel the tank");
+      sfx.ui();
+      return;
+    }
+    removeItem(this.state, "Fuel Canister", 1);
+    av.data.fuel = Math.min(FUEL_MAX, av.data.fuel + FUEL_PER_CAN);
+    sfx.pickup();
+    this.floatText(av.sprite.x, av.sprite.y - 12, `Fuel +${FUEL_PER_CAN}`, "#ffd23f");
+    upsertVehicle(this.state, av.data);
+    this.vehiclesDirty = true;
+    this.persist();
+  }
+
+  /** Climb in: the player "becomes" the car — faster, runs zombies down, immune to
+   *  bites, but loud. The parked sprite is hidden until you park again. */
+  private enterVehicle(av: ActiveVehicle): void {
+    if (!isDrivable(av.data)) return;
+    this.driving = av;
+    av.sprite.destroy();
+    this.vehicleSprites.delete(av.gid);
+    const def = vehicleDef(av.type);
+    const key = propKey(`veh_${av.type}`);
+    if (this.textures.exists(key)) this.player.sprite.setTexture(key);
+    this.player.sprite.setScale(def.scale).clearTint();
+    this.player.speedMult = def.speedMult;
+    this.weaponSprite.setVisible(false);
+    this.weaponGlow.setVisible(false);
+    this.firing = false;
+    sfx.ui();
+    this.showToast(`Driving the ${def.name} — run them down (E to park)`);
+  }
+
+  /** Park: write position + fuel back to the persisted record and step out on foot. */
+  private exitVehicle(): void {
+    const av = this.driving;
+    if (!av) return;
+    av.data.x = this.player.sprite.x;
+    av.data.y = this.player.sprite.y;
+    upsertVehicle(this.state, av.data);
+    this.driving = null;
+    this.player.speedMult = 1;
+    this.player.sprite.setTexture(PLAYER_KEY).setScale(1);
+    this.player.setAppearance(this.state.appearance?.color);
+    this.spawnVehicleSprite(av.data); // re-show it where you parked
+    this.vehiclesDirty = true;
+    sfx.ui();
+    this.showToast("Parked.");
+    this.persist();
+  }
+
+  /** Per-frame driving: drain fuel while moving, mow down zombies, stall when empty. */
+  private driveTick(delta: number): void {
+    const av = this.driving;
+    if (!av) return;
+    if (this.player.isMoving()) {
+      av.data.fuel = Math.max(0, av.data.fuel - delta * 0.0013);
+      this.runOverZombies();
+    }
+    if (av.data.fuel <= 0) {
+      this.showToast("Out of fuel — the engine dies.");
+      this.exitVehicle();
+    }
+  }
+
+  /** Zombies caught under a moving vehicle are crushed (heavy damage + blood). */
+  private runOverZombies(): void {
+    if (!this.driving) return;
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    const reach = 30 * vehicleDef(this.driving.type).scale;
+    for (const e of [...this.enemies]) {
+      if (Math.hypot(e.sprite.x - px, e.sprite.y - py) < reach) {
+        bloodBurst(this, e.sprite.x, e.sprite.y, 12, 0x9c1414);
+        if (e.takeDamage(60)) this.onEnemyKilled(e);
+      }
+    }
   }
 
   private toggleLoot(): void {
@@ -1452,6 +1717,10 @@ export class WorldScene extends Phaser.Scene {
     this.dead = true;
     this.inEncounter = false;
     this.enacting = false;
+    if (this.driving) {
+      this.driving = null; // step out of the wreck; the run is over
+      this.player.speedMult = 1;
+    }
     this.player.sprite.setVelocity(0, 0);
     this.modal.close();
     sfx.death();
@@ -1469,7 +1738,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Melee swing at the nearest threat (SPACE/F). Weapons hit harder. */
   private meleeAttack(): void {
-    if (this.dead || this.inEncounter) return;
+    if (this.dead || this.inEncounter || this.driving) return;
     const now = this.time.now;
     const hit = meleeOutcome(this.state, liveRng);
     if (now - this.lastMelee < hit.cooldownMs || this.state.player.stamina < 4) return;
@@ -1707,7 +1976,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Fire the equipped gun toward `angle` (one trigger pull). */
   private fire(angle: number): void {
-    if (this.dead || this.inEncounter || this.reloading || this.lootOpen) return;
+    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving) return;
     const plan = shotOutcome(this.state, liveRng);
     if (!plan) return; // no gun equipped
     const now = this.time.now;
@@ -1896,6 +2165,12 @@ export class WorldScene extends Phaser.Scene {
     if (this.dead) return; // never persist a finished run
     this.state.player.x = this.player.sprite.x;
     this.state.player.y = this.player.sprite.y;
+    if (this.driving) {
+      // a car-in-motion rides with the player so a mid-drive save isn't lost
+      this.driving.data.x = this.player.sprite.x;
+      this.driving.data.y = this.player.sprite.y;
+      upsertVehicle(this.state, this.driving.data);
+    }
     saveGame(this.state);
   }
 }

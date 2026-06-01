@@ -53,6 +53,19 @@ export interface GameState {
   farmPlots?: FarmPlot[]; // player-tilled crop plots (Feature 5)
   weather?: string; // current weather kind (Feature 9)
   skills?: Record<string, number>; // xp per skill id (Feature 9)
+  vehicles?: Vehicle[]; // repaired/moved vehicles (Feature 4); unmodified ones regenerate from seed
+}
+
+/** A vehicle's persisted STATE (only stored once repaired or moved). Its existence +
+ *  spawn point are deterministic from the seed; this overlays the live condition. */
+export interface Vehicle {
+  gid: string;
+  type: string; // sedan | pickup | van
+  x: number; // current world pixels (spawn point until driven)
+  y: number;
+  fuel: number; // 0–100
+  repaired: boolean;
+  needs: string[]; // missing/broken parts still required to fix it
 }
 
 /** A player-created farm plot. Keyed by global tile; persists + grows on the clock. */

@@ -107,6 +107,11 @@ const MATERIALS: MaterialDef[] = [
   mat("Leather", "common", 0x6b4a2a),
   mat("Barricade Kit", "uncommon", 0x9c6b3f),
   mat("Bone", "common", 0xe8e2d0),
+  // Car parts (Feature 4): scavenged from garages/gas stations/wrecks to repair vehicles.
+  mat("Engine Part", "uncommon", 0x6b7079),
+  mat("Battery", "uncommon", 0x3a7a4a),
+  mat("Spark Plug", "common", 0xd1a23a),
+  mat("Tire", "common", 0x2b2e33),
 ];
 
 const ARMOR: ArmorDef[] = [

@@ -157,6 +157,31 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0xffffff, 1).fillCircle(11, 10, 3).fillCircle(19, 10, 3).fillCircle(15, 6, 3);
   },
 
+  // --- drivable vehicles (Feature 4), top-down, facing east (+x) ---
+  // Bodies drawn near-white so the scene's per-type tint colours each vehicle; dark
+  // glass/wheels read through the tint. Front of the car points right (+x).
+  veh_sedan: (g) => {
+    g.fillStyle(0xe8ebee, 1).fillRoundedRect(2, 8, 26, 14, 5); // body
+    g.fillStyle(0x1b2733, 1).fillRoundedRect(7, 10, 12, 10, 2); // cabin glass
+    g.fillStyle(0xc2c8cf, 1).fillRect(24, 11, 4, 8); // hood
+    g.fillStyle(0x0c0f13, 1).fillCircle(9, 7, 2.6).fillCircle(9, 23, 2.6).fillCircle(22, 7, 2.6).fillCircle(22, 23, 2.6);
+    g.fillStyle(0xffe9a8, 1).fillRect(27, 9, 2, 3).fillRect(27, 18, 2, 3); // headlights
+  },
+  veh_pickup: (g) => {
+    g.fillStyle(0xe2e5e9, 1).fillRoundedRect(2, 7, 13, 16, 3); // cab (rear)
+    g.fillStyle(0x1b2733, 1).fillRoundedRect(4, 9, 8, 12, 2); // cab glass
+    g.fillStyle(0xb7bdc4, 1).fillRect(15, 9, 13, 12); // open bed (front)
+    g.lineStyle(1, 0x7d838b, 1).strokeRect(15, 9, 13, 12);
+    g.fillStyle(0x0c0f13, 1).fillCircle(8, 6, 2.8).fillCircle(8, 24, 2.8).fillCircle(22, 6, 2.8).fillCircle(22, 24, 2.8);
+  },
+  veh_van: (g) => {
+    g.fillStyle(0xeceef1, 1).fillRoundedRect(1, 6, 28, 18, 4); // big boxy body
+    g.fillStyle(0x1b2733, 1).fillRect(22, 8, 6, 14); // windshield (front)
+    g.fillStyle(0xcfd4da, 1).fillRect(3, 9, 14, 1).fillRect(3, 15, 14, 1); // side panels
+    g.fillStyle(0x0c0f13, 1).fillCircle(8, 5, 2.8).fillCircle(8, 25, 2.8).fillCircle(23, 5, 2.8).fillCircle(23, 25, 2.8);
+    g.fillStyle(0xffe9a8, 1).fillRect(28, 8, 1, 3).fillRect(28, 19, 1, 3); // headlights
+  },
+
   // --- wild animals (Feature 6), top-down ---
   animal_rabbit: (g) => {
     g.fillStyle(0xd8c8b0, 1).fillEllipse(15, 17, 11, 8);
