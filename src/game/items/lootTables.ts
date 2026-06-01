@@ -4,6 +4,7 @@ import { rarityRank, rollRarity } from "./rarity";
 import { WEAPONS } from "./weapons";
 import { MISC_ITEMS } from "./consumables";
 import { AMMO } from "./ammo";
+import { BIOMES, type BiomeId } from "../world/biomes";
 
 // Rarity-weighted, location-aware loot. Sources: building types, chests
 // ("chest:<tier>"), and enemy drops ("enemy:<kind>"). Deterministic with a seeded Rng.
@@ -168,7 +169,10 @@ function tableFor(source: string): SourceTable {
   if (source.startsWith("enemy:")) {
     return ENEMY[source.slice(6)] ?? ENEMY.zombie;
   }
-  return SOURCES[source] ?? SOURCES.street;
+  // Direct building/source key, else a biome id routed to its loot source,
+  // else generic street loot.
+  const biomeSource = BIOMES[source as BiomeId]?.lootSource;
+  return SOURCES[source] ?? (biomeSource ? SOURCES[biomeSource] : undefined) ?? SOURCES.street;
 }
 
 /** Roll `n` loot stacks from a named source. `extraBias` (e.g. the Lucky perk) shifts toward rarer. */

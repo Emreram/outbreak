@@ -69,7 +69,9 @@ export class ChunkView {
   destroy(): void {
     for (const c of this.colliders) c.destroy();
     for (const e of this.extras) e.destroy();
-    this.layer.destroy();
+    // map.destroy() also destroys the layer GameObject (via removeAllLayers),
+    // removing it from the scene's display/update lists. Colliders are torn
+    // down first so nothing references the layer afterwards.
     this.map.destroy();
   }
 }

@@ -139,6 +139,22 @@ function main(): void {
   const groGuns = countGuns("grocery", "gro");
   ok(milGuns > groGuns + 50, `military drops more guns than grocery (${milGuns} vs ${groGuns})`);
 
+  // --- biome ids route to valid loot tables (street/open encounters) ---
+  let badBiomeLoot = "";
+  const r3 = createRng("biome-loot");
+  for (const src of ["forest", "farmland", "downtown", "military_base", "lake", "warehouse", "barn"]) {
+    for (let i = 0; i < 60; i++) {
+      for (const s of rollLoot(src, r3, 2)) {
+        if (!getItemDef(s.item) || s.qty <= 0) badBiomeLoot = `${src}:${s.item}`;
+      }
+    }
+  }
+  ok(badBiomeLoot === "", `biome/building sources yield valid loot (${badBiomeLoot || "ok"})`);
+  // military_base routes to the military table → far more guns than farmland.
+  const milBiomeGuns = countGuns("military_base", "mb");
+  const farmGuns = countGuns("farmland", "fl");
+  ok(milBiomeGuns > farmGuns, `military_base biome out-guns farmland (${milBiomeGuns} vs ${farmGuns})`);
+
   // --- isWeaponName sanity ---
   ok(isWeaponName("Katana") && !isWeaponName("Bandage"), "isWeaponName classifies correctly");
 
