@@ -14,6 +14,7 @@ import {
 import { addItem, removeItem, hasItem, itemCount, useConsumable, quickUseItems, MAX_STACK } from "../src/game/inventory";
 import { applyDecay, DEFAULT_DECAY } from "../src/game/survival";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../src/game/farming";
+import { RECIPES, canCraft, craft } from "../src/game/crafting";
 
 // in-memory localStorage shim so persistence is testable under Node
 const store = new Map<string, string>();
@@ -134,6 +135,16 @@ for (let i = 0; i < Math.ceil(segs / 2); i++) {
   growPlots(fg2);
 }
 ok(fp2.growth >= 1, "watered crop ripens in about half the time");
+
+// --- crafting (Feature 8) ---
+const cg = newGame("craft");
+const bandageR = RECIPES.find((r) => r.id === "bandage")!;
+ok(!!bandageR && !canCraft(cg, bandageR), "cannot craft a bandage without cloth");
+addItem(cg, "Cloth", 2);
+const craftBandages0 = itemCount(cg, "Bandage");
+ok(canCraft(cg, bandageR) && craft(cg, bandageR), "craft a bandage with 2 cloth");
+ok(itemCount(cg, "Cloth") === 0 && itemCount(cg, "Bandage") === craftBandages0 + 1, "craft consumed inputs and produced the output");
+ok(!craft(cg, bandageR), "crafting again fails once materials run out");
 
 console.log(fail === 0 ? "ALL STATE CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

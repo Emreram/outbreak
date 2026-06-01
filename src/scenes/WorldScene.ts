@@ -45,6 +45,8 @@ import { HUD } from "../ui/HUD";
 import { HotBar } from "../ui/HotBar";
 import { EncounterModal } from "../ui/EncounterModal";
 import { LootModal } from "../ui/LootModal";
+import { CraftModal } from "../ui/CraftModal";
+import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
 import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
@@ -89,6 +91,8 @@ export class WorldScene extends Phaser.Scene {
   private modal!: EncounterModal;
   private loot!: LootModal;
   private lootOpen = false;
+  private craftUi!: CraftModal;
+  private craftOpen = false;
   private touch!: TouchControls;
   private state!: GameState;
   private decayAcc = 0;
@@ -140,6 +144,7 @@ export class WorldScene extends Phaser.Scene {
     this.enacting = false;
     this.encounterTurns = 0;
     this.lootOpen = false;
+    this.craftOpen = false;
     this.grabbedUntil = 0;
     this.clouds = [];
     this.decayAcc = 0;
@@ -328,6 +333,22 @@ export class WorldScene extends Phaser.Scene {
       this.lootOpen = false;
       this.setGameKeys(true);
     });
+    this.craftUi = new CraftModal();
+    this.craftUi.setHandlers(
+      (r) => {
+        if (!craft(this.state, r)) return;
+        sfx.pickup();
+        this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Crafted ${r.out}`, "#9ef0a0");
+        pushRecentEvent(this.state, `Crafted ${r.out}.`);
+        this.hud.update(this.state, this.debugInfo());
+        this.persist();
+        this.craftUi.refresh(this.state);
+      },
+      () => {
+        this.craftOpen = false;
+        this.setGameKeys(true);
+      },
+    );
     this.touch = new TouchControls();
     this.touch.setHandlers(
       () => this.tryInteract(),
@@ -359,6 +380,7 @@ export class WorldScene extends Phaser.Scene {
       this.scale.off("resize", this.onResize, this);
       this.modal.destroy();
       this.loot.destroy();
+      this.craftUi.destroy();
       this.touch.destroy();
       this.chunks.destroy();
       this.persist();
@@ -380,8 +402,8 @@ export class WorldScene extends Phaser.Scene {
 
   override update(time: number, delta: number): void {
     // The world pauses during an encounter, while an outcome is playing out, or
-    // while the loot screen is open.
-    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen) {
+    // while the loot/craft screens are open.
+    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
       if (time < this.grabbedUntil) {
@@ -454,7 +476,7 @@ export class WorldScene extends Phaser.Scene {
       const first = quickUseItems(this.state).findIndex((q) => q); // keep the cursor on a usable slot
       if (first >= 0) this.selectedQuick = first;
     }
-    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen, this.selectedQuick);
+    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen, this.selectedQuick);
   }
 
   private updateObjective(): void {
@@ -923,6 +945,20 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  private toggleCraft(): void {
+    if (this.dead) return;
+    if (this.craftOpen) {
+      this.craftUi.close();
+      return;
+    }
+    if (this.inEncounter || this.enacting || this.lootOpen) return;
+    this.craftOpen = true;
+    this.setGameKeys(false);
+    this.firing = false;
+    this.player.sprite.setVelocity(0, 0);
+    this.craftUi.open(this.state);
+  }
+
   private startEncounter(loc: string, situation: string, title: string): void {
     if (this.dead || this.inEncounter || this.enacting) return;
     this.inEncounter = true;
@@ -1199,6 +1235,7 @@ export class WorldScene extends Phaser.Scene {
     // R = reload the equipped gun. I = inventory/loot. ESC = menu (new run).
     kb.on("keydown-R", () => this.tryReload());
     kb.on("keydown-I", () => this.toggleLoot());
+    kb.on("keydown-C", () => this.toggleCraft());
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
