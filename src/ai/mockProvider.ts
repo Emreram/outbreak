@@ -2,6 +2,8 @@ import type { LLMProvider } from "./provider";
 import { createRng, type Rng } from "../game/rng";
 import { WEAPON_ITEMS } from "../game/inventory";
 import { rollLoot } from "../game/items/lootTables";
+import { classifyIntent } from "../game/intent";
+import type { NextInteraction } from "../shared/contracts";
 
 // Offline procedural Game Master ("the Director"). Implements LLMProvider so the
 // full AI-driven loop runs on ANY device with NO model and NO API key — the
@@ -34,26 +36,6 @@ interface TurnIn {
 const FOOD = new Set(["Canned Food", "Energy Bar", "Dried Fruit", "Snacks"]);
 const DRINK = new Set(["Water Bottle", "Soda"]);
 const MEDS = new Set(["Bandage", "Antibiotics", "Painkillers", "Antiseptic", "Saline Drip"]);
-
-type Intent =
-  | "search" | "rest" | "fight" | "flee" | "hide" | "eat" | "drink"
-  | "heal" | "talk" | "barricade" | "scout" | "free";
-
-function classify(v: string): Intent {
-  const has = (...k: string[]) => k.some((w) => v.includes(w));
-  if (has("search", "loot", "scaveng", "rummage", "ransack", "grab", "open", "raid", "look for", "find")) return "search";
-  if (has("rest", "sleep", "wait", "camp", "catch your breath", "recover", "sit")) return "rest";
-  if (has("fight", "attack", "kill", "shoot", "swing", "smash", "stab", "bash", "hit ")) return "fight";
-  if (has("flee", "run", "escape", "retreat", "sprint", "get away", "bolt")) return "flee";
-  if (has("hide", "sneak", "crouch", "quiet", "stealth", "duck", "cover")) return "hide";
-  if (has("eat", "food", "hungry")) return "eat";
-  if (has("drink", "water", "thirst")) return "drink";
-  if (has("heal", "bandage", "patch", "treat", "medicine", "first aid", "wound")) return "heal";
-  if (has("talk", "help", "trade", "greet", "approach", "call out", "negotiate", "shout")) return "talk";
-  if (has("barricade", "fortify", "board up", "block", "build", "secure", "lock")) return "barricade";
-  if (has("scout", "scan", "observe", "climb", "roof", "survey", "look around", "lookout", "peek")) return "scout";
-  return "free";
-}
 
 interface Outcome {
   narrative: string;
@@ -88,7 +70,7 @@ function turn(p: TurnIn, rng: Rng): object {
   const day = gs.day ?? 0;
   const night = gs.timeOfDay === "night" || gs.timeOfDay === "dusk";
   const hasWeapon = inv.some((i) => WEAPON_ITEMS.has(i.item));
-  const intent = classify(value);
+  const intent = classifyIntent(value);
   const careful = /quiet|sneak|careful|slow|cautious|stealth|softly/.test(value);
 
   // Danger ramps with the outbreak (day 0 is nearly calm) and spikes at night.
@@ -282,6 +264,7 @@ function turn(p: TurnIn, rng: Rng): object {
     }
   }
 
+  const built = buildInteraction(o, rng);
   return {
     narrative: o.narrative,
     state_changes: o.d,
@@ -290,28 +273,31 @@ function turn(p: TurnIn, rng: Rng): object {
     world_flags_add: o.flags,
     spawns: o.spawns,
     discovered: { name: null, type: null, x: null, y: null },
-    next_interaction: buildInteraction(o, loc, rng),
+    next_interaction: built.interaction,
     game_over: o.gameOver,
     game_over_reason: o.gameOverReason,
+    encounter_over: built.encounterOver,
   };
 }
 
-function buildInteraction(o: Outcome, loc: string, rng: Rng) {
+/**
+ * Decide the follow-up. Most turns RESOLVE and hand control straight back to
+ * exploration (encounter_over=true) — no more constant prompt chains. Only an
+ * immediate threat gets exactly ONE tense 4-choice follow-up; the engine caps
+ * the whole encounter at 2 turns regardless.
+ */
+function buildInteraction(o: Outcome, rng: Rng): { interaction: NextInteraction; encounterOver: boolean } {
   const dangerNow = o.spawns.length > 0 || o.forceChoices;
-  const useChoices = dangerNow || rng.chance(0.45);
-  if (!useChoices) {
-    return { type: "free_text", prompt: "What do you do?", options: [] as string[] };
+  if (!dangerNow) {
+    // Calm/exploration beat → done. The prompt is unused once the engine closes
+    // out, but stays schema-valid (free_text ⇒ no options).
+    return { interaction: { type: "free_text", prompt: "", options: [] }, encounterOver: true };
   }
-  const options = dangerNow
-    ? rng.pick([
-        ["Stand and fight", "Back away slowly", "Run for it", "Try to slip past"],
-        ["Swing at the nearest one", "Throw something to distract them", "Bolt for the exit", "Barricade and wait it out"],
-      ])
-    : rng.pick([
-        ["Search deeper", "Move on quietly", "Rest a moment", `Push deeper into the ${prettyLoc(loc)}`],
-        ["Scout the area", "Scavenge nearby", "Find a safe spot to hole up", "Press on"],
-      ]);
-  return { type: "choices", prompt: dangerNow ? "No time — decide." : "What's your next move?", options };
+  const options = rng.pick([
+    ["Stand and fight", "Back away slowly", "Run for it", "Try to slip past"],
+    ["Swing at the nearest one", "Throw something to distract them", "Bolt for the exit", "Barricade and wait it out"],
+  ]);
+  return { interaction: { type: "choices", prompt: "No time — decide.", options }, encounterOver: false };
 }
 
 function cleanAction(raw: string): string {

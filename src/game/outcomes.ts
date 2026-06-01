@@ -33,6 +33,7 @@ export interface ApplyResult {
   spawns: Spawn[];
   discovered?: KnownLocation;
   interaction: NextInteraction;
+  encounterOver: boolean; // GM/engine signalled the moment is resolved → free roam
 }
 
 function num(v: unknown): number {
@@ -107,6 +108,7 @@ export function sanitizeGM(raw: unknown): GMResponse {
     next_interaction: { type, prompt: str(ni.prompt) || "What do you do?", options },
     game_over: o.game_over === true,
     game_over_reason: str(o.game_over_reason),
+    encounter_over: o.encounter_over === true,
   };
 }
 
@@ -177,6 +179,7 @@ export function applyOutcome(state: GameState, gm: GMResponse): ApplyResult {
     spawns: gm.spawns,
     discovered,
     interaction: gm.next_interaction,
+    encounterOver: gm.encounter_over === true,
   };
 }
 

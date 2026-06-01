@@ -107,6 +107,9 @@ export interface GMResponse {
   next_interaction: NextInteraction;
   game_over: boolean;
   game_over_reason: string;
+  /** GM/engine signal that the moment is resolved → return to free exploration.
+   *  Optional so older/real-LLM output that omits it stays valid (treated false). */
+  encounter_over?: boolean;
 }
 
 // ---- Player input for a turn (CLAUDE.md §8.3) ----
@@ -226,6 +229,7 @@ export const GM_OUTPUT_SCHEMA = {
     },
     game_over: { type: "boolean" },
     game_over_reason: { type: "string" },
+    encounter_over: { type: "boolean" },
   },
   required: ["narrative", "state_changes", "next_interaction", "game_over"],
 };

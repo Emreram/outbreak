@@ -1,36 +1,43 @@
 import type { NextInteraction, TurnInput } from "../shared/contracts";
 
-// Encounter UI (CLAUDE.md §13 Phase 4): a DOM overlay over the Phaser canvas with
-// BOTH a free-text box and 4-choice buttons, a typewriter narrative, and a "the
-// world reacts…" spinner. DOM (not in-canvas) so the text input + tap targets work
-// well on desktop and mobile.
+// Encounter UI (CLAUDE.md §13 Phase 4). A BOTTOM-DOCKED, non-veiling bar over the
+// Phaser canvas so the world + character stay visible while you act and while the
+// action plays out (the user wants to SEE their character do it, not read a wall of
+// text). DOM (not in-canvas) so the text box + tap targets work on desktop + mobile.
+//
+// Three modes drive a SHORT, bounded encounter:
+//   openPrompt  — the opening question: situation + quick-choice buttons AND a type box.
+//   showChoices — the ONE tense follow-up when danger is drawn in: 4 choices only.
+//   showBanner  — non-blocking narration shown while the action plays out / auto-closes.
 
 export type ActionHandler = (input: TurnInput) => void;
 
 const STYLE_ID = "ob-encounter-style";
 const CSS = `
-.ob-modal{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;
-  background:rgba(4,6,9,.62);font-family:ui-monospace,Menlo,Consolas,monospace;padding:16px;box-sizing:border-box}
+.ob-modal{position:fixed;left:0;right:0;bottom:0;z-index:50;display:none;justify-content:center;
+  pointer-events:none;padding:0 12px 12px;box-sizing:border-box;
+  font-family:ui-monospace,Menlo,Consolas,monospace}
 .ob-modal.ob-show{display:flex}
-.ob-panel{width:min(580px,94vw);max-height:86vh;display:flex;flex-direction:column;gap:12px;
-  background:#0e1318;border:1px solid #2a3a4a;border-radius:12px;padding:18px 18px 16px;
-  box-shadow:0 18px 60px rgba(0,0,0,.6);color:#e8eef4}
-.ob-title{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#7fd3ff;opacity:.9}
-.ob-narr{font-size:15px;line-height:1.5;color:#e8eef4;min-height:48px;white-space:pre-wrap;overflow:auto;max-height:46vh}
+.ob-panel{pointer-events:auto;width:min(680px,96vw);max-height:48vh;display:flex;flex-direction:column;gap:10px;
+  background:rgba(14,19,24,.93);border:1px solid #2a3a4a;border-radius:12px;padding:13px 16px 14px;
+  box-shadow:0 12px 44px rgba(0,0,0,.55);color:#e8eef4;transition:opacity .3s ease}
+.ob-panel.ob-fade{opacity:0}
+.ob-title{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#7fd3ff;opacity:.9}
+.ob-narr{font-size:15px;line-height:1.45;color:#e8eef4;min-height:24px;white-space:pre-wrap;overflow:auto;max-height:30vh}
 .ob-prompt{font-size:13px;color:#9fb3c8}
-.ob-effects{font-size:12.5px;color:#bfe9ff;background:#0c1620;border:1px solid #24384a;border-radius:8px;padding:8px 10px;line-height:1.4}
+.ob-effects{font-size:12.5px;color:#bfe9ff;background:#0c1620;border:1px solid #24384a;border-radius:8px;padding:7px 10px;line-height:1.4}
 .ob-spin{display:flex;align-items:center;gap:10px;color:#9fb3c8;font-size:14px}
 .ob-dot{width:9px;height:9px;border-radius:50%;background:#7fd3ff;animation:ob-pulse 1s infinite ease-in-out}
 @keyframes ob-pulse{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1.1)}}
 .ob-choices{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 @media(max-width:460px){.ob-choices{grid-template-columns:1fr}}
 .ob-btn{appearance:none;border:1px solid #34506a;background:#16212c;color:#e8eef4;border-radius:8px;
-  padding:11px 12px;font:inherit;font-size:14px;text-align:left;cursor:pointer;transition:background .12s,border-color .12s}
+  padding:10px 12px;font:inherit;font-size:14px;text-align:left;cursor:pointer;transition:background .12s,border-color .12s}
 .ob-btn:hover{background:#1d2c39;border-color:#4a7396}
 .ob-btn:active{background:#24384a}
 .ob-row{display:flex;gap:8px}
 .ob-input{flex:1;min-width:0;background:#0a0f14;border:1px solid #34506a;border-radius:8px;color:#e8eef4;
-  padding:11px 12px;font:inherit;font-size:14px}
+  padding:10px 12px;font:inherit;font-size:14px}
 .ob-input:focus{outline:none;border-color:#7fd3ff}
 .ob-send{background:#1f6feb;border:none;color:#fff;border-radius:8px;padding:0 16px;font:inherit;font-weight:600;cursor:pointer}
 .ob-send:hover{background:#2a7bff}
@@ -42,6 +49,7 @@ const CSS = `
 
 export class EncounterModal {
   private readonly root: HTMLDivElement;
+  private readonly panel: HTMLDivElement;
   private readonly titleEl: HTMLDivElement;
   private readonly narrEl: HTMLDivElement;
   private readonly effectsEl: HTMLDivElement;
@@ -57,9 +65,10 @@ export class EncounterModal {
   private onAction?: ActionHandler;
   private onLeave?: () => void;
   private typeTimer?: ReturnType<typeof setInterval>;
+  private dismissTimer?: ReturnType<typeof setTimeout>;
   private fullText = "";
   private opened = false;
-  private locked = true; // no input accepted until showResult reveals it (anti double-submit/skip)
+  private locked = true; // no input accepted until a prompt reveals it (anti double-submit/skip)
   private revealedAt = 0; // when the current prompt's input became live (arm window)
 
   constructor() {
@@ -71,7 +80,7 @@ export class EncounterModal {
     }
 
     this.root = el("div", "ob-modal");
-    const panel = el("div", "ob-panel");
+    this.panel = el("div", "ob-panel");
     this.titleEl = el("div", "ob-title");
     this.narrEl = el("div", "ob-narr");
     this.effectsEl = el("div", "ob-effects");
@@ -88,7 +97,7 @@ export class EncounterModal {
     this.inputEl = document.createElement("input");
     this.inputEl.className = "ob-input";
     this.inputEl.type = "text";
-    this.inputEl.placeholder = "Type anything you want to do…";
+    this.inputEl.placeholder = "…or type anything you want to do";
     this.inputEl.autocomplete = "off";
     const send = document.createElement("button");
     send.className = "ob-send";
@@ -107,7 +116,7 @@ export class EncounterModal {
     this.rowEl.append(this.inputEl, send);
 
     this.tipEl = el("div", "ob-tip");
-    this.tipEl.textContent = "Free text — describe any action, then press Enter.";
+    this.tipEl.textContent = "Pick an action, or type your own — then it plays out.";
 
     this.leaveEl = document.createElement("button");
     this.leaveEl.className = "ob-leave";
@@ -117,7 +126,7 @@ export class EncounterModal {
     // Click the narrative to skip the typewriter.
     this.narrEl.addEventListener("click", () => this.finishTyping());
 
-    panel.append(
+    this.panel.append(
       this.titleEl,
       this.narrEl,
       this.effectsEl,
@@ -128,7 +137,7 @@ export class EncounterModal {
       this.tipEl,
       this.leaveEl,
     );
-    this.root.append(panel);
+    this.root.append(this.panel);
     document.body.appendChild(this.root);
   }
 
@@ -141,11 +150,13 @@ export class EncounterModal {
     this.onLeave = onLeave;
   }
 
-  /** Show the modal in the "thinking" state while the GM resolves a turn. */
+  /** Spinner while a real GM resolves a turn (offline GM is instant — harmless). */
   openLoading(title = "Encounter", message?: string): void {
+    this.cancelDismiss();
     this.opened = true;
-    this.locked = true; // ignore any stray input/Enter while the GM is resolving
+    this.locked = true; // ignore stray input/Enter while resolving
     this.titleEl.textContent = title;
+    this.titleEl.classList.remove("ob-hidden");
     this.spinTextEl.textContent = message ?? "the world reacts…";
     this.root.classList.add("ob-show");
     this.clearTyping();
@@ -155,32 +166,114 @@ export class EncounterModal {
     this.choicesEl.classList.add("ob-hidden");
     this.rowEl.classList.add("ob-hidden");
     this.tipEl.classList.add("ob-hidden");
+    this.leaveEl.classList.add("ob-hidden");
     this.spinEl.classList.remove("ob-hidden");
   }
 
   /**
-   * Render a resolved outcome. The prompt, effects line, and input/choices are
-   * revealed IMMEDIATELY (so your keystrokes always land and nothing can race the
-   * reveal); the narrative then types out purely as cosmetic animation.
+   * Opening question when an event triggers: a situational line plus a few quick
+   * contextual actions AND a free-text box ("…or type your own"). Zero-latency —
+   * no GM call until the player answers.
    */
-  showResult(narrative: string, interaction: NextInteraction, effects = ""): void {
+  openPrompt(title: string, narrative: string, quickChoices: string[]): void {
+    this.cancelDismiss();
     this.opened = true;
     this.root.classList.add("ob-show");
     this.spinEl.classList.add("ob-hidden");
+    this.titleEl.textContent = title;
+    this.titleEl.classList.remove("ob-hidden");
+    this.effectsEl.classList.add("ob-hidden");
+    this.promptEl.textContent = "What do you do?";
+    this.promptEl.classList.remove("ob-hidden");
+    this.renderChoices(quickChoices);
+    this.showInputRow();
+    this.leaveEl.classList.remove("ob-hidden");
+    this.revealedAt = performance.now();
+    this.locked = false;
+    this.inputEl.focus();
+    this.typewriter(narrative);
+  }
 
+  /** The single tense follow-up when danger is drawn in: 4 choices, no free-text. */
+  showChoices(narrative: string, interaction: NextInteraction, effects = ""): void {
+    this.cancelDismiss();
+    this.opened = true;
+    this.root.classList.add("ob-show");
+    this.spinEl.classList.add("ob-hidden");
+    this.titleEl.classList.remove("ob-hidden");
+    this.setEffects(effects);
+    this.promptEl.textContent = interaction.prompt || "What do you do?";
+    this.promptEl.classList.remove("ob-hidden");
+    this.renderChoices(interaction.options);
+    this.rowEl.classList.add("ob-hidden");
+    this.tipEl.classList.add("ob-hidden");
+    this.leaveEl.classList.remove("ob-hidden");
+    // The narrative already typed out in the banner during the enact beat — show it
+    // whole (no jarring re-type) and just reveal the choices.
+    this.clearTyping();
+    this.fullText = narrative;
+    this.narrEl.textContent = narrative;
+    this.revealedAt = performance.now();
+    this.locked = false;
+  }
+
+  /** Non-blocking narration while the action plays out / as the encounter closes. */
+  showBanner(narrative: string, effects = ""): void {
+    this.cancelDismiss();
+    this.opened = true;
+    this.locked = true;
+    this.root.classList.add("ob-show");
+    this.panel.classList.remove("ob-fade");
+    this.spinEl.classList.add("ob-hidden");
+    this.titleEl.classList.remove("ob-hidden");
+    this.setEffects(effects);
+    this.promptEl.classList.add("ob-hidden");
+    this.choicesEl.classList.add("ob-hidden");
+    this.rowEl.classList.add("ob-hidden");
+    this.tipEl.classList.add("ob-hidden");
+    this.leaveEl.classList.add("ob-hidden");
+    this.typewriter(narrative);
+  }
+
+  /** Fade the bar out after a delay (so the closing narration reads), then hide. */
+  dismissSoon(ms = 1500): void {
+    this.cancelDismiss();
+    this.dismissTimer = setTimeout(() => {
+      this.panel.classList.add("ob-fade");
+      this.dismissTimer = setTimeout(() => this.close(), 320);
+    }, Math.max(0, ms - 320));
+  }
+
+  close(): void {
+    this.cancelDismiss();
+    this.opened = false;
+    this.locked = true;
+    this.clearTyping();
+    this.panel.classList.remove("ob-fade");
+    this.root.classList.remove("ob-show");
+  }
+
+  destroy(): void {
+    this.cancelDismiss();
+    this.clearTyping();
+    this.root.remove();
+  }
+
+  // --- internals ---
+
+  private setEffects(effects: string): void {
     if (effects) {
       this.effectsEl.textContent = effects;
       this.effectsEl.classList.remove("ob-hidden");
     } else {
       this.effectsEl.classList.add("ob-hidden");
     }
+  }
 
-    this.promptEl.textContent = interaction.prompt;
-    this.promptEl.classList.remove("ob-hidden");
-
+  private renderChoices(options: string[]): void {
     this.choicesEl.innerHTML = "";
-    if (interaction.type === "choices" && interaction.options.length > 0) {
-      for (const opt of interaction.options) {
+    if (options.length > 0) {
+      for (const opt of options) {
         const b = document.createElement("button");
         b.className = "ob-btn";
         b.textContent = opt;
@@ -188,35 +281,24 @@ export class EncounterModal {
         this.choicesEl.appendChild(b);
       }
       this.choicesEl.classList.remove("ob-hidden");
-      this.rowEl.classList.add("ob-hidden");
-      this.tipEl.classList.add("ob-hidden");
     } else {
       this.choicesEl.classList.add("ob-hidden");
-      this.inputEl.value = "";
-      this.rowEl.classList.remove("ob-hidden");
-      this.tipEl.classList.remove("ob-hidden");
     }
-
-    this.revealedAt = performance.now();
-    this.locked = false; // accept exactly one submission now
-    if (interaction.type !== "choices") this.inputEl.focus();
-
-    this.typewriter(narrative); // cosmetic; click narrative to finish it
   }
 
-  close(): void {
-    this.opened = false;
-    this.locked = true;
-    this.clearTyping();
-    this.root.classList.remove("ob-show");
+  private showInputRow(): void {
+    this.inputEl.value = "";
+    this.rowEl.classList.remove("ob-hidden");
+    this.tipEl.classList.remove("ob-hidden");
   }
 
-  destroy(): void {
-    this.clearTyping();
-    this.root.remove();
+  private cancelDismiss(): void {
+    if (this.dismissTimer) {
+      clearTimeout(this.dismissTimer);
+      this.dismissTimer = undefined;
+    }
+    this.panel.classList.remove("ob-fade");
   }
-
-  // --- internals ---
 
   private submitText(): void {
     if (this.locked) return; // one submission per prompt; no skipping/double-advance
@@ -244,6 +326,7 @@ export class EncounterModal {
     this.rowEl.classList.add("ob-hidden");
     this.tipEl.classList.add("ob-hidden");
     this.promptEl.classList.add("ob-hidden");
+    this.leaveEl.classList.add("ob-hidden");
   }
 
   private typewriter(full: string): void {
