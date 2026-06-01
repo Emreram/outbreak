@@ -14,11 +14,11 @@ export const SURVIVOR_NPC_KEY = "survivor_npc";
 
 // CC0 character assets served from /public (loaded in BootScene). If a load
 // fails, the generators below provide a placeholder for that key. The terrain
-// tileset is intentionally NOT here — it is always generated (see above).
+// tileset is intentionally NOT here — it is always generated (see above). The
+// player + survivor NPC are now drawn procedurally (detailed top-down sprites),
+// so they're generated rather than loaded; only the zombie keeps a CC0 fallback.
 export const ASSET_PATHS: Readonly<Record<string, string>> = {
-  [PLAYER_KEY]: "assets/characters/survivor.png",
   [ZOMBIE_KEY]: "assets/characters/zombie.png",
-  [SURVIVOR_NPC_KEY]: "assets/characters/survivor_npc.png",
 };
 
 // One colour per Tile enum value. Order in TILE_ORDER below must match the enum
@@ -183,21 +183,126 @@ function drawTileMotif(
   }
 }
 
-/** Generate the placeholder player sprite: a coloured disc with a facing dot. */
-export function generatePlayerTexture(scene: Phaser.Scene, size: number): void {
+// --- top-down survivor characters (hand-drawn, canvas) ----------------------
+// A detailed overhead survivor — shoulders + jacket, backpack, arms reaching
+// forward, a head with hair, and a soft shadow — facing +x so the engine's
+// movement-rotation lines up. Used for the PLAYER and survivor NPCs (different
+// palettes) in place of the old flat placeholder discs / crude CC0 blobs.
+
+const CHAR_SIZE = 40;
+
+interface SurvivorPalette {
+  jacket: number;
+  skin: number;
+  hair: number;
+  pack: number;
+  armed?: boolean; // draw a slung rifle (NPCs); the player has a live weapon overlay
+}
+
+function hx(c: number): string {
+  return "#" + (c & 0xffffff).toString(16).padStart(6, "0");
+}
+function rgbf(c: number, f: number): string {
+  const r = Math.min(255, Math.round(((c >> 16) & 255) * f));
+  const g = Math.min(255, Math.round(((c >> 8) & 255) * f));
+  const b = Math.min(255, Math.round((c & 255) * f));
+  return `rgb(${r},${g},${b})`;
+}
+function disc(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 7);
+  ctx.fill();
+}
+function oval(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, ry: number): void {
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, 7);
+  ctx.fill();
+}
+
+function drawSurvivorCanvas(p: SurvivorPalette): HTMLCanvasElement {
+  const S = CHAR_SIZE;
+  const C = S / 2;
+  const cv = document.createElement("canvas");
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return cv;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  // soft drop shadow
+  ctx.fillStyle = "rgba(0,0,0,0.22)";
+  oval(ctx, C, C + 9, 13, 6);
+
+  // backpack behind (−x)
+  ctx.fillStyle = hx(p.pack);
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.rect(C - 13, C - 7, 9, 14);
+  ctx.fill();
+  ctx.stroke();
+
+  // arms reaching forward (+x)
+  ctx.strokeStyle = rgbf(p.jacket, 0.82);
+  ctx.lineWidth = 5;
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(C - 2, C + s * 7);
+    ctx.lineTo(C + 9, C + s * 5);
+    ctx.stroke();
+  }
+  // hands
+  ctx.fillStyle = hx(p.skin);
+  for (const s of [-1, 1]) disc(ctx, C + 9, C + s * 5, 2.2);
+
+  // torso / jacket (broad shoulders perpendicular to facing)
+  ctx.fillStyle = hx(p.jacket);
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = 1.5;
+  oval(ctx, C - 1, C, 9, 11);
+  ctx.stroke();
+  // zipper seam + shoulder highlight
+  ctx.strokeStyle = rgbf(p.jacket, 1.2);
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(C - 1, C - 9);
+  ctx.lineTo(C - 1, C + 9);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  oval(ctx, C - 2, C - 4, 6, 3.5);
+
+  // slung rifle (armed survivors)
+  if (p.armed) {
+    ctx.strokeStyle = "#23262b";
+    ctx.lineWidth = 2.6;
+    ctx.beginPath();
+    ctx.moveTo(C - 6, C + 9);
+    ctx.lineTo(C + 12, C - 4);
+    ctx.stroke();
+  }
+
+  // head (front, +x): hair cap from above, then face
+  ctx.fillStyle = hx(p.hair);
+  disc(ctx, C + 7, C, 6.4);
+  ctx.fillStyle = hx(p.skin);
+  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+  ctx.lineWidth = 1.2;
+  disc(ctx, C + 8.6, C, 4.8);
+  ctx.stroke();
+
+  return cv;
+}
+
+/** The player survivor — olive jacket, no slung rifle (a live weapon overlays it). */
+export function generatePlayerTexture(scene: Phaser.Scene, _size: number): void {
   if (scene.textures.exists(PLAYER_KEY)) return;
+  scene.textures.addCanvas(PLAYER_KEY, drawSurvivorCanvas({ jacket: 0x5b6b52, skin: 0xc89a6a, hair: 0x3a2c1e, pack: 0x6e5a3a }));
+}
 
-  const g = scene.make.graphics({ x: 0, y: 0 }, false);
-  const c = size / 2;
-  const r = size * 0.4;
-
-  g.fillStyle(0x10141a, 1); // dark outline ring
-  g.fillCircle(c, c, r + 1.5);
-  g.fillStyle(0x2ec4ff, 1); // body
-  g.fillCircle(c, c, r);
-  g.fillStyle(0x0b2f3d, 1); // small "front" marker (points up by default)
-  g.fillCircle(c, c - r * 0.45, r * 0.22);
-
-  g.generateTexture(PLAYER_KEY, size, size);
-  g.destroy();
+/** Survivor NPC — light neutral so the scene's faction tint (cyan/green) reads;
+ *  armed so they look like fighters. */
+export function generateSurvivorNpcTexture(scene: Phaser.Scene): void {
+  if (scene.textures.exists(SURVIVOR_NPC_KEY)) return;
+  scene.textures.addCanvas(SURVIVOR_NPC_KEY, drawSurvivorCanvas({ jacket: 0x9aa0a8, skin: 0xd0a878, hair: 0x2e2722, pack: 0x4a4f57, armed: true }));
 }

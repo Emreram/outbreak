@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { TILE_SIZE } from "../game/constants";
-import { ASSET_PATHS, generatePlayerTexture, generateTileTexture } from "../engine/textures";
+import { ASSET_PATHS, generatePlayerTexture, generateSurvivorNpcTexture, generateTileTexture } from "../engine/textures";
 import { loadGeneratedAssets } from "../engine/assets";
 import { generatePropTextures } from "../engine/propSprites";
 import { generateFxTextures } from "../engine/fx";
@@ -28,6 +28,7 @@ export class BootScene extends Phaser.Scene {
   async create(): Promise<void> {
     generateTileTexture(this, TILE_SIZE);
     generatePlayerTexture(this, TILE_SIZE);
+    generateSurvivorNpcTexture(this);
     generatePropTextures(this);
     generateFxTextures(this);
     generateAllIcons(this);
