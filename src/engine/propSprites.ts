@@ -156,6 +156,24 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x2f6b34, 1).fillRect(14, 9, 2, 15);
     g.fillStyle(0xffffff, 1).fillCircle(11, 10, 3).fillCircle(19, 10, 3).fillCircle(15, 6, 3);
   },
+
+  // --- wild animals (Feature 6), top-down ---
+  animal_rabbit: (g) => {
+    g.fillStyle(0xd8c8b0, 1).fillEllipse(15, 17, 11, 8);
+    g.fillStyle(0xcabfa8, 1).fillRect(18, 8, 2, 7).fillRect(21, 8, 2, 7);
+    g.fillStyle(0xffffff, 1).fillCircle(10, 18, 2);
+  },
+  animal_deer: (g) => {
+    g.fillStyle(0xa97a4a, 1).fillEllipse(14, 16, 15, 9);
+    g.fillStyle(0x8a5f38, 1).fillCircle(23, 14, 3);
+    g.fillStyle(0xe8d8c0, 1).fillEllipse(9, 18, 5, 3);
+    g.lineStyle(1, 0x6b4a2a, 1).lineBetween(25, 12, 27, 8).lineBetween(25, 12, 23, 8);
+  },
+  animal_boar: (g) => {
+    g.fillStyle(0x6b5236, 1).fillEllipse(15, 16, 16, 10);
+    g.fillStyle(0x4a3826, 1).fillCircle(24, 15, 4);
+    g.fillStyle(0xe8e8e8, 1).fillRect(27, 13, 2, 1).fillRect(27, 16, 2, 1);
+  },
 };
 
 export function generatePropTextures(scene: Phaser.Scene): void {
