@@ -20,6 +20,8 @@ export class Player {
   private facing = 0; // radians; Kenney top-down sprites default-face east (+x)
   private walkT = 0; // walk-bob phase accumulator
   private _sprinting = false;
+  /** Movement multiplier — 1 on foot, raised while driving a vehicle (Feature 4). */
+  speedMult = 1;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
@@ -71,7 +73,7 @@ export class Player {
     const len = Math.hypot(vx, vy);
     const sprint = len > 0 && canSprint && (this.cursors.shift.isDown || ext?.sprint === true);
     this._sprinting = sprint;
-    const speed = sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED;
+    const speed = (sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED) * this.speedMult;
 
     // Normalise so diagonals aren't faster.
     if (len > 0) {
