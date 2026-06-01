@@ -29,7 +29,7 @@ import {
 } from "../engine/icons";
 import { applyOutcome, type ApplyResult } from "../game/outcomes";
 import { classifyIntent, type Intent } from "../game/intent";
-import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
+import { nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
 import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
 import type { ColliderSpec } from "../engine/ChunkRenderer";
@@ -101,7 +101,6 @@ export class WorldScene extends Phaser.Scene {
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private ambientAcc = 0;
   private ambientDelay = 30000;
-  private currentBuildingId: string | null = null;
   private aiNoticeShown = false; // show the "AI offline" toast at most once per run
   private nightOverlay!: Phaser.GameObjects.Rectangle;
   private segAcc = 0;
@@ -144,7 +143,6 @@ export class WorldScene extends Phaser.Scene {
     this.enemies = [];
     this.ambientAcc = 0;
     this.ambientDelay = 30000; // set properly once state/day is known (below)
-    this.currentBuildingId = null;
     this.aiNoticeShown = false;
     this.segAcc = 0;
     this.kills = 0;
@@ -374,7 +372,6 @@ export class WorldScene extends Phaser.Scene {
       this.chunks.ensureAround(this.player.sprite.x, this.player.sprite.y);
       this.tickClouds(time);
       this.updateEnemies(time);
-      this.checkBuildingTrigger();
 
       if (this.player.isMoving() && time - this.lastStep > 300) {
         this.lastStep = time;
@@ -415,12 +412,13 @@ export class WorldScene extends Phaser.Scene {
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
     this.updateWeaponSprite();
 
-    // Contextual "Press E" hint (chest > building) when free to act.
+    // Contextual "Press E" hint (chest > building) — encounters are opt-in, so this
+    // is the invitation to engage; exploring never forces one.
     if (!this.dead && !this.inEncounter) {
       const chest = this.nearestChest(42);
       const near = chest ? null : this.buildingAt();
       if (chest) this.hintText.setText("Press E to open the chest").setVisible(true);
-      else if (near) this.hintText.setText(`Press E to enter the ${near.type.replace(/_/g, " ")}`).setVisible(true);
+      else if (near) this.hintText.setText(`Press E to search the ${near.type.replace(/_/g, " ")}`).setVisible(true);
       else this.hintText.setVisible(false);
     } else {
       this.hintText.setVisible(false);
@@ -755,20 +753,8 @@ export class WorldScene extends Phaser.Scene {
     return this.chunks.buildingAt(tx, ty);
   }
 
-  /** Entering a building fires a one-time GM encounter (then it stays "cleared"). */
-  private checkBuildingTrigger(): void {
-    const b = this.buildingAt();
-    const gid = b ? b.gid : null;
-    if (gid === this.currentBuildingId) return;
-    this.currentBuildingId = gid;
-    if (b && !this.state.worldFlags.includes(buildingEnteredFlag(b.gid))) {
-      this.state.worldFlags.push(buildingEnteredFlag(b.gid));
-      const name = b.type.replace(/_/g, " ");
-      this.startEncounter(b.type, `You slip inside the ${name}, staying low — it's dim and still.`, name);
-    }
-  }
-
-  /** Press E to act on the current surroundings. */
+  /** Press E to act on the current surroundings. Encounters are OPT-IN — exploring
+   *  never forces a prompt; you engage the AI Game Master only when you choose to. */
   private tryInteract(): void {
     const chest = this.nearestChest(42);
     if (chest) {
@@ -1500,17 +1486,11 @@ export class WorldScene extends Phaser.Scene {
     deathFade(this, e.sprite); // fades + spins out, then destroys the sprite
   }
 
-  /** Open the run with its AI-authored scenario intro; first action goes to the GM. */
+  /** Open the run with its AI-authored scenario as a NON-blocking banner — you can
+   *  read it while already free to move and explore (no forced first prompt). */
   private showIntro(intro: string): void {
-    this.inEncounter = true;
-    this.enacting = false;
-    this.encounterTurns = 0;
-    this.setGameKeys(false);
-    this.player.sprite.setVelocity(0, 0);
-    this.freezeEnemies();
-    const b = this.buildingAt();
-    this.encounterLoc = b ? b.type : this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
-    this.modal.openPrompt(this.state.player.name, intro, this.openingChoicesFor(this.encounterLoc));
+    this.modal.showBanner(intro, "");
+    this.modal.dismissSoon(9000);
   }
 
   private persist(): void {
