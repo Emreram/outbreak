@@ -982,6 +982,34 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  /** Rest/sleep (Z): pass time, recover stamina, at the cost of food/water and a
+   *  real chance of waking to the dead. Can't rest with enemies close. */
+  private restAction(): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen) return;
+    if (this.nearestEnemy(150)) {
+      this.showToast("Too dangerous to rest here");
+      return;
+    }
+    this.advanceClock();
+    this.advanceClock(); // ~2 segments pass (crops grow, weather may shift)
+    this.state.player.stamina = clampStat(100);
+    this.state.player.hunger = clampStat(this.state.player.hunger - 8);
+    this.state.player.thirst = clampStat(this.state.player.thirst - 10);
+    if (isDead(this.state)) {
+      this.enterDeath();
+      return;
+    }
+    if (liveRng.chance(0.3)) {
+      this.spawnNear([{ type: this.isNight() ? "zombie_runner" : "zombie", count: Phaser.Math.Between(1, 2) }]);
+      this.showToast("You wake to shuffling nearby…");
+    } else {
+      this.showToast("You rest and catch your breath.");
+    }
+    this.grantXp("fitness", 2);
+    this.hud.update(this.state, this.debugInfo());
+    this.persist();
+  }
+
   private toggleCraft(): void {
     if (this.dead) return;
     if (this.craftOpen) {
@@ -1273,6 +1301,7 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-R", () => this.tryReload());
     kb.on("keydown-I", () => this.toggleLoot());
     kb.on("keydown-C", () => this.toggleCraft());
+    kb.on("keydown-Z", () => this.restAction());
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
