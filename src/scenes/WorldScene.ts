@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { FarmPlot, GameState, GMResponse, Spawn, TurnInput, Vehicle } from "../shared/contracts";
+import type { FarmPlot, GameState, GMResponse, Placeable, Spawn, TurnInput, Vehicle } from "../shared/contracts";
 import { Tile, type Building } from "../game/worldgen";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
 import {
@@ -15,6 +15,16 @@ import {
   FUEL_MAX,
   FUEL_PER_CAN,
 } from "../game/vehicles";
+import {
+  BUILD_ORDER,
+  buildPlaceable,
+  canAfford,
+  claimBase,
+  damagePlaceable,
+  isBaseClaimed,
+  placeableAt,
+  placeableDef,
+} from "../game/base";
 import { isWet, rollWeather } from "../game/weather";
 import { addXp, SKILL_NAMES, type SkillId } from "../game/skills";
 import { propKey } from "../engine/propSprites";
@@ -63,6 +73,7 @@ import { HotBar } from "../ui/HotBar";
 import { EncounterModal } from "../ui/EncounterModal";
 import { LootModal } from "../ui/LootModal";
 import { CraftModal } from "../ui/CraftModal";
+import { StorageModal } from "../ui/StorageModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
@@ -75,6 +86,15 @@ interface ActiveVehicle {
   type: string;
   sprite: Phaser.GameObjects.Image;
   data: Vehicle;
+}
+
+/** A streamed, player-built structure sprite + its live persisted HP (Feature 7).
+ *  Blocking kinds carry a static physics body (added to placeGroup) so they fortify. */
+interface ActivePlaceable {
+  gid: string;
+  kind: string;
+  sprite: Phaser.GameObjects.Image;
+  data: Placeable;
 }
 
 interface ProjData {
@@ -99,6 +119,7 @@ interface ProjData {
 
 const DECAY_MS = 2000;
 const SAVE_MS = 4000;
+const SIEGE_MS = 600; // how often zombies gnaw at adjacent barricades / spikes wound them
 const PHASES = ["dawn", "day", "dusk", "night"] as const;
 const SEG_MS = 45000; // real seconds per time-of-day segment
 
@@ -171,6 +192,18 @@ export class WorldScene extends Phaser.Scene {
   private vehiclesDirty = false; // force a reconcile after repair/fuel/park
   private lastVehCx = NaN;
   private lastVehCy = NaN;
+  // Base building (Feature 7): streamed placeable sprites + blocking static bodies.
+  private readonly placeableSprites = new Map<string, ActivePlaceable>();
+  private placeGroup!: Phaser.Physics.Arcade.StaticGroup;
+  private placeablesDirty = false;
+  private lastPlCx = NaN;
+  private lastPlCy = NaN;
+  private buildMode = false;
+  private buildIdx = 0;
+  private buildGhost?: Phaser.GameObjects.Image;
+  private siegeAcc = 0;
+  private storeUi!: StorageModal;
+  private storeOpen = false;
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -215,6 +248,17 @@ export class WorldScene extends Phaser.Scene {
     this.vehiclesDirty = false;
     this.lastVehCx = NaN;
     this.lastVehCy = NaN;
+    for (const ap of this.placeableSprites.values()) ap.sprite.destroy();
+    this.placeableSprites.clear();
+    this.placeablesDirty = false;
+    this.lastPlCx = NaN;
+    this.lastPlCy = NaN;
+    this.buildMode = false;
+    this.buildIdx = 0;
+    this.buildGhost?.destroy();
+    this.buildGhost = undefined;
+    this.siegeAcc = 0;
+    this.storeOpen = false;
     this.weatherRect = undefined; // re-created on the fresh uiLayer below
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
@@ -232,6 +276,7 @@ export class WorldScene extends Phaser.Scene {
     this.projectileGroup = this.physics.add.group();
     this.enemyProjGroup = this.physics.add.group();
     this.itemGroup = this.physics.add.group();
+    this.placeGroup = this.physics.add.staticGroup(); // blocking placeables (Feature 7)
 
     const collide: ColliderSpec[] = [];
     this.chunks = new ChunkManager(this, this.state.seed, {
@@ -288,6 +333,12 @@ export class WorldScene extends Phaser.Scene {
     this.physics.add.overlap(this.projectileGroup, this.enemyGroup, (a, b) => this.onProjectileHit(a, b));
     this.physics.add.overlap(this.projectileGroup, this.animalGroup, (a, b) => this.onProjAnimal(a, b));
     this.physics.add.overlap(this.player.sprite, this.enemyProjGroup, (_p, pr) => this.onEnemyProjHit(pr));
+    // Blocking placeables (barricades/walls/gates) physically fortify: the player,
+    // zombies, and animals all collide with them (Feature 7). The siege tick wears
+    // them down as zombies press against them.
+    this.physics.add.collider(this.player.sprite, this.placeGroup);
+    this.physics.add.collider(this.enemyGroup, this.placeGroup);
+    this.physics.add.collider(this.animalGroup, this.placeGroup);
     this.physics.add.overlap(this.player.sprite, this.itemGroup, (_p, item) =>
       this.pickupDrop(item as unknown as Phaser.Physics.Arcade.Image),
     );
@@ -295,6 +346,7 @@ export class WorldScene extends Phaser.Scene {
     // Stream the initial ring of chunks (and their chests) around the spawn.
     this.chunks.ensureAround(startX, startY);
     this.reconcileVehicles(true); // place any cars in the opening view
+    this.reconcilePlaceables(true); // restore any built structures in the opening view
 
     // Day/night tint: a flat darkening rect kept on the MAIN camera (below the
     // player glow at depth 520) so the additive flashlight glow still cuts through
@@ -406,6 +458,17 @@ export class WorldScene extends Phaser.Scene {
         this.setGameKeys(true);
       },
     );
+    this.storeUi = new StorageModal();
+    this.storeUi.setHandlers(
+      () => {
+        this.hud.update(this.state, this.debugInfo());
+        this.persist();
+      },
+      () => {
+        this.storeOpen = false;
+        this.setGameKeys(true);
+      },
+    );
     this.touch = new TouchControls();
     this.touch.setHandlers(
       () => this.tryInteract(),
@@ -418,8 +481,12 @@ export class WorldScene extends Phaser.Scene {
     // Desktop: hold left mouse to fire the equipped gun toward the cursor.
     this.input.on("pointerdown", this.onPointerDown, this);
     this.input.on("pointerup", this.onPointerUp, this);
-    // Scroll wheel cycles the highlighted quick-use slot (skipping empties).
-    this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => this.cycleQuick(dy > 0 ? 1 : -1));
+    // Scroll wheel cycles the highlighted quick-use slot (or the build palette while
+    // in build mode).
+    this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => {
+      if (this.buildMode) this.cycleBuild(dy > 0 ? 1 : -1);
+      else this.cycleQuick(dy > 0 ? 1 : -1);
+    });
 
     // Stop the page from scrolling / middle-click autoscroll over the canvas so the
     // wheel drives the hotbar cleanly.
@@ -438,6 +505,7 @@ export class WorldScene extends Phaser.Scene {
       this.modal.destroy();
       this.loot.destroy();
       this.craftUi.destroy();
+      this.storeUi.destroy();
       this.touch.destroy();
       this.chunks.destroy();
       this.persist();
@@ -459,8 +527,8 @@ export class WorldScene extends Phaser.Scene {
 
   override update(time: number, delta: number): void {
     // The world pauses during an encounter, while an outcome is playing out, or
-    // while the loot/craft screens are open.
-    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen) {
+    // while the loot/craft/storage screens are open.
+    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen && !this.storeOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
       if (time < this.grabbedUntil) {
@@ -473,10 +541,18 @@ export class WorldScene extends Phaser.Scene {
       }
       this.chunks.ensureAround(this.player.sprite.x, this.player.sprite.y);
       this.reconcileVehicles();
+      this.reconcilePlaceables();
       if (this.driving) this.driveTick(delta);
+      if (this.buildMode) this.updateBuildGhost();
       this.tickClouds(time);
       this.updateEnemies(time);
       this.updateAnimals(time);
+
+      this.siegeAcc += delta;
+      if (this.siegeAcc >= SIEGE_MS) {
+        this.siegeAcc -= SIEGE_MS;
+        this.tickSiege();
+      }
 
       if (this.player.isMoving() && time - this.lastStep > 300) {
         this.lastStep = time;
@@ -524,20 +600,24 @@ export class WorldScene extends Phaser.Scene {
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
     this.updateWeaponSprite();
 
-    // Contextual "Press E" hint (driving > vehicle > chest > farm > building) —
-    // encounters are opt-in, so this is the invitation to engage; exploring never
+    // Contextual hint (build > driving > vehicle > storage > chest > farm > building)
+    // — encounters are opt-in, so this is the invitation to engage; exploring never
     // forces one.
-    if (!this.dead && this.driving) {
+    if (!this.dead && this.buildMode) {
+      this.hintText.setText(this.buildHint()).setVisible(true);
+    } else if (!this.dead && this.driving) {
       this.hintText.setText(`Driving — Fuel ${Math.ceil(this.driving.data.fuel)}%  ·  Press E to park`).setVisible(true);
     } else if (!this.dead && !this.inEncounter) {
       const veh = this.nearestVehicle(52);
-      const chest = veh ? null : this.nearestChest(42);
-      const farm = veh || chest ? null : this.farmHint();
-      const near = veh || chest || farm ? null : this.buildingAt();
+      const store = veh ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
+      const chest = veh || store ? null : this.nearestChest(42);
+      const farm = veh || store || chest ? null : this.farmHint();
+      const near = veh || store || chest || farm ? null : this.buildingAt();
       if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
+      else if (store) this.hintText.setText("Press E to open base storage").setVisible(true);
       else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
       else if (farm) this.hintText.setText(farm).setVisible(true);
-      else if (near) this.hintText.setText(`Press E to search the ${near.type.replace(/_/g, " ")}`).setVisible(true);
+      else if (near) this.hintText.setText(this.buildingHint(near)).setVisible(true);
       else this.hintText.setVisible(false);
     } else {
       this.hintText.setVisible(false);
@@ -548,7 +628,7 @@ export class WorldScene extends Phaser.Scene {
       const first = quickUseItems(this.state).findIndex((q) => q); // keep the cursor on a usable slot
       if (first >= 0) this.selectedQuick = first;
     }
-    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen, this.selectedQuick);
+    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen && !this.storeOpen, this.selectedQuick);
   }
 
   private updateObjective(): void {
@@ -989,9 +1069,18 @@ export class WorldScene extends Phaser.Scene {
       this.exitVehicle();
       return;
     }
+    if (this.buildMode) {
+      this.placeBuildable(); // E places the selected structure
+      return;
+    }
     const veh = this.nearestVehicle(52);
     if (veh) {
       this.tryVehicleAction(veh);
+      return;
+    }
+    const store = this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
+    if (store) {
+      this.openStorage();
       return;
     }
     const chest = this.nearestChest(42);
@@ -1329,13 +1418,260 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  // --- base building (Feature 7): claim → build → siege → storage -------------
+
+  /** Stream built-structure sprites + static bodies in/out as the player crosses
+   *  chunks (placeables are all player-built, so "wanted" is simply the persisted
+   *  list filtered to in-range chunks). */
+  private reconcilePlaceables(force = false): void {
+    const { cx, cy } = this.playerChunk();
+    if (!force && !this.placeablesDirty && cx === this.lastPlCx && cy === this.lastPlCy) return;
+    this.lastPlCx = cx;
+    this.lastPlCy = cy;
+    this.placeablesDirty = false;
+    const R = CHUNK_LOAD_RADIUS;
+    const wanted = new Map<string, Placeable>();
+    for (const p of this.state.placeables ?? []) {
+      const pcx = Math.floor(p.tx / CHUNK_TILES);
+      const pcy = Math.floor(p.ty / CHUNK_TILES);
+      if (Math.abs(pcx - cx) <= R && Math.abs(pcy - cy) <= R) wanted.set(p.gid, p);
+    }
+    for (const [gid, ap] of [...this.placeableSprites]) {
+      if (!wanted.has(gid)) this.destroyPlaceableSprite(ap);
+    }
+    for (const [gid, p] of wanted) {
+      const ex = this.placeableSprites.get(gid);
+      if (ex) ex.data = p;
+      else this.spawnPlaceableSprite(p);
+    }
+  }
+
+  private spawnPlaceableSprite(p: Placeable): ActivePlaceable {
+    const def = placeableDef(p.kind);
+    const x = (p.tx + 0.5) * TILE_SIZE;
+    const y = (p.ty + 0.5) * TILE_SIZE;
+    const key = propKey(`base_${p.kind}`);
+    const tex = this.textures.exists(key) ? key : propKey("crate");
+    let spr: Phaser.GameObjects.Image;
+    if (def.blocks) {
+      spr = this.placeGroup.create(x, y, tex) as Phaser.Physics.Arcade.Image; // static body fortifies
+      spr.setDepth(5);
+    } else {
+      spr = this.add.image(x, y, tex).setDepth(def.station === "campfire" ? 4 : 5);
+    }
+    if (def.hp > 0) spr.setAlpha(0.55 + 0.45 * (p.hp / p.maxHp));
+    const ap: ActivePlaceable = { gid: p.gid, kind: p.kind, sprite: spr, data: p };
+    this.placeableSprites.set(p.gid, ap);
+    return ap;
+  }
+
+  private destroyPlaceableSprite(ap: ActivePlaceable): void {
+    ap.sprite.destroy(); // also removes it from placeGroup + frees its static body
+    this.placeableSprites.delete(ap.gid);
+  }
+
+  private nearestPlaceable(maxDist: number, filter?: (kind: string) => boolean): ActivePlaceable | null {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: ActivePlaceable | null = null;
+    let bestD = maxDist;
+    for (const ap of this.placeableSprites.values()) {
+      if (filter && !filter(ap.kind)) continue;
+      const d = Math.hypot(ap.sprite.x - px, ap.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = ap;
+      }
+    }
+    return best;
+  }
+
+  private currentBuildKind(): string {
+    return BUILD_ORDER[this.buildIdx % BUILD_ORDER.length];
+  }
+
+  private itemHave(item: string): number {
+    return this.state.inventory.find((i) => i.item === item)?.qty ?? 0;
+  }
+
+  private toggleBuild(): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.driving) return;
+    this.buildMode = !this.buildMode;
+    if (this.buildMode) {
+      this.firing = false;
+      if (!this.buildGhost) {
+        this.buildGhost = this.add
+          .image(this.player.sprite.x, this.player.sprite.y, propKey(`base_${this.currentBuildKind()}`))
+          .setDepth(12)
+          .setAlpha(0.55);
+      }
+      this.buildGhost.setVisible(true);
+      sfx.ui();
+      this.showToast(`Build mode: ${placeableDef(this.currentBuildKind()).name} — wheel to switch, E to place, B to exit`);
+    } else {
+      this.buildGhost?.setVisible(false);
+    }
+  }
+
+  private cycleBuild(dir: number): void {
+    if (!this.buildMode) return;
+    this.buildIdx = (this.buildIdx + dir + BUILD_ORDER.length) % BUILD_ORDER.length;
+    const def = placeableDef(this.currentBuildKind());
+    const key = propKey(`base_${def.id}`);
+    if (this.buildGhost && this.textures.exists(key)) this.buildGhost.setTexture(key);
+    sfx.ui();
+    this.showToast(`Build: ${def.name} (${def.cost.map((c) => `${c.qty} ${c.item}`).join(", ")})`);
+  }
+
+  /** The tile one step ahead of the player's facing — where the ghost/structure goes. */
+  private buildTargetTile(): { tx: number; ty: number } {
+    const ang = this.player.sprite.rotation;
+    const fx = this.player.sprite.x + Math.cos(ang) * TILE_SIZE;
+    const fy = this.player.sprite.y + Math.sin(ang) * TILE_SIZE;
+    return { tx: Math.floor(fx / TILE_SIZE), ty: Math.floor(fy / TILE_SIZE) };
+  }
+
+  private canPlaceAt(tx: number, ty: number): boolean {
+    if (placeableAt(this.state, tx, ty)) return false; // one per tile
+    return this.chunks.walkable(tx, ty); // not in a wall/water/tree
+  }
+
+  private updateBuildGhost(): void {
+    if (!this.buildGhost) return;
+    const { tx, ty } = this.buildTargetTile();
+    this.buildGhost.setPosition((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE);
+    const def = placeableDef(this.currentBuildKind());
+    const ok = this.canPlaceAt(tx, ty) && canAfford(this.state, def);
+    this.buildGhost.setTint(ok ? 0x6effa0 : 0xff6b6b);
+  }
+
+  private buildHint(): string {
+    const def = placeableDef(this.currentBuildKind());
+    const cost = def.cost.map((c) => `${this.itemHave(c.item)}/${c.qty} ${c.item}`).join(", ");
+    return `Build ${def.name} — ${cost} · wheel switch · E place · B exit`;
+  }
+
+  private placeBuildable(): void {
+    const { tx, ty } = this.buildTargetTile();
+    const kind = this.currentBuildKind();
+    const def = placeableDef(kind);
+    if (!this.canPlaceAt(tx, ty)) {
+      this.showToast("Can't build there");
+      sfx.ui();
+      return;
+    }
+    if (!canAfford(this.state, def)) {
+      this.showToast(`Need ${def.cost.map((c) => `${c.qty} ${c.item}`).join(", ")}`);
+      sfx.ui();
+      return;
+    }
+    if (!buildPlaceable(this.state, kind, tx, ty)) return;
+    this.placeablesDirty = true;
+    this.reconcilePlaceables(true);
+    sfx.swing();
+    this.floatText((tx + 0.5) * TILE_SIZE, (ty + 0.5) * TILE_SIZE - 10, `Built ${def.name}`, "#9ef0a0");
+    this.grantXp("crafting", 4);
+    pushRecentEvent(this.state, `Built a ${def.name}.`);
+    this.hud.update(this.state, this.debugInfo());
+    this.persist();
+  }
+
+  /** V inside a building: claim it as home (or release it). The base anchors safety. */
+  private claimToggle(): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen) return;
+    const b = this.buildingAt();
+    if (!b) {
+      this.showToast("Stand inside a building to claim it");
+      return;
+    }
+    if (isBaseClaimed(this.state, b.gid)) {
+      this.state.base = undefined;
+      this.showToast("Released your base claim");
+    } else {
+      claimBase(this.state, b.gid, b.center.x, b.center.y, b.type.replace(/_/g, " "));
+      this.showToast(`Claimed the ${b.type.replace(/_/g, " ")} as your base`);
+      pushRecentEvent(this.state, "Claimed a home base.");
+    }
+    sfx.ui();
+    this.updateObjective();
+    this.hud.update(this.state, this.debugInfo());
+    this.persist();
+  }
+
+  private buildingHint(b: Building): string {
+    const base = `Press E to search the ${b.type.replace(/_/g, " ")}`;
+    if (isBaseClaimed(this.state, b.gid)) return `${base} · your base (V release)`;
+    return `${base} · V to claim as base`;
+  }
+
+  private openStorage(): void {
+    if (this.dead || this.inEncounter) return;
+    this.storeOpen = true;
+    this.setGameKeys(false);
+    this.firing = false;
+    this.player.sprite.setVelocity(0, 0);
+    this.storeUi.open(this.state);
+  }
+
+  /** Zombies pressed against barricades gnaw them down; spike traps wound crossers. */
+  private tickSiege(): void {
+    if (this.placeableSprites.size === 0 || this.enemies.length === 0) return;
+    let changed = false;
+    for (const ap of [...this.placeableSprites.values()]) {
+      const def = placeableDef(ap.kind);
+      const x = ap.sprite.x;
+      const y = ap.sprite.y;
+      if (def.damage && def.damage > 0) {
+        let hits = 0;
+        for (const e of [...this.enemies]) {
+          if (Math.hypot(e.sprite.x - x, e.sprite.y - y) < 22) {
+            hits++;
+            bloodBurst(this, e.sprite.x, e.sprite.y, 5, 0x9c1414);
+            if (e.takeDamage(def.damage)) this.onEnemyKilled(e);
+          }
+        }
+        if (hits > 0 && def.hp > 0 && damagePlaceable(this.state, ap.data, hits * 2)) {
+          this.destroyPlaceableSprite(ap);
+          changed = true;
+        }
+      }
+      if (def.hp > 0 && def.blocks) {
+        let n = 0;
+        for (const e of this.enemies) if (Math.hypot(e.sprite.x - x, e.sprite.y - y) < 40) n++;
+        if (n > 0) {
+          dustPuff(this, x, y, 3);
+          if (damagePlaceable(this.state, ap.data, n * 5)) {
+            bloodBurst(this, x, y, 8, 0x6e5230);
+            this.destroyPlaceableSprite(ap);
+            changed = true;
+          } else {
+            ap.sprite.setAlpha(0.55 + 0.45 * (ap.data.hp / ap.data.maxHp));
+          }
+        }
+      }
+    }
+    if (changed) this.persist();
+  }
+
+  /** Crafting stations (campfire/workbench) within reach gate station-only recipes. */
+  private stationsNear(): Set<string> {
+    const out = new Set<string>();
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    for (const ap of this.placeableSprites.values()) {
+      const st = placeableDef(ap.kind).station;
+      if (st && Math.hypot(ap.sprite.x - px, ap.sprite.y - py) < 70) out.add(st);
+    }
+    return out;
+  }
+
   private toggleLoot(): void {
     if (this.dead) return;
     if (this.lootOpen) {
       this.loot.close();
       return;
     }
-    if (this.inEncounter) return;
+    if (this.inEncounter || this.craftOpen || this.storeOpen) return;
     this.lootOpen = true;
     this.setGameKeys(false);
     this.firing = false;
@@ -1349,7 +1685,7 @@ export class WorldScene extends Phaser.Scene {
   /** Rest/sleep (Z): pass time, recover stamina, at the cost of food/water and a
    *  real chance of waking to the dead. Can't rest with enemies close. */
   private restAction(): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.driving || this.buildMode) return;
     if (this.nearestEnemy(150)) {
       this.showToast("Too dangerous to rest here");
       return;
@@ -1380,12 +1716,12 @@ export class WorldScene extends Phaser.Scene {
       this.craftUi.close();
       return;
     }
-    if (this.inEncounter || this.enacting || this.lootOpen) return;
+    if (this.inEncounter || this.enacting || this.lootOpen || this.storeOpen) return;
     this.craftOpen = true;
     this.setGameKeys(false);
     this.firing = false;
     this.player.sprite.setVelocity(0, 0);
-    this.craftUi.open(this.state);
+    this.craftUi.open(this.state, this.stationsNear()); // nearby campfire/workbench unlock station recipes
   }
 
   private startEncounter(loc: string, situation: string, title: string): void {
@@ -1666,6 +2002,8 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-I", () => this.toggleLoot());
     kb.on("keydown-C", () => this.toggleCraft());
     kb.on("keydown-Z", () => this.restAction());
+    kb.on("keydown-B", () => this.toggleBuild()); // build mode (barricades/stations)
+    kb.on("keydown-V", () => this.claimToggle()); // claim/release the building as base
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
@@ -1686,7 +2024,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Use the consumable in quick-slot i (number keys 1–4); no-op if empty. */
   private useQuickSlot(i: number): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen) return;
     const slot = quickUseItems(this.state)[i];
     if (!slot || !useConsumable(this.state, slot.item)) return;
     this.selectedQuick = i; // scroll/Q/click all converge on the slot just used
@@ -1699,7 +2037,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Move the hotbar scroll-wheel cursor to the next/prev FILLED quick-use slot. */
   private cycleQuick(dir: number): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen) return;
     const q = quickUseItems(this.state);
     const filled = [0, 1, 2, 3].filter((i) => q[i]);
     if (filled.length === 0) return;
@@ -1721,6 +2059,9 @@ export class WorldScene extends Phaser.Scene {
       this.driving = null; // step out of the wreck; the run is over
       this.player.speedMult = 1;
     }
+    this.buildMode = false;
+    this.buildGhost?.setVisible(false);
+    if (this.storeOpen) this.storeUi.close();
     this.player.sprite.setVelocity(0, 0);
     this.modal.close();
     sfx.death();
@@ -1738,7 +2079,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Melee swing at the nearest threat (SPACE/F). Weapons hit harder. */
   private meleeAttack(): void {
-    if (this.dead || this.inEncounter || this.driving) return;
+    if (this.dead || this.inEncounter || this.driving || this.storeOpen || this.buildMode) return;
     const now = this.time.now;
     const hit = meleeOutcome(this.state, liveRng);
     if (now - this.lastMelee < hit.cooldownMs || this.state.player.stamina < 4) return;
@@ -1976,7 +2317,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Fire the equipped gun toward `angle` (one trigger pull). */
   private fire(angle: number): void {
-    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving) return;
+    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving || this.storeOpen || this.buildMode) return;
     const plan = shotOutcome(this.state, liveRng);
     if (!plan) return; // no gun equipped
     const now = this.time.now;
