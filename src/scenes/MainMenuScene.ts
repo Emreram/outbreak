@@ -14,6 +14,7 @@ export class MainMenuScene extends Phaser.Scene {
   private aiBtn?: Phaser.GameObjects.Text;
   private aiHint?: Phaser.GameObjects.Text;
   private menuDestroyed = false;
+  private aiBusy = false;
 
   constructor() {
     super("MainMenuScene");
@@ -136,7 +137,7 @@ export class MainMenuScene extends Phaser.Scene {
   }
 
   private onAiToggle(): void {
-    if (this.menuDestroyed || !hasWebGPU()) return;
+    if (this.menuDestroyed || this.aiBusy || !hasWebGPU()) return;
     const st = webllmState();
     if (st === "loading") return;
     if (st === "ready") {
@@ -144,12 +145,21 @@ export class MainMenuScene extends Phaser.Scene {
       this.refreshAiToggle();
       return;
     }
-    void this.startWebllmLoad();
+    void this.startWebllmLoad(); // includes "tap to retry" from the error state
   }
 
   private async startWebllmLoad(): Promise<void> {
+    if (this.aiBusy) return; // one attempt at a time; ignore extra taps
+    this.aiBusy = true;
     setWebllmEnabled(true);
-    this.refreshAiToggle();
+    // Immediate feedback so a retry is OBVIOUSLY happening — a GPU-adapter failure
+    // throws before any download progress fires, so without this the button would
+    // never visibly change and a real retry looks like a no-op.
+    if (!this.menuDestroyed) {
+      this.aiBtn?.setText("Loading AI model…").setColor("#ffd98a");
+      this.aiHint?.setText("checking WebGPU…");
+    }
+    const startedAt = performance.now();
     try {
       await loadWebLLM((r) => {
         if (this.menuDestroyed) return;
@@ -160,8 +170,12 @@ export class MainMenuScene extends Phaser.Scene {
       if (!this.menuDestroyed) this.aiHint?.setText("warming up the model…");
       await warmUpWebLLM(); // compile shaders now so the first in-game turn is fast
     } catch {
-      /* state=error; refreshAiToggle shows retry + reason */
+      /* state=error; refreshAiToggle shows the friendly message + tap-to-retry */
     }
+    // Hold the "Loading…" state briefly so even an instant failure reads as a real retry.
+    const elapsed = performance.now() - startedAt;
+    if (elapsed < 600) await new Promise((res) => setTimeout(res, 600 - elapsed));
+    this.aiBusy = false;
     this.refreshAiToggle();
   }
 
