@@ -26,6 +26,7 @@ export const RECIPES: Recipe[] = [
   { id: "cooked_meat", out: "Cooked Meat", outQty: 1, inputs: [{ item: "Raw Meat", qty: 1 }], station: "campfire", desc: "Cook raw meat — safe + filling." },
   { id: "leather", out: "Leather", outQty: 1, inputs: [{ item: "Hide", qty: 2 }], desc: "Tan hides into leather." },
   { id: "barricade_kit", out: "Barricade Kit", outQty: 1, inputs: [{ item: "Wood Plank", qty: 2 }, { item: "Duct Tape", qty: 1 }], station: "workbench", desc: "Board up a window or door." },
+  { id: "radio", out: "Radio", outQty: 1, inputs: [{ item: "Electronics", qty: 1 }, { item: "Batteries", qty: 1 }], station: "workbench", desc: "Pick up survivor broadcasts (map leads)." },
 ];
 
 export function canCraft(s: GameState, r: Recipe): boolean {

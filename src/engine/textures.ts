@@ -22,7 +22,8 @@ export const ASSET_PATHS: Readonly<Record<string, string>> = {
 
 // One colour per Tile enum value. Order in TILE_ORDER below must match the enum
 // so the generated tileset's frame index === the grid value used by the tilemap.
-const TILE_COLORS: Record<Tile, { fill: number; line: number }> = {
+// Exported so the minimap (Feature 10) can colour chunks by their biome's base tile.
+export const TILE_COLORS: Record<Tile, { fill: number; line: number }> = {
   [Tile.Road]: { fill: 0x33373d, line: 0x2a2e33 },
   [Tile.Sidewalk]: { fill: 0x6c727a, line: 0x5b616a },
   [Tile.Floor]: { fill: 0x5a4a38, line: 0x4a3c2d },

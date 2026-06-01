@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { FarmPlot, GameState, GMResponse, Placeable, Spawn, TurnInput, Vehicle } from "../shared/contracts";
+import type { FarmPlot, GameState, GMResponse, KnownLocation, Placeable, Spawn, TurnInput, Vehicle } from "../shared/contracts";
 import { Tile, type Building } from "../game/worldgen";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
 import {
@@ -25,6 +25,7 @@ import {
   placeableAt,
   placeableDef,
 } from "../game/base";
+import { compassDir, nextEventDelayMs, rollWorldEvent, type WorldEventKind } from "../game/worldEvents";
 import { isWet, rollWeather } from "../game/weather";
 import { addXp, SKILL_NAMES, type SkillId } from "../game/skills";
 import { propKey } from "../engine/propSprites";
@@ -74,6 +75,7 @@ import { EncounterModal } from "../ui/EncounterModal";
 import { LootModal } from "../ui/LootModal";
 import { CraftModal } from "../ui/CraftModal";
 import { StorageModal } from "../ui/StorageModal";
+import { Minimap } from "../ui/Minimap";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
@@ -204,6 +206,13 @@ export class WorldScene extends Phaser.Scene {
   private siegeAcc = 0;
   private storeUi!: StorageModal;
   private storeOpen = false;
+  // Living world (Feature 10): minimap discovery, dynamic events, radio broadcasts.
+  private minimap!: Minimap;
+  private eventAcc = 0;
+  private eventDelay = 150000;
+  private radioAcc = 0;
+  private lastDiscCx = NaN;
+  private lastDiscCy = NaN;
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -259,6 +268,10 @@ export class WorldScene extends Phaser.Scene {
     this.buildGhost = undefined;
     this.siegeAcc = 0;
     this.storeOpen = false;
+    this.eventAcc = 0;
+    this.radioAcc = 0;
+    this.lastDiscCx = NaN;
+    this.lastDiscCy = NaN;
     this.weatherRect = undefined; // re-created on the fresh uiLayer below
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
@@ -422,6 +435,9 @@ export class WorldScene extends Phaser.Scene {
 
     this.hud = new HUD(this, this.uiLayer);
     this.hotbar = new HotBar(this, this.uiLayer);
+    this.minimap = new Minimap(this, this.uiLayer);
+    this.eventDelay = nextEventDelayMs(this.state.day, this.isNight());
+    this.discoverAround(); // reveal the opening surroundings on the map
     for (const p of this.state.farmPlots ?? []) this.refreshPlotSprites(p); // restore farm plots
 
     // Split rendering: the main (zoomed, player-following) camera draws the world
@@ -554,6 +570,23 @@ export class WorldScene extends Phaser.Scene {
         this.tickSiege();
       }
 
+      this.discoverAround(); // map fog-of-war fills in as you explore (cheap; gated)
+
+      this.eventAcc += delta;
+      if (this.eventAcc >= this.eventDelay) {
+        this.eventAcc = 0;
+        this.eventDelay = nextEventDelayMs(this.effDay(), this.isNight());
+        this.worldEvent();
+      }
+
+      if (hasItem(this.state, "Radio")) {
+        this.radioAcc += delta;
+        if (this.radioAcc >= 75000) {
+          this.radioAcc = 0;
+          this.radioBroadcast();
+        }
+      }
+
       if (this.player.isMoving() && time - this.lastStep > 300) {
         this.lastStep = time;
         dustPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 2);
@@ -599,6 +632,7 @@ export class WorldScene extends Phaser.Scene {
     // The flashlight glow tracks the player even while paused.
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
     this.updateWeaponSprite();
+    this.minimap.render(this.state.seed, this.state, this.scale.width);
 
     // Contextual hint (build > driving > vehicle > storage > chest > farm > building)
     // — encounters are opt-in, so this is the invitation to engage; exploring never
@@ -1665,6 +1699,116 @@ export class WorldScene extends Phaser.Scene {
     return out;
   }
 
+  // --- living world (Feature 10): discovery, events, radio --------------------
+
+  /** Mark the player's chunk + neighbours discovered (minimap fog) and catalogue the
+   *  current chunk's landmarks onto the map. Cheap — gated on a chunk crossing. */
+  private discoverAround(): void {
+    const { cx, cy } = this.playerChunk();
+    if (cx === this.lastDiscCx && cy === this.lastDiscCy) return;
+    this.lastDiscCx = cx;
+    this.lastDiscCy = cy;
+    this.state.discovered = this.state.discovered ?? [];
+    const set = new Set(this.state.discovered);
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= WORLD_CHUNKS_X || ny >= WORLD_CHUNKS_Y) continue;
+        const k = `${nx},${ny}`;
+        if (!set.has(k)) {
+          set.add(k);
+          this.state.discovered.push(k);
+        }
+      }
+    }
+    for (const lm of this.chunks.landmarksAt(cx, cy)) this.revealLocation(lm.label, lm.kind, lm.x, lm.y);
+  }
+
+  /** Add a point of interest to the map (deduped by name + position). */
+  private revealLocation(name: string, type: string, x: number, y: number): void {
+    const list: KnownLocation[] = this.state.knownLocations ?? (this.state.knownLocations = []);
+    if (list.some((l) => l.name === name && Math.abs(l.x - x) < 8 && Math.abs(l.y - y) < 8)) return;
+    list.push({ name, type, x, y });
+  }
+
+  /** A timed world set-piece — horde, raiders, flyover, supply drop, or trader. */
+  private worldEvent(): void {
+    if (this.dead) return;
+    const day = this.effDay();
+    const kind: WorldEventKind = rollWorldEvent(liveRng, day, this.isNight());
+    switch (kind) {
+      case "horde": {
+        const n = Math.min(5 + Math.floor(day / 2), 12);
+        this.spawnNear([{ type: this.isNight() ? "zombie_runner" : "zombie", count: n }]);
+        this.showToast("A horde is moving through the area…");
+        break;
+      }
+      case "raiders":
+        this.spawnNear([{ type: "survivor_hostile", count: Phaser.Math.Between(2, 3) }]);
+        this.showToast("Raiders are prowling nearby — watch yourself.");
+        break;
+      case "flyover":
+        this.showToast("A military helicopter thunders overhead.");
+        this.airDrop(2);
+        this.spawnNear([{ type: "zombie", count: Phaser.Math.Between(2, 4) }]); // the noise draws them
+        break;
+      case "supply_drop":
+        this.showToast("A supply drop came down nearby — check your map (M).");
+        this.airDrop(3);
+        break;
+      case "trader":
+        this.spawnNear([{ type: "survivor_friendly", count: 1 }]);
+        this.showToast("A trader caravan passes through the area.");
+        break;
+    }
+  }
+
+  /** Scatter a small loot cache at a nearby tile and pin it on the map. */
+  private airDrop(n: number): void {
+    const { tx, ty } = this.player.tilePos();
+    const spot = this.chunks.walkableNear(tx, ty, 4, 9);
+    if (!spot) return;
+    const bias = this.chunks.lootBias(spot.x, spot.y) + 0.3;
+    for (const s of rollLoot("military", liveRng, n, bias)) this.spawnDrop(spot.x, spot.y, s.item, s.qty);
+    this.revealLocation("Supply drop", "supply_cache", spot.x, spot.y);
+  }
+
+  /** With a Radio in your pack, periodic survivor chatter points you toward a POI. */
+  private radioBroadcast(): void {
+    if (this.dead) return;
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    const targets: { name: string; x: number; y: number }[] = [];
+    for (const l of this.state.knownLocations ?? []) targets.push({ name: l.name, x: l.x, y: l.y });
+    if (this.state.base) targets.push({ name: "your base", x: this.state.base.x, y: this.state.base.y });
+    if (targets.length > 0 && liveRng.chance(0.6)) {
+      const t = liveRng.pick(targets);
+      this.showToast(`Radio: a survivor reports ${t.name} to the ${compassDir(t.x - px, t.y - py)}.`);
+      return;
+    }
+    const lead = this.discoverRadioLead();
+    if (lead) this.showToast(`Radio: chatter about ${lead.name} to the ${compassDir(lead.x - px, lead.y - py)}.`);
+    else this.showToast("Radio: static… distant voices, nothing clear.");
+  }
+
+  /** Reveal one as-yet-uncatalogued landmark from a loaded neighbouring chunk. */
+  private discoverRadioLead(): { name: string; x: number; y: number } | null {
+    const { cx, cy } = this.playerChunk();
+    const known = this.state.knownLocations ?? [];
+    for (let r = 1; r <= CHUNK_LOAD_RADIUS; r++) {
+      for (const [dx, dy] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]] as const) {
+        for (const lm of this.chunks.landmarksAt(cx + dx, cy + dy)) {
+          if (!known.some((l) => l.name === lm.label && Math.abs(l.x - lm.x) < 8)) {
+            this.revealLocation(lm.label, lm.kind, lm.x, lm.y);
+            return { name: lm.label, x: lm.x, y: lm.y };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   private toggleLoot(): void {
     if (this.dead) return;
     if (this.lootOpen) {
@@ -2004,6 +2148,7 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-Z", () => this.restAction());
     kb.on("keydown-B", () => this.toggleBuild()); // build mode (barricades/stations)
     kb.on("keydown-V", () => this.claimToggle()); // claim/release the building as base
+    kb.on("keydown-M", () => { this.minimap.toggle(); sfx.ui(); }); // minimap (Feature 10)
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
