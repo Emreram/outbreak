@@ -16,6 +16,7 @@ import { applyDecay, DEFAULT_DECAY } from "../src/game/survival";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../src/game/farming";
 import { RECIPES, canCraft, craft } from "../src/game/crafting";
 import { WEATHERS, isWet, rollWeather, weatherName } from "../src/game/weather";
+import { addXp, levelFor, skillLevel, xpForLevel } from "../src/game/skills";
 import { createRng } from "../src/game/rng";
 
 // in-memory localStorage shim so persistence is testable under Node
@@ -153,6 +154,14 @@ const wr = createRng("weather");
 ok([...Array(50)].every(() => (WEATHERS as readonly string[]).includes(rollWeather(wr))), "rollWeather returns valid kinds");
 ok(isWet("rain") && isWet("storm") && !isWet("clear") && !isWet(undefined), "isWet detects wet weather");
 ok(weatherName("storm") === "storm" && weatherName(undefined) === "clear", "weatherName maps weather to label");
+
+// --- skills / xp (Feature 9) ---
+ok(xpForLevel(1) === 0 && xpForLevel(2) === 100 && xpForLevel(3) === 300, "xp thresholds rise per level");
+ok(levelFor(0) === 1 && levelFor(99) === 1 && levelFor(100) === 2 && levelFor(300) === 3, "levelFor maps xp to level");
+const sk = newGame("skills");
+ok(skillLevel(sk, "farming") === 1, "skills start at level 1");
+ok(addXp(sk, "farming", 100) === 2, "addXp returns the new level on level-up");
+ok(addXp(sk, "farming", 50) === 0 && skillLevel(sk, "farming") === 2, "addXp returns 0 with no level-up; xp accrues");
 
 console.log(fail === 0 ? "ALL STATE CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

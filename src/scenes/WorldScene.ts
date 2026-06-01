@@ -3,6 +3,7 @@ import type { FarmPlot, GameState, GMResponse, Spawn, TurnInput } from "../share
 import { Tile, type Building } from "../game/worldgen";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
 import { isWet, rollWeather } from "../game/weather";
+import { addXp, SKILL_NAMES, type SkillId } from "../game/skills";
 import { propKey } from "../engine/propSprites";
 import { randomSeed, liveRng } from "../game/rng";
 import {
@@ -345,6 +346,7 @@ export class WorldScene extends Phaser.Scene {
         sfx.pickup();
         this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Crafted ${r.out}`, "#9ef0a0");
         pushRecentEvent(this.state, `Crafted ${r.out}.`);
+        this.grantXp("crafting", 5);
         this.hud.update(this.state, this.debugInfo());
         this.persist();
         this.craftUi.refresh(this.state);
@@ -871,6 +873,7 @@ export class WorldScene extends Phaser.Scene {
         addItem(this.state, def.seed, def.seedReturn);
         this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `+${def.yieldQty} ${def.produce}`, "#9ef0a0");
         sfx.pickup();
+        this.grantXp("farming", 6);
         plot.crop = undefined;
         plot.growth = 0;
         plot.watered = false;
@@ -902,6 +905,7 @@ export class WorldScene extends Phaser.Scene {
       plot.watered = false;
       this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Planted ${CROPS[crop].name}`, "#9ef0a0");
       sfx.ui();
+      this.grantXp("farming", 3);
       this.refreshPlotSprites(plot);
       this.persist();
       return true;
@@ -910,6 +914,7 @@ export class WorldScene extends Phaser.Scene {
       const p = tillPlot(this.state, tx, ty);
       this.floatText(this.player.sprite.x, this.player.sprite.y - 8, "Tilled soil", "#cdb89a");
       sfx.ui();
+      this.grantXp("farming", 2);
       this.refreshPlotSprites(p);
       this.persist();
       return true;
@@ -1387,6 +1392,7 @@ export class WorldScene extends Phaser.Scene {
   private onEnemyKilled(e: Enemy): void {
     if (this.enemies.indexOf(e) < 0) return; // already reaped this frame
     this.kills += 1;
+    this.grantXp("combat", 4);
     sfx.kill();
     pushRecentEvent(this.state, `Put down a ${e.def.name}.`);
     this.onDeathTraits(e); // exploder / splitter / bloated bursts
@@ -1542,6 +1548,14 @@ export class WorldScene extends Phaser.Scene {
       case "fridge": return "grocery";
       case "toolbox": return "hardware_store";
       default: return `chest:${Math.max(0, Math.min(4, tier))}`;
+    }
+  }
+
+  /** Grant skill XP and surface a level-up (Feature 9). */
+  private grantXp(id: SkillId, amount: number): void {
+    if (addXp(this.state, id, amount) > 0) {
+      this.showToast(`${SKILL_NAMES[id]} level up!`);
+      sfx.ui();
     }
   }
 

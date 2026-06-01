@@ -5,6 +5,7 @@ import { ammoReserve, equippedMeleeDef, equippedRangedDef } from "../game/invent
 import { rarityCss } from "../game/items/rarity";
 import { getBackground } from "../game/backgrounds";
 import { weatherName } from "../game/weather";
+import { SKILLS, SKILL_ABBR, skillLevel } from "../game/skills";
 
 // On-screen HUD (CLAUDE.md §13 Phase 3): HP / stamina / hunger / thirst /
 // infection bars + inventory + day/time, fixed to the camera. UI layer — it
@@ -45,6 +46,7 @@ export class HUD {
   private readonly invText: Phaser.GameObjects.Text;
   private readonly logText: Phaser.GameObjects.Text;
   private readonly controlsText: Phaser.GameObjects.Text;
+  private readonly skillsText: Phaser.GameObjects.Text;
   private readonly debugText: Phaser.GameObjects.Text;
   private deathText?: Phaser.GameObjects.Text;
   private readonly layer?: Phaser.GameObjects.Layer;
@@ -84,6 +86,7 @@ export class HUD {
       .setDepth(DEPTH + 2);
     layer?.add(this.logText);
     this.controlsText = mk(PANEL_X + 8, 0, "11px", "#8fa3b8");
+    this.skillsText = mk(PANEL_X + 8, 0, "11px", "#bfe9ff");
     this.debugText = mk(PANEL_X + 8, 0, "11px", "#7f93a8");
   }
 
@@ -125,7 +128,12 @@ export class HUD {
       .setPosition(PANEL_X + 8, cY)
       .setText("WASD move · MOUSE aim/fire · SPACE/F melee · E act\nShift run · R reload · I bag · C craft · ESC menu · scroll+Q or [1-4] quick-use");
 
-    const dY = cY + this.controlsText.height + 6;
+    const skY = cY + this.controlsText.height + 6;
+    this.skillsText
+      .setPosition(PANEL_X + 8, skY)
+      .setText("Skills: " + SKILLS.map((id) => `${SKILL_ABBR[id]} ${skillLevel(s, id)}`).join(" · "));
+
+    const dY = skY + this.skillsText.height + 6;
     this.debugText
       .setPosition(PANEL_X + 8, dY)
       .setText(`seed ${s.seed} · ${debug.fps} fps · GM:${debug.brain}`);
