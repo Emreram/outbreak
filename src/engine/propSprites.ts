@@ -83,6 +83,59 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0xc9a94a, 1).fillCircle(15, 17, 10);
     g.lineStyle(1, 0x9c7f2f, 1).strokeCircle(15, 17, 6).strokeCircle(15, 17, 3);
   },
+
+  // --- interior furniture (placed inside buildings, themed per type) ---
+  shelf: (g) => {
+    g.fillStyle(0x6e5230, 1).fillRect(4, 4, 22, 22);
+    g.fillStyle(0x3a2c18, 1).fillRect(4, 11, 22, 2).fillRect(4, 19, 22, 2);
+    g.fillStyle(0xb7a23f, 1).fillRect(6, 6, 5, 4).fillRect(15, 6, 5, 4).fillRect(6, 14, 5, 4);
+  },
+  bed: (g) => {
+    g.fillStyle(0x5a6470, 1).fillRect(6, 4, 18, 22);
+    g.fillStyle(0x8a98a8, 1).fillRect(7, 11, 16, 14);
+    g.fillStyle(0xcdd9e5, 1).fillRect(8, 5, 14, 6);
+  },
+  counter: (g) => {
+    g.fillStyle(0x5b616a, 1).fillRect(3, 10, 24, 12);
+    g.fillStyle(0x8a8f98, 1).fillRect(3, 10, 24, 3);
+  },
+  desk: (g) => {
+    g.fillStyle(0x6e5230, 1).fillRect(4, 9, 22, 12);
+    g.fillStyle(0x3a2c18, 1).fillRect(5, 21, 3, 5).fillRect(22, 21, 3, 5);
+    g.fillStyle(0x2ec4ff, 1).fillRect(8, 5, 8, 4);
+  },
+  toolrack: (g) => {
+    g.fillStyle(0x4a3c2d, 1).fillRect(4, 5, 22, 5);
+    g.fillStyle(0x9aa3ad, 1).fillRect(7, 10, 2, 12).fillRect(13, 10, 2, 9).fillRect(19, 10, 2, 13);
+  },
+  pew: (g) => {
+    g.fillStyle(0x6e5230, 1).fillRect(3, 13, 24, 5);
+    g.fillStyle(0x55401f, 1).fillRect(3, 8, 24, 4);
+  },
+  fridge_prop: (g) => {
+    g.fillStyle(0xdfe6ec, 1).fillRect(8, 4, 14, 22);
+    g.fillStyle(0xb8c0c8, 1).fillRect(8, 14, 14, 1);
+    g.fillStyle(0x8a8f98, 1).fillRect(19, 8, 2, 4).fillRect(19, 17, 2, 4);
+  },
+  bookshelf: (g) => {
+    g.fillStyle(0x4a3c2d, 1).fillRect(5, 4, 20, 22);
+    const cols = [0xd1483a, 0x2f8f3c, 0x2ec4ff, 0xffd23f];
+    for (let i = 0; i < 4; i++) g.fillStyle(cols[i], 1).fillRect(7 + i * 4, 6, 3, 7);
+    g.fillStyle(0x2c2218, 1).fillRect(5, 15, 20, 2);
+  },
+  locker_prop: (g) => {
+    g.fillStyle(0x5f86a8, 1).fillRect(8, 3, 14, 24);
+    g.fillStyle(0x3f5f78, 1).fillRect(14, 3, 1, 24);
+    g.fillStyle(0x2b2e33, 1).fillRect(11, 13, 1, 3).fillRect(17, 13, 1, 3);
+  },
+  table: (g) => {
+    g.fillStyle(0x8a6a3a, 1).fillRect(5, 9, 20, 12);
+    g.fillStyle(0x5a4326, 1).fillRect(6, 21, 3, 5).fillRect(21, 21, 3, 5);
+  },
+  sofa: (g) => {
+    g.fillStyle(0x556b5a, 1).fillRoundedRect(4, 8, 22, 16, 3);
+    g.fillStyle(0x6e8a72, 1).fillRect(7, 11, 16, 7);
+  },
 };
 
 export function generatePropTextures(scene: Phaser.Scene): void {

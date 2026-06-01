@@ -76,6 +76,35 @@ function lockedFor(kind: ContainerKind, tier: number, rng: Rng): boolean {
   return rng.chance(0.06 + tier * 0.08);
 }
 
+// Themed interior furniture per building type (decorative props) so a pharmacy,
+// a house, and a police station read completely differently inside.
+const FURNITURE_BY_TYPE: Partial<Record<BuildingType, string[]>> = {
+  pharmacy: ["shelf", "shelf", "counter"],
+  hospital: ["bed", "bed", "shelf", "counter"],
+  grocery: ["shelf", "shelf", "fridge_prop", "counter"],
+  hardware_store: ["toolrack", "shelf", "counter"],
+  house: ["bed", "sofa", "table", "fridge_prop"],
+  cabin: ["bed", "table", "shelf"],
+  motel: ["bed", "bed", "table"],
+  police_station: ["desk", "locker_prop", "desk"],
+  fire_station: ["locker_prop", "bench", "toolrack"],
+  office: ["desk", "desk", "bookshelf"],
+  school: ["desk", "desk", "bookshelf"],
+  church: ["pew", "pew", "table"],
+  diner: ["table", "table", "counter", "fridge_prop"],
+  gas_station: ["shelf", "counter", "fridge_prop"],
+  mall: ["shelf", "shelf", "counter"],
+  warehouse: ["shelf", "crate"],
+  factory: ["toolrack", "crate"],
+  barn: ["hay", "shelf"],
+  silo: ["crate"],
+  bunker: ["locker_prop", "shelf", "desk"],
+  military_depot: ["locker_prop", "crate", "toolrack"],
+  lab: ["counter", "shelf", "desk"],
+  ranger_station: ["desk", "shelf", "bed"],
+  port_warehouse: ["crate", "shelf"],
+};
+
 const SOLID = new Set<number>(SOLID_TILES as number[]);
 const isSolid = (t: Tile): boolean => SOLID.has(t);
 
@@ -141,6 +170,21 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
         const kind = containerKindFor(b.type, rng);
         containers.push({ gid: `${cx}_${cy}_c${ci++}`, tx: tile.x, ty: tile.y, tier, type: b.type, kind, locked: lockedFor(kind, tier, rng) });
       }
+    }
+  }
+
+  // 2.5) Interior furniture — themed per building type (decorative, non-blocking).
+  for (const b of buildings) {
+    const pool = FURNITURE_BY_TYPE[b.type];
+    if (!pool || pool.length === 0) continue;
+    const interior = Math.max(0, b.tw - 2) * Math.max(0, b.th - 2);
+    const count = Math.min(4, Math.max(1, Math.floor(interior / 8)));
+    const usedF = new Set<string>();
+    for (let i = 0; i < count; i++) {
+      const tile = floorTileIn(grid, b, gx0, gy0, rng, usedF);
+      if (!tile) break;
+      usedF.add(`${tile.x},${tile.y}`);
+      props.push({ kind: rng.pick(pool), x: (tile.x + 0.5) * tileSize, y: (tile.y + 0.5) * tileSize });
     }
   }
 
