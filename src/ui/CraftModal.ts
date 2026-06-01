@@ -34,6 +34,7 @@ export class CraftModal {
   private onClose?: () => void;
   private opened = false;
   private state?: GameState;
+  private stations: Set<string> = new Set();
   private readonly keyHandler: (e: KeyboardEvent) => void;
 
   constructor() {
@@ -79,8 +80,9 @@ export class CraftModal {
     this.onClose = onClose;
   }
 
-  open(state: GameState): void {
+  open(state: GameState, stations?: Set<string>): void {
     this.state = state;
+    this.stations = stations ?? new Set();
     this.opened = true;
     this.root.classList.add("ob-on");
     this.render();
@@ -109,11 +111,12 @@ export class CraftModal {
     if (!s) return;
     this.listEl.innerHTML = "";
     for (const r of RECIPES) {
+      const stationOk = !r.station || this.stations.has(r.station);
       const row = div("ob-recipe");
       const info = div("ob-rinfo");
       const nm = document.createElement("div");
       nm.className = "nm";
-      nm.textContent = `${r.out}${r.outQty > 1 ? ` ×${r.outQty}` : ""}${r.station ? `  ·  ${r.station}` : ""}`;
+      nm.textContent = `${r.out}${r.outQty > 1 ? ` ×${r.outQty}` : ""}${r.station ? `  ·  ${r.station}${stationOk ? "" : " (need station)"}` : ""}`;
       const ds = document.createElement("div");
       ds.className = "ds";
       ds.textContent = r.desc;
@@ -129,9 +132,9 @@ export class CraftModal {
       info.append(nm, ds, ing);
       const btn = document.createElement("button");
       btn.className = "ob-craftb";
-      btn.textContent = "Craft";
-      btn.disabled = !canCraft(s, r);
-      btn.addEventListener("click", () => this.onCraft?.(r));
+      btn.textContent = stationOk ? "Craft" : r.station ?? "Station";
+      btn.disabled = !canCraft(s, r) || !stationOk;
+      btn.addEventListener("click", () => stationOk && this.onCraft?.(r));
       row.append(info, btn);
       this.listEl.appendChild(row);
     }

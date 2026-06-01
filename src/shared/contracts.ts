@@ -54,6 +54,28 @@ export interface GameState {
   weather?: string; // current weather kind (Feature 9)
   skills?: Record<string, number>; // xp per skill id (Feature 9)
   vehicles?: Vehicle[]; // repaired/moved vehicles (Feature 4); unmodified ones regenerate from seed
+  base?: BaseClaim; // the building claimed as home (Feature 7)
+  placeables?: Placeable[]; // player-built barricades/walls/stations/storage (Feature 7)
+  baseStorage?: InventoryItem[]; // items stashed in base storage crates (Feature 7)
+}
+
+/** The building the player has claimed as their home base (Feature 7). */
+export interface BaseClaim {
+  gid: string; // building gid
+  x: number; // building centre (world px), for the minimap/anchor
+  y: number;
+  name: string; // building type label
+}
+
+/** A player-built structure: barricade/wall/gate/spikes/storage/station (Feature 7).
+ *  Keyed by its global tile; persists with live HP so a siege's damage carries over. */
+export interface Placeable {
+  gid: string; // `pl_<tx>_<ty>`
+  kind: string; // barricade | wall | gate | spikes | storage | campfire | workbench
+  tx: number; // GLOBAL tile coords
+  ty: number;
+  hp: number;
+  maxHp: number;
 }
 
 /** A vehicle's persisted STATE (only stored once repaired or moved). Its existence +

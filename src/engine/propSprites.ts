@@ -182,6 +182,55 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0xffe9a8, 1).fillRect(28, 8, 1, 3).fillRect(28, 19, 1, 3); // headlights
   },
 
+  // --- base building (Feature 7): player-built structures, top-down ---
+  base_barricade: (g) => {
+    g.fillStyle(0x8a6a3a, 1).fillRect(2, 7, 26, 6).fillRect(2, 17, 26, 6); // two plank bands
+    g.fillStyle(0x6e5230, 1).fillRect(2, 7, 26, 1).fillRect(2, 22, 26, 1);
+    g.lineStyle(2, 0x5a4326, 1).lineBetween(4, 6, 26, 24); // diagonal brace
+    g.fillStyle(0x3a2c18, 1).fillRect(7, 7, 1, 16).fillRect(15, 7, 1, 16).fillRect(22, 7, 1, 16); // nails/seams
+  },
+  base_wall: (g) => {
+    g.fillStyle(0x6e5230, 1).fillRect(1, 1, 28, 28);
+    g.fillStyle(0x5a4326, 1).fillRect(1, 10, 28, 1).fillRect(1, 20, 28, 1);
+    g.fillStyle(0x7c5e36, 1).fillRect(3, 3, 10, 6).fillRect(16, 3, 10, 6).fillRect(9, 12, 10, 6).fillRect(3, 22, 10, 5);
+  },
+  base_gate: (g) => {
+    g.fillStyle(0x5b616a, 1).fillRect(1, 2, 28, 26);
+    g.fillStyle(0x868b92, 1).fillRect(4, 4, 3, 22).fillRect(12, 4, 3, 22).fillRect(20, 4, 3, 22);
+    g.fillStyle(0x3a3f45, 1).fillRect(1, 13, 28, 4); // cross-brace
+    g.fillStyle(0xb7bdc4, 1).fillRect(24, 12, 3, 6); // bolt plate
+  },
+  base_spikes: (g) => {
+    g.fillStyle(0x6e5230, 1).fillRect(2, 22, 26, 4); // base rail
+    g.fillStyle(0xc9b89a, 1);
+    for (let i = 0; i < 4; i++) g.fillTriangle(5 + i * 7, 22, 2 + i * 7, 6, 8 + i * 7, 22);
+    g.fillStyle(0x9c8a6a, 1);
+    for (let i = 0; i < 4; i++) g.fillTriangle(5 + i * 7, 22, 5 + i * 7, 9, 8 + i * 7, 22);
+  },
+  base_storage: (g) => {
+    g.fillStyle(0xb5853f, 1).fillRect(3, 6, 24, 20);
+    g.fillStyle(0x7a5a30, 1).fillRect(3, 6, 24, 4).fillRect(3, 14, 24, 2); // lid + band
+    g.fillStyle(0x4f3a1f, 1).fillRect(13, 14, 4, 4); // latch
+    g.lineStyle(1, 0x4f3a1f, 1).strokeRect(3, 6, 24, 20);
+  },
+  base_campfire: (g) => {
+    g.fillStyle(0x5b616a, 1); // stone ring
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      g.fillCircle(15 + Math.cos(a) * 11, 16 + Math.sin(a) * 9, 3);
+    }
+    g.fillStyle(0x6e5230, 1).fillRect(9, 15, 12, 3).fillRect(13, 11, 3, 11); // logs
+    g.fillStyle(0xff7a2a, 1).fillTriangle(15, 6, 10, 17, 20, 17); // flame
+    g.fillStyle(0xffd23f, 1).fillTriangle(15, 10, 12, 17, 18, 17);
+  },
+  base_workbench: (g) => {
+    g.fillStyle(0x8a6a3a, 1).fillRect(2, 8, 26, 14);
+    g.fillStyle(0x5a4326, 1).fillRect(3, 22, 3, 5).fillRect(24, 22, 3, 5).fillRect(2, 8, 26, 2);
+    g.fillStyle(0x9aa3ad, 1).fillRect(6, 11, 8, 2); // saw
+    g.fillStyle(0xd1483a, 1).fillRect(18, 10, 5, 4); // toolbox
+    g.fillStyle(0x2b2e33, 1).fillRect(15, 14, 7, 2); // wrench
+  },
+
   // --- wild animals (Feature 6), top-down ---
   animal_rabbit: (g) => {
     g.fillStyle(0xd8c8b0, 1).fillEllipse(15, 17, 11, 8);
