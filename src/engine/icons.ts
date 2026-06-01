@@ -9,10 +9,16 @@ import { RARITY_META } from "../game/items/rarity";
 // Guaranteed to produce a visible icon for every item — no art dependency.
 
 const SIZE = 48;
+const HELD_SIZE = 64;
 const dataUrlCache = new Map<string, string>();
 
 export function iconKey(name: string): string {
   return "icon_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+/** Texture key for the in-hand (plateless, outlined) version of a weapon. */
+export function heldKey(name: string): string {
+  return "held_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_");
 }
 
 function cssHex(c: number): string {
@@ -175,17 +181,44 @@ function drawIconCanvas(def: ItemDef): HTMLCanvasElement {
   return c;
 }
 
-/** Generate every item icon as a Phaser texture + cached dataURL. Idempotent. */
+// In-hand weapon sprite: ONLY the silhouette (no dark plate/border), drawn bigger
+// and under a bright halo so the held weapon reads clearly against any ground / at
+// night — the full plate icon reads as a dark nub on the player. Transparent bg.
+function drawHeldCanvas(def: ItemDef): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = HELD_SIZE;
+  c.height = HELD_SIZE;
+  const ctx = c.getContext("2d");
+  if (!ctx) return c;
+  ctx.translate(HELD_SIZE / 2, HELD_SIZE / 2 + 1);
+  ctx.scale(1.5, 1.5); // the silhouette lives in ~[-17,17]; fill more of the canvas
+  // Pass 1: a light halo (outline) cast by the shape, so it pops on dark backgrounds.
+  ctx.save();
+  ctx.shadowColor = "rgba(245,247,250,0.95)";
+  ctx.shadowBlur = 5;
+  silhouette(ctx, def);
+  silhouette(ctx, def); // double the shadow pass for a stronger rim
+  ctx.restore();
+  silhouette(ctx, def); // crisp shape over the halo
+  return c;
+}
+
+/** Generate every item icon as a Phaser texture + cached dataURL (and a plateless
+ *  in-hand texture for weapons). Idempotent. */
 export function generateAllIcons(scene: Phaser.Scene): void {
   for (const def of allItems()) {
     const key = iconKey(def.name);
-    if (scene.textures.exists(key)) {
-      if (!dataUrlCache.has(def.name)) dataUrlCache.set(def.name, drawIconCanvas(def).toDataURL());
-      continue;
+    if (!scene.textures.exists(key)) {
+      const canvas = drawIconCanvas(def);
+      scene.textures.addCanvas(key, canvas);
+      dataUrlCache.set(def.name, canvas.toDataURL());
+    } else if (!dataUrlCache.has(def.name)) {
+      dataUrlCache.set(def.name, drawIconCanvas(def).toDataURL());
     }
-    const canvas = drawIconCanvas(def);
-    scene.textures.addCanvas(key, canvas);
-    dataUrlCache.set(def.name, canvas.toDataURL());
+    if (def.kind === "weapon") {
+      const hk = heldKey(def.name);
+      if (!scene.textures.exists(hk)) scene.textures.addCanvas(hk, drawHeldCanvas(def));
+    }
   }
 }
 
