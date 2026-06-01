@@ -26,10 +26,20 @@ import {
   placeableDef,
 } from "../game/base";
 import { compassDir, nextEventDelayMs, rollWorldEvent, type WorldEventKind } from "../game/worldEvents";
+import {
+  acceptOffer,
+  addStanding,
+  companionCount,
+  factionForBiome,
+  generateOffers,
+  MAX_COMPANIONS,
+  npcName,
+  type TradeOffer,
+} from "../game/npcs";
 import { isWet, rollWeather } from "../game/weather";
 import { addXp, SKILL_NAMES, type SkillId } from "../game/skills";
 import { propKey } from "../engine/propSprites";
-import { randomSeed, liveRng } from "../game/rng";
+import { randomSeed, liveRng, createRng } from "../game/rng";
 import {
   clampStat,
   clearSave,
@@ -65,6 +75,7 @@ import { Player } from "../engine/Player";
 import { PLAYER_KEY } from "../engine/textures";
 import { Enemy } from "../engine/Enemy";
 import { Animal, ANIMALS, type AnimalKind } from "../engine/Animal";
+import { Npc } from "../engine/Npc";
 import type { ZombieDef } from "../game/enemies/types";
 import { rollAmbientUndead, rollZombie } from "../game/enemies/spawnTable";
 import { getZombie } from "../game/enemies/catalog";
@@ -76,6 +87,7 @@ import { LootModal } from "../ui/LootModal";
 import { CraftModal } from "../ui/CraftModal";
 import { StorageModal } from "../ui/StorageModal";
 import { Minimap } from "../ui/Minimap";
+import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
@@ -135,6 +147,11 @@ const OPEN_LOCS = new Set<string>([
 // Natural biomes where wild game roams (Feature 6).
 const ANIMAL_BIOMES = new Set<string>([
   "forest", "dense_woods", "grassland", "farmland", "parkland", "riverbank", "marsh", "coast",
+]);
+
+// Calmer biomes where friendly survivors are found (Feature 10b).
+const SAFE_BIOMES = new Set<string>([
+  "suburb", "farmland", "forest", "grassland", "parkland", "school_campus", "coast", "riverbank",
 ]);
 
 export class WorldScene extends Phaser.Scene {
@@ -213,6 +230,15 @@ export class WorldScene extends Phaser.Scene {
   private radioAcc = 0;
   private lastDiscCx = NaN;
   private lastDiscCy = NaN;
+  // Survivors / companions / trade (Feature 10b).
+  private npcs: Npc[] = [];
+  private npcGroup!: Phaser.Physics.Arcade.Group;
+  private npcAcc = 0;
+  private npcDelay = 26000;
+  private tradeUi!: TradeModal;
+  private tradeOpen = false;
+  private activeNpc: Npc | null = null;
+  private readonly npcOffers = new Map<string, TradeOffer[]>();
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -272,6 +298,12 @@ export class WorldScene extends Phaser.Scene {
     this.radioAcc = 0;
     this.lastDiscCx = NaN;
     this.lastDiscCy = NaN;
+    for (const n of this.npcs) n.destroy();
+    this.npcs = [];
+    this.npcAcc = 0;
+    this.tradeOpen = false;
+    this.activeNpc = null;
+    this.npcOffers.clear();
     this.weatherRect = undefined; // re-created on the fresh uiLayer below
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
@@ -290,6 +322,7 @@ export class WorldScene extends Phaser.Scene {
     this.enemyProjGroup = this.physics.add.group();
     this.itemGroup = this.physics.add.group();
     this.placeGroup = this.physics.add.staticGroup(); // blocking placeables (Feature 7)
+    this.npcGroup = this.physics.add.group(); // survivors / companions (Feature 10b)
 
     const collide: ColliderSpec[] = [];
     this.chunks = new ChunkManager(this, this.state.seed, {
@@ -338,6 +371,7 @@ export class WorldScene extends Phaser.Scene {
       { target: this.player.sprite },
       { target: this.enemyGroup },
       { target: this.animalGroup },
+      { target: this.npcGroup },
       { target: this.projectileGroup, callback: (o) => this.killProjectile(o as unknown as Phaser.Physics.Arcade.Image) },
       { target: this.enemyProjGroup, callback: (o) => this.killProjectile(o as unknown as Phaser.Physics.Arcade.Image) },
     );
@@ -352,6 +386,7 @@ export class WorldScene extends Phaser.Scene {
     this.physics.add.collider(this.player.sprite, this.placeGroup);
     this.physics.add.collider(this.enemyGroup, this.placeGroup);
     this.physics.add.collider(this.animalGroup, this.placeGroup);
+    this.physics.add.collider(this.npcGroup, this.placeGroup);
     this.physics.add.overlap(this.player.sprite, this.itemGroup, (_p, item) =>
       this.pickupDrop(item as unknown as Phaser.Physics.Arcade.Image),
     );
@@ -485,6 +520,17 @@ export class WorldScene extends Phaser.Scene {
         this.setGameKeys(true);
       },
     );
+    this.tradeUi = new TradeModal();
+    this.tradeUi.setHandlers(
+      (offer) => this.onTradeAccept(offer),
+      () => this.onRecruitToggle(),
+      () => {
+        this.tradeOpen = false;
+        this.activeNpc = null;
+        this.setGameKeys(true);
+      },
+    );
+    this.restoreCompanions(); // re-spawn recruited companions from the save
     this.touch = new TouchControls();
     this.touch.setHandlers(
       () => this.tryInteract(),
@@ -522,6 +568,7 @@ export class WorldScene extends Phaser.Scene {
       this.loot.destroy();
       this.craftUi.destroy();
       this.storeUi.destroy();
+      this.tradeUi.destroy();
       this.touch.destroy();
       this.chunks.destroy();
       this.persist();
@@ -543,8 +590,8 @@ export class WorldScene extends Phaser.Scene {
 
   override update(time: number, delta: number): void {
     // The world pauses during an encounter, while an outcome is playing out, or
-    // while the loot/craft/storage screens are open.
-    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen && !this.storeOpen) {
+    // while the loot/craft/storage/trade screens are open.
+    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
       if (time < this.grabbedUntil) {
@@ -563,6 +610,14 @@ export class WorldScene extends Phaser.Scene {
       this.tickClouds(time);
       this.updateEnemies(time);
       this.updateAnimals(time);
+      this.updateNpcs(time);
+
+      this.npcAcc += delta;
+      if (this.npcAcc >= this.npcDelay) {
+        this.npcAcc = 0;
+        this.npcDelay = 22000 + Math.random() * 22000;
+        this.spawnAmbientSurvivor();
+      }
 
       this.siegeAcc += delta;
       if (this.siegeAcc >= SIEGE_MS) {
@@ -643,11 +698,13 @@ export class WorldScene extends Phaser.Scene {
       this.hintText.setText(`Driving — Fuel ${Math.ceil(this.driving.data.fuel)}%  ·  Press E to park`).setVisible(true);
     } else if (!this.dead && !this.inEncounter) {
       const veh = this.nearestVehicle(52);
-      const store = veh ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
-      const chest = veh || store ? null : this.nearestChest(42);
-      const farm = veh || store || chest ? null : this.farmHint();
-      const near = veh || store || chest || farm ? null : this.buildingAt();
+      const npc = veh ? null : this.nearestNpc(46);
+      const store = veh || npc ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
+      const chest = veh || npc || store ? null : this.nearestChest(42);
+      const farm = veh || npc || store || chest ? null : this.farmHint();
+      const near = veh || npc || store || chest || farm ? null : this.buildingAt();
       if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
+      else if (npc) this.hintText.setText(`Press E to talk to ${npc.name}${npc.kind === "companion" ? " (companion)" : ""}`).setVisible(true);
       else if (store) this.hintText.setText("Press E to open base storage").setVisible(true);
       else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
       else if (farm) this.hintText.setText(farm).setVisible(true);
@@ -662,7 +719,7 @@ export class WorldScene extends Phaser.Scene {
       const first = quickUseItems(this.state).findIndex((q) => q); // keep the cursor on a usable slot
       if (first >= 0) this.selectedQuick = first;
     }
-    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen && !this.storeOpen, this.selectedQuick);
+    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen, this.selectedQuick);
   }
 
   private updateObjective(): void {
@@ -1112,6 +1169,11 @@ export class WorldScene extends Phaser.Scene {
       this.tryVehicleAction(veh);
       return;
     }
+    const npc = this.nearestNpc(46);
+    if (npc) {
+      this.openTrade(npc);
+      return;
+    }
     const store = this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
     if (store) {
       this.openStorage();
@@ -1529,7 +1591,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private toggleBuild(): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.driving) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.driving) return;
     this.buildMode = !this.buildMode;
     if (this.buildMode) {
       this.firing = false;
@@ -1612,7 +1674,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** V inside a building: claim it as home (or release it). The base anchors safety. */
   private claimToggle(): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen) return;
     const b = this.buildingAt();
     if (!b) {
       this.showToast("Stand inside a building to claim it");
@@ -1639,7 +1701,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private openStorage(): void {
-    if (this.dead || this.inEncounter) return;
+    if (this.dead || this.inEncounter || this.tradeOpen) return;
     this.storeOpen = true;
     this.setGameKeys(false);
     this.firing = false;
@@ -1757,10 +1819,13 @@ export class WorldScene extends Phaser.Scene {
         this.showToast("A supply drop came down nearby — check your map (M).");
         this.airDrop(3);
         break;
-      case "trader":
-        this.spawnNear([{ type: "survivor_friendly", count: 1 }]);
-        this.showToast("A trader caravan passes through the area.");
+      case "trader": {
+        const { tx, ty } = this.player.tilePos();
+        const spot = this.chunks.walkableNear(tx, ty, 5, 10);
+        if (spot) this.spawnSurvivor(spot.x, spot.y);
+        this.showToast("A trader has wandered into the area — find them (E to trade).");
         break;
+      }
     }
   }
 
@@ -1809,13 +1874,192 @@ export class WorldScene extends Phaser.Scene {
     return null;
   }
 
+  // --- survivors / companions / trade (Feature 10b) ---------------------------
+
+  /** Re-spawn recruited companions from the save (they then follow the player). */
+  private restoreCompanions(): void {
+    for (const rec of this.state.npcs ?? []) {
+      if (rec.kind !== "companion") continue;
+      const near = Math.hypot(rec.x - this.player.sprite.x, rec.y - this.player.sprite.y) < 600;
+      const x = near ? rec.x : this.player.sprite.x + Phaser.Math.Between(-40, 40);
+      const y = near ? rec.y : this.player.sprite.y + Phaser.Math.Between(-40, 40);
+      this.makeNpc(x, y, rec.id, rec.name, rec.faction, "companion", rec.hp, rec.maxHp);
+    }
+  }
+
+  private makeNpc(x: number, y: number, id: string, name: string, faction: string, kind: "survivor" | "companion", hp: number, maxHp: number): Npc {
+    const color = kind === "companion" ? 0x6effa0 : 0x6fa8c7;
+    const npc = new Npc(this, x, y, { id, name, faction, kind, hp, maxHp, color });
+    this.npcGroup.add(npc.sprite);
+    this.npcs.push(npc);
+    return npc;
+  }
+
+  private spawnSurvivor(x: number, y: number, faction?: string): Npc {
+    const fac = faction ?? factionForBiome(this.chunks.biomeAtPx(x, y));
+    const id = `npc_${Math.floor(this.time.now)}_${Math.floor(Math.random() * 1e4)}`;
+    const npc = this.makeNpc(x, y, id, npcName(liveRng), fac, "survivor", 45, 45);
+    spawnPopIn(this, npc.sprite);
+    return npc;
+  }
+
+  private spawnAmbientSurvivor(): void {
+    if (this.npcs.filter((n) => n.kind === "survivor").length >= 4) return;
+    if (!SAFE_BIOMES.has(this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y))) return;
+    const { tx, ty } = this.player.tilePos();
+    const t = this.chunks.walkableNear(tx, ty, 8, 14);
+    if (t) this.spawnSurvivor(t.x, t.y);
+  }
+
+  private updateNpcs(now: number): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    for (const npc of this.npcs) {
+      let zt: { x: number; y: number } | null = null;
+      if (npc.kind === "companion") {
+        const z = this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 240);
+        if (z) zt = { x: z.sprite.x, y: z.sprite.y };
+      }
+      npc.update(px, py, zt, now);
+    }
+    for (let i = this.npcs.length - 1; i >= 0; i--) {
+      const npc = this.npcs[i];
+      if (npc.kind === "companion") {
+        const z = this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 34);
+        if (z && now - npc.lastHit > 700) {
+          npc.lastHit = now;
+          bloodBurst(this, z.sprite.x, z.sprite.y, 6);
+          if (z.takeDamage(12)) this.onEnemyKilled(z);
+        }
+        const zc = this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 24);
+        if (zc && now - npc.lastHurt > 800) {
+          npc.lastHurt = now;
+          if (npc.takeDamage(Math.max(3, Math.round(zc.damage * 0.7)))) {
+            this.killCompanion(npc);
+            continue;
+          }
+        }
+      } else if (Math.hypot(npc.sprite.x - px, npc.sprite.y - py) > 2400) {
+        npc.destroy(); // ambient survivor wandered off
+        this.npcs.splice(i, 1);
+      }
+    }
+  }
+
+  private killCompanion(npc: Npc): void {
+    const i = this.npcs.indexOf(npc);
+    if (i >= 0) this.npcs.splice(i, 1);
+    if (this.state.npcs) this.state.npcs = this.state.npcs.filter((n) => n.id !== npc.id);
+    sfx.death();
+    this.showToast(`${npc.name} fell defending you.`);
+    pushRecentEvent(this.state, `${npc.name} died.`);
+    deathFade(this, npc.sprite);
+    this.persist();
+  }
+
+  private nearestEnemyTo(x: number, y: number, maxDist: number): Enemy | null {
+    let best: Enemy | null = null;
+    let bestD = maxDist;
+    for (const e of this.enemies) {
+      const d = Math.hypot(e.sprite.x - x, e.sprite.y - y);
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  private nearestNpc(maxDist: number): Npc | null {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: Npc | null = null;
+    let bestD = maxDist;
+    for (const n of this.npcs) {
+      const d = Math.hypot(n.sprite.x - px, n.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+    return best;
+  }
+
+  /** Open the trade/recruit panel for a survivor (offers are stable per survivor). */
+  private openTrade(npc: Npc): void {
+    if (this.dead || this.inEncounter || this.enacting) return;
+    this.tradeOpen = true;
+    this.activeNpc = npc;
+    this.setGameKeys(false);
+    this.firing = false;
+    this.player.sprite.setVelocity(0, 0);
+    let offers = this.npcOffers.get(npc.id);
+    if (!offers) {
+      offers = generateOffers(createRng(`${this.state.seed}:npc:${npc.id}`), npc.faction);
+      this.npcOffers.set(npc.id, offers);
+    }
+    sfx.ui();
+    this.tradeUi.open(this.state, {
+      name: npc.name,
+      faction: npc.faction,
+      offers,
+      isCompanion: npc.kind === "companion",
+      canRecruit: companionCount(this.state) < MAX_COMPANIONS,
+    });
+  }
+
+  private onTradeAccept(offer: TradeOffer): void {
+    if (!this.activeNpc || !acceptOffer(this.state, offer)) return;
+    sfx.pickup();
+    addStanding(this.state, this.activeNpc.faction, 2);
+    pushRecentEvent(this.state, `Traded with ${this.activeNpc.name}.`);
+    // deplete the survivor's stock so a deal can't be repeated endlessly
+    const stock = this.npcOffers.get(this.activeNpc.id);
+    if (stock) this.npcOffers.set(this.activeNpc.id, stock.filter((o) => o !== offer));
+    this.hud.update(this.state, this.debugInfo());
+    this.persist();
+    this.tradeUi.open(this.state, {
+      name: this.activeNpc.name,
+      faction: this.activeNpc.faction,
+      offers: this.npcOffers.get(this.activeNpc.id) ?? [],
+      isCompanion: this.activeNpc.kind === "companion",
+      canRecruit: companionCount(this.state) < MAX_COMPANIONS,
+    });
+  }
+
+  private onRecruitToggle(): void {
+    const npc = this.activeNpc;
+    if (!npc) return;
+    if (npc.kind === "companion") {
+      npc.kind = "survivor";
+      npc.sprite.setTint(0x6fa8c7);
+      this.state.npcs = (this.state.npcs ?? []).filter((n) => n.id !== npc.id);
+      this.showToast(`${npc.name} parts ways with you.`);
+    } else {
+      if (companionCount(this.state) >= MAX_COMPANIONS) {
+        this.showToast("You can't lead any more companions.");
+        return;
+      }
+      npc.kind = "companion";
+      npc.sprite.setTint(0x6effa0);
+      this.state.npcs = this.state.npcs ?? [];
+      this.state.npcs.push({ id: npc.id, name: npc.name, kind: "companion", faction: npc.faction, x: npc.sprite.x, y: npc.sprite.y, hp: npc.hp, maxHp: npc.maxHp });
+      addStanding(this.state, npc.faction, 5);
+      this.showToast(`${npc.name} joins you.`);
+      pushRecentEvent(this.state, `${npc.name} joined your group.`);
+    }
+    sfx.ui();
+    this.persist();
+    this.tradeUi.close();
+  }
+
   private toggleLoot(): void {
     if (this.dead) return;
     if (this.lootOpen) {
       this.loot.close();
       return;
     }
-    if (this.inEncounter || this.craftOpen || this.storeOpen) return;
+    if (this.inEncounter || this.craftOpen || this.storeOpen || this.tradeOpen) return;
     this.lootOpen = true;
     this.setGameKeys(false);
     this.firing = false;
@@ -1829,7 +2073,7 @@ export class WorldScene extends Phaser.Scene {
   /** Rest/sleep (Z): pass time, recover stamina, at the cost of food/water and a
    *  real chance of waking to the dead. Can't rest with enemies close. */
   private restAction(): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.driving || this.buildMode) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.driving || this.buildMode) return;
     if (this.nearestEnemy(150)) {
       this.showToast("Too dangerous to rest here");
       return;
@@ -1860,7 +2104,7 @@ export class WorldScene extends Phaser.Scene {
       this.craftUi.close();
       return;
     }
-    if (this.inEncounter || this.enacting || this.lootOpen || this.storeOpen) return;
+    if (this.inEncounter || this.enacting || this.lootOpen || this.storeOpen || this.tradeOpen) return;
     this.craftOpen = true;
     this.setGameKeys(false);
     this.firing = false;
@@ -2169,7 +2413,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Use the consumable in quick-slot i (number keys 1–4); no-op if empty. */
   private useQuickSlot(i: number): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen) return;
     const slot = quickUseItems(this.state)[i];
     if (!slot || !useConsumable(this.state, slot.item)) return;
     this.selectedQuick = i; // scroll/Q/click all converge on the slot just used
@@ -2182,7 +2426,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Move the hotbar scroll-wheel cursor to the next/prev FILLED quick-use slot. */
   private cycleQuick(dir: number): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen) return;
     const q = quickUseItems(this.state);
     const filled = [0, 1, 2, 3].filter((i) => q[i]);
     if (filled.length === 0) return;
@@ -2207,6 +2451,7 @@ export class WorldScene extends Phaser.Scene {
     this.buildMode = false;
     this.buildGhost?.setVisible(false);
     if (this.storeOpen) this.storeUi.close();
+    if (this.tradeOpen) this.tradeUi.close();
     this.player.sprite.setVelocity(0, 0);
     this.modal.close();
     sfx.death();
@@ -2224,7 +2469,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Melee swing at the nearest threat (SPACE/F). Weapons hit harder. */
   private meleeAttack(): void {
-    if (this.dead || this.inEncounter || this.driving || this.storeOpen || this.buildMode) return;
+    if (this.dead || this.inEncounter || this.driving || this.storeOpen || this.tradeOpen || this.buildMode) return;
     const now = this.time.now;
     const hit = meleeOutcome(this.state, liveRng);
     if (now - this.lastMelee < hit.cooldownMs || this.state.player.stamina < 4) return;
@@ -2462,7 +2707,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Fire the equipped gun toward `angle` (one trigger pull). */
   private fire(angle: number): void {
-    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving || this.storeOpen || this.buildMode) return;
+    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving || this.storeOpen || this.tradeOpen || this.buildMode) return;
     const plan = shotOutcome(this.state, liveRng);
     if (!plan) return; // no gun equipped
     const now = this.time.now;
@@ -2656,6 +2901,17 @@ export class WorldScene extends Phaser.Scene {
       this.driving.data.x = this.player.sprite.x;
       this.driving.data.y = this.player.sprite.y;
       upsertVehicle(this.state, this.driving.data);
+    }
+    if (this.state.npcs && this.npcs.length > 0) {
+      for (const npc of this.npcs) {
+        if (npc.kind !== "companion") continue;
+        const rec = this.state.npcs.find((n) => n.id === npc.id);
+        if (rec) {
+          rec.x = npc.sprite.x;
+          rec.y = npc.sprite.y;
+          rec.hp = npc.hp;
+        }
+      }
     }
     saveGame(this.state);
   }

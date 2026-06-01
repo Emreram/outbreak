@@ -58,6 +58,21 @@ export interface GameState {
   placeables?: Placeable[]; // player-built barricades/walls/stations/storage (Feature 7)
   baseStorage?: InventoryItem[]; // items stashed in base storage crates (Feature 7)
   discovered?: string[]; // visited chunk keys "cx,cy" — minimap fog-of-war (Feature 10)
+  npcs?: Npc[]; // recruited companions (persisted); ambient survivors are transient (Feature 10)
+  factions?: Record<string, number>; // standing per faction, -100..100 (Feature 10)
+}
+
+/** A survivor NPC. Recruited companions persist on GameState.npcs; ambient survivors
+ *  spawned in the world are transient (not saved) until you recruit them. */
+export interface Npc {
+  id: string;
+  name: string;
+  kind: string; // "survivor" | "companion"
+  faction: string; // townsfolk | wanderers | scavengers
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
 }
 
 /** The building the player has claimed as their home base (Feature 7). */
