@@ -51,6 +51,7 @@ export interface GameState {
   appearance?: { color?: number }; // survivor sprite tint
   // --- persistent world entities (optional → old saves stay valid) ---
   farmPlots?: FarmPlot[]; // player-tilled crop plots (Feature 5)
+  weather?: string; // current weather kind (Feature 9)
 }
 
 /** A player-created farm plot. Keyed by global tile; persists + grows on the clock. */

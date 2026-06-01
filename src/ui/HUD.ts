@@ -4,6 +4,7 @@ import { clampStat } from "../game/GameState";
 import { ammoReserve, equippedMeleeDef, equippedRangedDef } from "../game/inventory";
 import { rarityCss } from "../game/items/rarity";
 import { getBackground } from "../game/backgrounds";
+import { weatherName } from "../game/weather";
 
 // On-screen HUD (CLAUDE.md §13 Phase 3): HP / stamina / hunger / thirst /
 // infection bars + inventory + day/time, fixed to the camera. UI layer — it
@@ -88,7 +89,7 @@ export class HUD {
 
   update(s: GameState, debug: { fps: number; tx: number; ty: number; brain: string }): void {
     const bgName = s.background ? getBackground(s.background)?.name : undefined;
-    this.dayText.setText(`${s.player.name}${bgName ? ` · ${bgName}` : ""}  ·  Day ${s.day}  ·  ${s.timeOfDay}`);
+    this.dayText.setText(`${s.player.name}${bgName ? ` · ${bgName}` : ""}  ·  Day ${s.day}  ·  ${s.timeOfDay}  ·  ${weatherName(s.weather)}`);
 
     this.bars.clear();
     BARS.forEach((b, i) => {
