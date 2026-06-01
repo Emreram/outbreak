@@ -4,9 +4,10 @@
 // guarantee, and distance-scaled danger/loot.
 
 import { Tile, TILE_ORDER, TILE_COUNT, SOLID_TILES, generateChunk } from "../src/game/worldgen";
-import { biomeAt, getBiome } from "../src/game/world/biomes";
+import { biomeAt, getBiome, BIOMES } from "../src/game/world/biomes";
 import { field } from "../src/game/world/noise";
 import { dangerTierAt, lootBiasAt, chunkDistToSpawn } from "../src/game/world/scaling";
+import { hasLandmarkStyle } from "../src/game/world/landmarks";
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y, SPAWN_CHUNK } from "../src/game/constants";
 
 let fail = 0;
@@ -91,6 +92,12 @@ for (let cy = 16; cy <= 24; cy++) {
 }
 ok(dupe === "", `building/chest gids unique across 81 chunks (${dupe || "ok"})`);
 ok(minDensityOk, "no land chunk is empty (min interactable density)");
+
+// Every landmark kind a biome can place has an explicit (curated) marker style.
+const lmKinds = new Set<string>();
+for (const b of Object.values(BIOMES)) for (const lm of b.landmarks) lmKinds.add(lm.kind);
+const unstyled = [...lmKinds].filter((k) => !hasLandmarkStyle(k));
+ok(unstyled.length === 0, `every biome landmark has a style (${unstyled.join(",") || "ok"})`);
 
 // --- distance-scaled danger & loot -----------------------------------------
 ok(chunkDistToSpawn(SPAWN_CHUNK.x, SPAWN_CHUNK.y) === 0, "spawn chunk is distance 0");

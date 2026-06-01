@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { SOLID_TILES, type Building, type ChunkData } from "../game/worldgen";
+import { landmarkStyle } from "../game/world/landmarks";
 import { TILESET_KEY } from "./textures";
 import { propKey } from "./propSprites";
 
@@ -44,6 +45,29 @@ export class ChunkView {
       const key = propKey(p.kind);
       if (!scene.textures.exists(key)) continue;
       this.extras.push(scene.add.image(p.x, p.y, key).setDepth(4));
+    }
+
+    // Landmark set-pieces — a visible anchor prop + a labelled marker so the
+    // curated points of interest read on the map (no minimap by design).
+    for (const lm of chunk.landmarks) {
+      const st = landmarkStyle(lm.kind);
+      if (st.prop) {
+        const k = propKey(st.prop);
+        if (scene.textures.exists(k)) this.extras.push(scene.add.image(lm.x, lm.y, k).setDepth(4).setScale(1.3));
+      }
+      const t = scene.add
+        .text(lm.x, lm.y - 22, `${st.glyph} ${lm.label}`, {
+          fontFamily: "monospace",
+          fontSize: "11px",
+          color: st.color,
+          align: "center",
+          stroke: "#0b0d0e",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(6)
+        .setResolution(2);
+      this.extras.push(t);
     }
 
     // Light building "signage" so the procedural variety reads.
