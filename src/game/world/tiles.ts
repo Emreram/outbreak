@@ -112,12 +112,19 @@ export interface Building {
   center: { x: number; y: number }; // GLOBAL world pixels (labels / triggers)
 }
 
+/** Visual + behavioural variety for lootable containers (not all are "chests"). */
+export type ContainerKind =
+  | "crate" | "drawer" | "locker" | "fridge" | "toolbox" | "cabinet"
+  | "register" | "med_cabinet" | "gun_cabinet" | "safe";
+
 export interface Container {
   gid: string; // `${cx}_${cy}_${i}`
   tx: number; // GLOBAL tile coords
   ty: number;
   tier: number;
   type: BuildingType;
+  kind: ContainerKind; // drives sprite + loot bias
+  locked: boolean; // needs a Crowbar / Lockpick / Bolt Cutters to open
 }
 
 /** Decorative, non-blocking props (rendered as small sprites, not tiles). */

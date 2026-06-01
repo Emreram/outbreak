@@ -83,6 +83,8 @@ const MATERIALS: MaterialDef[] = [
   mat("Fuel Canister", "uncommon", 0xd13a2a),
   mat("Toolkit", "rare", 0xffd23f),
   mat("Weapon Parts", "rare", 0x9aa3ad),
+  mat("Lockpick", "uncommon", 0xc8d0d8), // opens locked containers (consumed)
+  mat("Bolt Cutters", "rare", 0xd1483a), // opens locked containers (reusable)
 ];
 
 const ARMOR: ArmorDef[] = [

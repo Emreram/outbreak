@@ -236,6 +236,7 @@ export function iconDataUrl(name: string): string {
 
 export const CHEST_CLOSED = "chest_closed";
 export const CHEST_OPEN = "chest_open";
+export const PADLOCK = "padlock";
 export const PROJ_BULLET = "proj_bullet";
 export const PROJ_PELLET = "proj_pellet";
 export const PROJ_ARROW = "proj_arrow";
@@ -263,6 +264,12 @@ export function generateLootWorldTextures(scene: Phaser.Scene): void {
     g.fillStyle(0x8a6a3a, 1).fillRoundedRect(1, 1, 26, 7, 3);
     g.fillStyle(0xffe08a, 1).fillRect(5, 14, 18, 2);
     g.lineStyle(1, 0x3a2a17, 1).strokeRoundedRect(1, 12, 26, 15, 3);
+  });
+  mk(PADLOCK, 12, 13, (g) => {
+    g.lineStyle(2, 0xc8d0d8, 1).beginPath();
+    g.arc(6, 5, 3, Math.PI, 2 * Math.PI).strokePath(); // shackle
+    g.fillStyle(0x2b2e33, 1).fillRoundedRect(2, 5, 8, 7, 2); // body
+    g.fillStyle(0xffd23f, 1).fillCircle(6, 8, 1.4); // keyhole
   });
   mk(PROJ_BULLET, 8, 3, (g) => g.fillStyle(0xfff2a8, 1).fillRoundedRect(0, 0, 8, 3, 1.5));
   mk(PROJ_PELLET, 4, 4, (g) => g.fillStyle(0xffe08a, 1).fillCircle(2, 2, 2));
