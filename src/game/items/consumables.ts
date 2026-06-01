@@ -25,8 +25,8 @@ function mat(name: string, rarity: Rarity, tint?: number, icon = "scrap"): Mater
   if (tint !== undefined) d.tint = tint;
   return d;
 }
-function arm(name: string, rarity: Rarity, defense: number, tint?: number): ArmorDef {
-  const d: ArmorDef = { id: slug(name), name, kind: "armor", rarity, icon: "armor", defense };
+function arm(name: string, rarity: Rarity, defense: number, slot: "head" | "body" = "body", tint?: number): ArmorDef {
+  const d: ArmorDef = { id: slug(name), name, kind: "armor", rarity, icon: "armor", defense, slot };
   if (tint !== undefined) d.tint = tint;
   return d;
 }
@@ -117,14 +117,14 @@ const MATERIALS: MaterialDef[] = [
 ];
 
 const ARMOR: ArmorDef[] = [
-  arm("Leather Jacket", "common", 12, 0x6b4a2a),
-  arm("Warm Coat", "common", 10, 0x3a5236),
-  arm("Helmet", "uncommon", 14, 0x5b616a),
-  arm("Gas Mask", "uncommon", 8, 0x4a4a4a),
-  arm("Padded Vest", "uncommon", 18, 0x4a4a4a),
-  arm("Kevlar Vest", "rare", 30, 0x2a2e33),
-  arm("Riot Gear", "epic", 40, 0x23262b),
-  arm("Plate Carrier", "legendary", 52, 0x1a1a1a),
+  arm("Leather Jacket", "common", 12, "body", 0x6b4a2a),
+  arm("Warm Coat", "common", 10, "body", 0x3a5236),
+  arm("Helmet", "uncommon", 14, "head", 0x5b616a),
+  arm("Gas Mask", "uncommon", 8, "head", 0x4a4a4a),
+  arm("Padded Vest", "uncommon", 18, "body", 0x4a4a4a),
+  arm("Kevlar Vest", "rare", 30, "body", 0x2a2e33),
+  arm("Riot Gear", "epic", 40, "body", 0x23262b),
+  arm("Plate Carrier", "legendary", 52, "body", 0x1a1a1a),
 ];
 
 const THROWABLES: ThrowableDef[] = [

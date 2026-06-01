@@ -1,5 +1,5 @@
 import type { GameState } from "../shared/contracts";
-import { canAccept, getStanding, standingLabel, type TradeOffer } from "../game/npcs";
+import { canAccept, getStanding, standingLabel, type RecruitCost, type TradeOffer } from "../game/npcs";
 import { itemCount } from "../game/inventory";
 
 // Trade / recruit overlay (Feature 10b): a DOM panel for a survivor encounter —
@@ -18,8 +18,10 @@ const CSS = `
 .ob-tradeh b{font-size:15px;letter-spacing:.05em}
 .ob-tradeh .fac{font-size:11px;color:#8fa3b8}
 .ob-tradex{background:none;border:1px solid #34506a;color:#cdd9e5;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
+.ob-recwrap{display:flex;flex-direction:column;gap:4px}
 .ob-traderec{background:#2f8f3c;border:none;color:#fff;border-radius:8px;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}
 .ob-traderec:disabled{background:#26323c;color:#6f8296;cursor:not-allowed}
+.ob-rechint{font-size:11px;color:#8fa3b8}
 .ob-offer{display:flex;justify-content:space-between;align-items:center;gap:10px;
   background:#0c1620;border:1px solid #24384a;border-radius:8px;padding:9px 11px}
 .ob-oinfo{font-size:13px;min-width:0}
@@ -35,12 +37,16 @@ export class TradeModal {
   private readonly titleEl: HTMLElement;
   private readonly facEl: HTMLDivElement;
   private readonly recBtn: HTMLButtonElement;
+  private readonly recHintEl: HTMLDivElement;
   private readonly listEl: HTMLDivElement;
   private state?: GameState;
   private offers: TradeOffer[] = [];
   private faction = "";
   private isCompanion = false;
   private canRecruit = false;
+  private tier?: string;
+  private cost?: RecruitCost;
+  private atCompanionCap = false;
   private onAccept?: (o: TradeOffer) => void;
   private onRecruit?: () => void;
   private onClose?: () => void;
@@ -67,14 +73,17 @@ export class TradeModal {
     x.addEventListener("click", () => this.close());
     head.append(titleWrap, x);
 
+    const recWrap = div("ob-recwrap");
     this.recBtn = document.createElement("button");
     this.recBtn.className = "ob-traderec";
     this.recBtn.addEventListener("click", () => this.onRecruit?.());
+    this.recHintEl = div("ob-rechint");
+    recWrap.append(this.recBtn, this.recHintEl);
 
     this.listEl = div("ob-trade-list");
     const tip = div("ob-tradetip");
-    tip.textContent = "Barter staples (food, water, scrap, ammo) for their goods. Recruit them to fight at your side.";
-    panel.append(head, this.recBtn, this.listEl, tip);
+    tip.textContent = "Barter staples (food, water, scrap, ammo) for their goods — trading earns standing. Recruit costs supplies + good standing, scaled by the survivor's quality.";
+    panel.append(head, recWrap, this.listEl, tip);
     this.root.append(panel);
     document.body.appendChild(this.root);
 
@@ -98,12 +107,28 @@ export class TradeModal {
     this.onClose = onClose;
   }
 
-  open(state: GameState, info: { name: string; faction: string; offers: TradeOffer[]; isCompanion: boolean; canRecruit: boolean }): void {
+  open(
+    state: GameState,
+    info: {
+      name: string;
+      faction: string;
+      offers: TradeOffer[];
+      isCompanion: boolean;
+      canRecruit: boolean;
+      tier?: string;
+      cost?: RecruitCost;
+      standing?: number;
+      atCompanionCap?: boolean;
+    },
+  ): void {
     this.state = state;
     this.offers = info.offers;
     this.faction = info.faction;
     this.isCompanion = info.isCompanion;
     this.canRecruit = info.canRecruit;
+    this.tier = info.tier;
+    this.cost = info.cost;
+    this.atCompanionCap = info.atCompanionCap ?? false;
     this.titleEl.textContent = info.name;
     this.opened = true;
     this.root.classList.add("ob-on");
@@ -131,10 +156,10 @@ export class TradeModal {
     const s = this.state;
     if (!s) return;
     const standing = getStanding(s, this.faction);
-    this.facEl.textContent = `${this.faction} · ${standingLabel(standing)} (${standing > 0 ? "+" : ""}${standing})`;
+    const tierLabel = this.tier && this.tier !== "average" ? ` · ${this.tier} survivor` : "";
+    this.facEl.textContent = `${this.faction} · ${standingLabel(standing)} (${standing > 0 ? "+" : ""}${standing})${tierLabel}`;
 
-    this.recBtn.textContent = this.isCompanion ? "Dismiss companion" : "Recruit as companion";
-    this.recBtn.disabled = !this.isCompanion && !this.canRecruit;
+    this.renderRecruit(s, standing);
 
     this.listEl.innerHTML = "";
     for (const o of this.offers) {
@@ -161,6 +186,36 @@ export class TradeModal {
       row.append(info, btn);
       this.listEl.appendChild(row);
     }
+  }
+
+  /** Recruit button + cost/standing requirement readout (red until each is met). */
+  private renderRecruit(s: GameState, standing: number): void {
+    if (this.isCompanion) {
+      this.recBtn.textContent = "Dismiss companion";
+      this.recBtn.disabled = false;
+      this.recHintEl.textContent = "They'll part ways and roam as a survivor again.";
+      return;
+    }
+    const cost = this.cost;
+    const costStr = cost ? cost.items.map((c) => `${c.qty} ${c.item}`).join(", ") : "";
+    this.recBtn.textContent = costStr ? `Recruit (${costStr})` : "Recruit as companion";
+    this.recBtn.disabled = !this.canRecruit;
+
+    if (this.atCompanionCap) {
+      this.recHintEl.innerHTML = `<span style="color:#ff6b6b">Companion limit reached.</span>`;
+      return;
+    }
+    const parts: string[] = [];
+    if (cost) {
+      const standOk = standing >= cost.standingReq;
+      parts.push(`<span style="color:${standOk ? "#5ed66e" : "#ff6b6b"}">standing ${standing}/${cost.standingReq}</span>`);
+      for (const c of cost.items) {
+        const have = itemCount(s, c.item);
+        const ok = have >= c.qty;
+        parts.push(`<span style="color:${ok ? "#5ed66e" : "#ff6b6b"}">${c.item} ${have}/${c.qty}</span>`);
+      }
+    }
+    this.recHintEl.innerHTML = parts.join("  ·  ");
   }
 }
 

@@ -1,28 +1,33 @@
 import Phaser from "phaser";
 import type { GameState } from "../shared/contracts";
-import { ammoReserve, equippedMeleeDef, equippedRangedDef, quickUseItems } from "../game/inventory";
+import { ammoReserve, quickUseItems, weaponsInBag } from "../game/inventory";
 import { iconKey } from "../engine/icons";
 import { RARITY_META } from "../game/items/rarity";
 
-// Bottom-center hotbar: at-a-glance gear + quick-use items. Two gear slots (the
-// equipped MELEE + GUN you're holding, gun shows ammo) and four quick-use slots
-// (food / drink / heal / cure on number keys 1–4). Lives on the dedicated UI
-// layer/camera like the HUD so it renders un-clipped, and only READS GameState.
+// Bottom-center hotbar: a dynamic WEAPON STRIP (all carried weapons, melee-first,
+// capped at 6 — cycled by the scroll-wheel or number keys 5–0, the active one
+// highlighted) followed by four CONSUMABLE quick-slots (food / drink / heal / cure
+// on 1–4 / Q). Lives on the dedicated UI layer/camera like the HUD so it renders
+// un-clipped, and only READS GameState.
 
-const SLOT = 46;
-const GAP = 7;
-const GROUP_GAP = 18; // visual break between the gear pair and the quick-use four
+const SLOT = 44;
+const GAP = 6;
+const GROUP_GAP = 18; // visual break between the weapon strip and the quick four
 const MARGIN_BOTTOM = 12;
 const DEPTH = 1000;
-const N = 6; // 2 gear + 4 quick
+const MAX_WEAPONS = 6;
+const QUICK = 4;
+const MAXN = MAX_WEAPONS + QUICK; // pool size for the slot game objects
+const WKEYS = ["5", "6", "7", "8", "9", "0"]; // number keys that select weapon slots
 
 interface SlotView {
   name?: string;
   rarity?: keyof typeof RARITY_META;
-  tag: string; // corner label: "MEL" / "GUN" / "1".."4"
+  tag: string; // corner label: weapon key "5".."0" or quick "1".."4"
   meta: string; // bottom-right: ammo "12/48" or "x3"
   filled: boolean;
-  held?: boolean; // the weapon actually in hand (gun if equipped, else melee)
+  held?: boolean; // the ACTIVE in-hand weapon
+  weapon?: boolean; // a weapon-strip slot (vs a consumable quick slot)
 }
 
 export class HotBar {
@@ -38,7 +43,7 @@ export class HotBar {
     layer?.add(this.bg);
 
     const placeholder = iconKey("Fists");
-    for (let i = 0; i < N; i++) {
+    for (let i = 0; i < MAXN; i++) {
       const img = scene.add.image(0, 0, placeholder).setScrollFactor(0).setDepth(DEPTH + 1).setVisible(false);
       const tag = scene.add
         .text(0, 0, "", { fontFamily: "monospace", fontSize: "9px", color: "#9fb3c8" })
@@ -57,11 +62,14 @@ export class HotBar {
   }
 
   /** Reposition + repaint each frame. `visible=false` hides it (encounter/death/loot).
-   *  `selected` is the quick-use index (0–3) the scroll-wheel cursor is on, or -1. */
-  update(s: GameState, visible: boolean, selected = -1): void {
-    if (!visible) {
+   *  `selectedQuick` is the quick-use slot (0–3) Q/middle-click uses; `activeWeapon`
+   *  is the index of the in-hand weapon in the strip. */
+  update(s: GameState, visible: boolean, selectedQuick = -1, activeWeapon = 0): void {
+    const slots = visible ? this.slotViews(s, activeWeapon) : [];
+    const count = slots.length;
+    if (!visible || count === 0) {
       this.bg.setVisible(false);
-      for (let i = 0; i < N; i++) {
+      for (let i = 0; i < MAXN; i++) {
         this.icons[i].setVisible(false);
         this.tags[i].setVisible(false);
         this.metas[i].setVisible(false);
@@ -70,17 +78,24 @@ export class HotBar {
     }
     this.bg.setVisible(true);
 
+    const weaponCount = slots.filter((v) => v.weapon).length;
     const w = this.scene.scale.width;
     const h = this.scene.scale.height;
-    const rowW = N * SLOT + (N - 1) * GAP + GROUP_GAP;
+    const rowW = count * SLOT + (count - 1) * GAP + (weaponCount > 0 && weaponCount < count ? GROUP_GAP : 0);
     const x0 = Math.round((w - rowW) / 2);
     const top = h - SLOT - MARGIN_BOTTOM;
-    const left = (i: number): number => x0 + i * (SLOT + GAP) + (i >= 2 ? GROUP_GAP : 0);
-    const selSlot = selected >= 0 ? 2 + selected : -1; // quick index -> hotbar slot
+    // The quick group is shoved right by GROUP_GAP (only when a weapon strip precedes it).
+    const left = (i: number): number => x0 + i * (SLOT + GAP) + (weaponCount > 0 && i >= weaponCount ? GROUP_GAP : 0);
+    const selQuickSlot = selectedQuick >= 0 ? weaponCount + selectedQuick : -1;
 
-    const slots = this.slotViews(s);
     this.bg.clear();
-    for (let i = 0; i < N; i++) {
+    for (let i = 0; i < MAXN; i++) {
+      if (i >= count) {
+        this.icons[i].setVisible(false);
+        this.tags[i].setVisible(false);
+        this.metas[i].setVisible(false);
+        continue;
+      }
       const lx = left(i);
       const cx = lx + SLOT / 2;
       const v = slots[i];
@@ -88,9 +103,10 @@ export class HotBar {
       this.bg.fillStyle(0x0a0f14, 0.82).fillRoundedRect(lx, top, SLOT, SLOT, 8);
       const border = v.filled && v.rarity ? RARITY_META[v.rarity].color : 0x2a3a4a;
       this.bg.lineStyle(v.held ? 2.5 : 2, border, v.filled ? 0.95 : 0.55).strokeRoundedRect(lx, top, SLOT, SLOT, 8);
+      // Cyan held-glow on the ACTIVE in-hand weapon.
       if (v.held) this.bg.lineStyle(1, 0x7fd3ff, 0.9).strokeRoundedRect(lx - 2, top - 2, SLOT + 4, SLOT + 4, 9);
-      // Scroll-wheel selection cursor on the chosen quick-use slot.
-      if (i === selSlot && v.filled) this.bg.lineStyle(2.5, 0xffd23f, 1).strokeRoundedRect(lx - 3, top - 3, SLOT + 6, SLOT + 6, 10);
+      // Yellow cursor on the selected quick-use slot.
+      if (i === selQuickSlot && v.filled) this.bg.lineStyle(2.5, 0xffd23f, 1).strokeRoundedRect(lx - 3, top - 3, SLOT + 6, SLOT + 6, 10);
 
       const img = this.icons[i];
       if (v.filled && v.name) {
@@ -101,24 +117,27 @@ export class HotBar {
         img.setVisible(false);
       }
 
-      this.tags[i].setPosition(lx + 4, top + 3).setText(v.tag).setColor(i === selSlot && v.filled ? "#ffd23f" : v.filled ? "#cfe6ff" : "#6f8296").setVisible(true);
+      const tagColor = v.held ? "#7fd3ff" : i === selQuickSlot && v.filled ? "#ffd23f" : v.filled ? "#cfe6ff" : "#6f8296";
+      this.tags[i].setPosition(lx + 4, top + 3).setText(v.tag).setColor(tagColor).setVisible(true);
       this.metas[i].setPosition(lx + SLOT - 4, top + SLOT - 3).setText(v.meta).setVisible(!!v.meta);
     }
   }
 
-  private slotViews(s: GameState): SlotView[] {
-    const melee = equippedMeleeDef(s);
-    const gun = equippedRangedDef(s);
-    const heldRanged = !!gun;
-    const quick = quickUseItems(s);
+  private slotViews(s: GameState, activeWeapon: number): SlotView[] {
+    const views: SlotView[] = [];
 
-    const views: SlotView[] = [
-      { name: melee.name, rarity: melee.rarity, tag: "MEL", meta: "", filled: true, held: !heldRanged },
-      gun
-        ? { name: gun.name, rarity: gun.rarity, tag: "GUN", meta: `${s.loadedAmmo ?? 0}/${ammoReserve(s, gun.ammoType)}`, filled: true, held: true }
-        : { tag: "GUN", meta: "", filled: false },
-    ];
-    for (let i = 0; i < 4; i++) {
+    const weapons = weaponsInBag(s).slice(0, MAX_WEAPONS);
+    weapons.forEach((wdef, i) => {
+      let meta = "";
+      if (wdef.hand === "ranged") {
+        const reserve = ammoReserve(s, wdef.ammoType);
+        meta = wdef.name === s.equippedRanged ? `${s.loadedAmmo ?? 0}/${reserve}` : `${reserve}`;
+      }
+      views.push({ name: wdef.name, rarity: wdef.rarity, tag: WKEYS[i], meta, filled: true, held: i === activeWeapon, weapon: true });
+    });
+
+    const quick = quickUseItems(s);
+    for (let i = 0; i < QUICK; i++) {
       const q = quick[i];
       views.push(
         q

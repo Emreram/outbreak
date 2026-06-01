@@ -1,10 +1,11 @@
 import type { GameState } from "../shared/contracts";
 import { isWeaponDef } from "../game/items/types";
 import { defOf } from "../game/items/catalog";
-import { ammoReserve, equipWeapon, equippedMeleeDef, equippedRangedDef, removeItem, unequip } from "../game/inventory";
+import { ammoReserve, equipArmor, equipWeapon, equippedArmorDef, equippedMeleeDef, equippedRangedDef, removeItem, unequip, unequipArmor } from "../game/inventory";
 import { useConsumable } from "../game/GameState";
 import { iconDataUrl } from "../engine/icons";
 import { RARITY_META } from "../game/items/rarity";
+import { SKILLS, SKILL_ABBR, skillLevel } from "../game/skills";
 
 // Loot / inventory / equip screen (Phase 6). DOM overlay with rarity-framed icons,
 // equip slots, item tooltips, and Equip / Use / Drop actions. Reads + mutates the
@@ -17,12 +18,15 @@ const CSS = `
 .ob-loot.ob-show{display:flex}
 .ob-lootpanel{width:min(720px,96vw);max-height:90vh;display:flex;flex-direction:column;gap:10px;background:#0e1318;
   border:1px solid #2a3a4a;border-radius:12px;padding:16px;color:#e8eef4;box-shadow:0 18px 60px rgba(0,0,0,.6)}
-.ob-loothead{display:flex;justify-content:space-between;align-items:center}
-.ob-loottitle{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:#7fd3ff}
+.ob-loothead{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.ob-loottitle{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:#7fd3ff;white-space:nowrap}
+.ob-lootskills{flex:1;font-size:11px;color:#bfe9ff;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ob-x{background:none;border:none;color:#8398ac;font:inherit;font-size:20px;cursor:pointer;line-height:1}
 .ob-equip{display:flex;gap:10px}
 .ob-slot{flex:1;display:flex;gap:8px;align-items:center;background:#0c1620;border:1px solid #24384a;border-radius:8px;padding:8px}
 .ob-slot img{width:34px;height:34px}
+.ob-slot.ob-slotbtn{cursor:pointer}
+.ob-slot.ob-slotbtn:hover{border-color:#34506a}
 .ob-slotlabel{font-size:10px;color:#7f93a8;letter-spacing:.1em}
 .ob-lootbody{display:flex;gap:10px;min-height:0;flex:1}
 .ob-grid{flex:1;display:grid;grid-template-columns:repeat(auto-fill,52px);grid-auto-rows:52px;gap:6px;overflow:auto;align-content:start;max-height:54vh}
@@ -46,6 +50,7 @@ const CSS = `
 
 export class LootModal {
   private readonly root: HTMLDivElement;
+  private readonly skillsEl: HTMLDivElement;
   private readonly equipEl: HTMLDivElement;
   private readonly gridEl: HTMLDivElement;
   private readonly detailEl: HTMLDivElement;
@@ -68,11 +73,12 @@ export class LootModal {
     const head = div("ob-loothead");
     const title = div("ob-loottitle");
     title.textContent = "Inventory";
+    this.skillsEl = div("ob-lootskills");
     const x = document.createElement("button");
     x.className = "ob-x";
     x.textContent = "×";
     x.addEventListener("click", () => this.close());
-    head.append(title, x);
+    head.append(title, this.skillsEl, x);
     this.equipEl = div("ob-equip");
     const body = div("ob-lootbody");
     this.gridEl = div("ob-grid");
@@ -124,10 +130,14 @@ export class LootModal {
 
   private render(): void {
     if (!this.state) return;
+    const s = this.state;
+    this.skillsEl.textContent = SKILLS.map((id) => `${SKILL_ABBR[id]} ${skillLevel(s, id)}`).join(" · ");
     this.equipEl.innerHTML = "";
     this.equipEl.append(
-      this.slot("MELEE", equippedMeleeDef(this.state).name, false),
-      this.slot("RANGED", equippedRangedDef(this.state)?.name, true),
+      this.slot("MELEE", equippedMeleeDef(s).name, false),
+      this.slot("RANGED", equippedRangedDef(s)?.name, true),
+      this.armorSlot("BODY", "body"),
+      this.armorSlot("HEAD", "head"),
     );
 
     this.gridEl.innerHTML = "";
@@ -190,6 +200,39 @@ export class LootModal {
     return slot;
   }
 
+  /** A body/head armour equip slot: shows the worn piece + its %, click to remove. */
+  private armorSlot(label: string, which: "head" | "body"): HTMLDivElement {
+    const el = div("ob-slot ob-slotbtn");
+    const img = document.createElement("img");
+    const col = document.createElement("div");
+    const lab = div("ob-slotlabel");
+    lab.textContent = label;
+    const txt = document.createElement("div");
+    const def = this.state ? equippedArmorDef(this.state, which) : undefined;
+    if (def) {
+      img.src = iconDataUrl(def.name);
+      txt.style.color = RARITY_META[def.rarity].css;
+      txt.style.fontSize = "12px";
+      txt.textContent = def.name;
+      const sub = div("ob-dmeta");
+      sub.textContent = `+${def.defense}% · click to remove`;
+      txt.append(sub);
+      el.addEventListener("click", () => {
+        if (!this.state) return;
+        unequipArmor(this.state, which);
+        this.changed();
+      });
+    } else {
+      img.src = iconDataUrl(which === "head" ? "Helmet" : "Leather Jacket");
+      img.style.opacity = "0.25";
+      txt.className = "ob-dmeta";
+      txt.textContent = `(no ${which})`;
+    }
+    col.append(lab, txt);
+    el.append(img, col);
+    return el;
+  }
+
   private renderDetail(): void {
     this.detailEl.innerHTML = "";
     if (!this.state || !this.selected) {
@@ -237,6 +280,7 @@ export class LootModal {
 
     const actions = div("ob-actions");
     if (isWeaponDef(def)) actions.append(this.actBtn("Equip", () => this.doEquip(def.name)));
+    if (def.kind === "armor") actions.append(this.actBtn("Equip", () => this.doEquipArmor(def.name)));
     if (def.kind === "consumable") actions.append(this.actBtn("Use", () => this.doUse(def.name)));
     actions.append(this.actBtn("Drop", () => this.doDrop(def.name), true));
     this.detailEl.append(actions);
@@ -255,6 +299,11 @@ export class LootModal {
     equipWeapon(this.state, name);
     this.changed();
   }
+  private doEquipArmor(name: string): void {
+    if (!this.state) return;
+    equipArmor(this.state, name);
+    this.changed();
+  }
   private doUse(name: string): void {
     if (!this.state) return;
     useConsumable(this.state, name);
@@ -265,6 +314,8 @@ export class LootModal {
     if (!this.state) return;
     if (this.state.equippedMelee === name) unequip(this.state, "melee");
     if (this.state.equippedRanged === name) unequip(this.state, "ranged");
+    if (this.state.player.equippedArmorBody === name) unequipArmor(this.state, "body");
+    if (this.state.player.equippedArmorHead === name) unequipArmor(this.state, "head");
     removeItem(this.state, name, 99);
     this.selected = undefined;
     this.changed();

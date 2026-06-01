@@ -3,7 +3,7 @@
 // equip/reload/ammo helpers for the loot system (Phase 3+).
 
 import type { GameState } from "../shared/contracts";
-import type { ConsumableDef, StatKey, WeaponDef } from "./items/types";
+import type { ArmorDef, ConsumableDef, StatKey, WeaponDef } from "./items/types";
 import { allWeapons, ammoItemForType, defOf, isWeaponName, weaponDef, FISTS } from "./items/catalog";
 
 export const MAX_STACK = 99;
@@ -159,11 +159,67 @@ export function reloadEquipped(s: GameState): number {
   return took;
 }
 
-/** Auto-equip a freshly found weapon if its slot is empty (quality of life). */
+/** Auto-equip a freshly found weapon OR armour if its slot is empty (quality of life). */
 export function autoEquip(s: GameState, name: string): boolean {
   const w = weaponDef(name);
-  if (!w) return false;
-  if (w.hand === "melee" && !s.equippedMelee) return equipWeapon(s, name);
-  if (w.hand === "ranged" && !s.equippedRanged) return equipWeapon(s, name);
+  if (w) {
+    if (w.hand === "melee" && !s.equippedMelee) return equipWeapon(s, name);
+    if (w.hand === "ranged" && !s.equippedRanged) return equipWeapon(s, name);
+    return false;
+  }
+  const d = defOf(name);
+  if (d.kind === "armor") {
+    const slot = armorSlot(d);
+    const cur = slot === "head" ? s.player.equippedArmorHead : s.player.equippedArmorBody;
+    if (!cur) return equipArmor(s, name);
+  }
   return false;
+}
+
+// --- armour (two equip slots: body + head; only equipped pieces protect) ------
+
+/** Which slot an armour piece occupies (defaults to body). */
+export function armorSlot(d: ArmorDef): "head" | "body" {
+  return d.slot ?? "body";
+}
+
+/** The equipped armour def for a slot, or undefined. */
+export function equippedArmorDef(s: GameState, slot: "head" | "body"): ArmorDef | undefined {
+  const name = slot === "head" ? s.player.equippedArmorHead : s.player.equippedArmorBody;
+  if (!name) return undefined;
+  const d = defOf(name);
+  return d.kind === "armor" ? d : undefined;
+}
+
+/** Equip an owned armour piece into its body/head slot. */
+export function equipArmor(s: GameState, name: string): boolean {
+  const d = defOf(name);
+  if (d.kind !== "armor" || !hasItem(s, name)) return false;
+  if (armorSlot(d) === "head") s.player.equippedArmorHead = name;
+  else s.player.equippedArmorBody = name;
+  return true;
+}
+
+export function unequipArmor(s: GameState, slot: "head" | "body"): void {
+  if (slot === "head") s.player.equippedArmorHead = undefined;
+  else s.player.equippedArmorBody = undefined;
+}
+
+/** Stacked defence % from the two equipped armour pieces, clamped 0..85. */
+export function armorDefensePct(s: GameState): number {
+  const body = equippedArmorDef(s, "body")?.defense ?? 0;
+  const head = equippedArmorDef(s, "head")?.defense ?? 0;
+  return Math.max(0, Math.min(85, body + head));
+}
+
+/** Carried weapons (melee first, then ranged) — backs the hotbar weapon strip. */
+export function weaponsInBag(s: GameState): WeaponDef[] {
+  const melee: WeaponDef[] = [];
+  const ranged: WeaponDef[] = [];
+  for (const it of s.inventory) {
+    const w = weaponDef(it.item);
+    if (!w) continue;
+    (w.hand === "melee" ? melee : ranged).push(w);
+  }
+  return [...melee, ...ranged];
 }

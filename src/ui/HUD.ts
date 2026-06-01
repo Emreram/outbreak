@@ -1,15 +1,19 @@
 import Phaser from "phaser";
 import type { GameState } from "../shared/contracts";
 import { clampStat } from "../game/GameState";
-import { ammoReserve, equippedMeleeDef, equippedRangedDef } from "../game/inventory";
-import { rarityCss } from "../game/items/rarity";
+import { equippedArmorDef } from "../game/inventory";
+import { rarityCss, RARITY_META } from "../game/items/rarity";
 import { getBackground } from "../game/backgrounds";
 import { weatherName } from "../game/weather";
-import { SKILLS, SKILL_ABBR, skillLevel } from "../game/skills";
+import { defOf } from "../game/items/catalog";
+import { iconKey } from "../engine/icons";
 
-// On-screen HUD (CLAUDE.md §13 Phase 3): HP / stamina / hunger / thirst /
-// infection bars + inventory + day/time, fixed to the camera. UI layer — it
-// only READS GameState and never mutates mechanics.
+// On-screen HUD (CLAUDE.md §13 Phase 3), decluttered to essentials only: the
+// day/name/time/weather line, the 5 survival stat bars, a compact armour readout,
+// and a tiny dim debug string. The inventory list, equipped-weapon line, event log,
+// always-on controls hint and skills line were moved out (hotbar + bag + one-time
+// controls toast carry them now). A top-right panel shows the ACTIVE weapon.
+// UI layer — it only READS GameState and never mutates mechanics.
 
 type StatKey = "hp" | "stamina" | "hunger" | "thirst" | "infection";
 interface BarDef {
@@ -36,18 +40,23 @@ const BAR_GAP = 6;
 const BARS_TOP = 52;
 const DEPTH = 1000;
 
+// Top-right active-item panel.
+const AP_W = 186;
+const AP_H = 40;
+
 export class HUD {
   private readonly scene: Phaser.Scene;
   private readonly bg: Phaser.GameObjects.Graphics;
   private readonly bars: Phaser.GameObjects.Graphics;
   private readonly dayText: Phaser.GameObjects.Text;
   private readonly valueTexts: Phaser.GameObjects.Text[] = [];
-  private readonly weaponText: Phaser.GameObjects.Text;
-  private readonly invText: Phaser.GameObjects.Text;
-  private readonly logText: Phaser.GameObjects.Text;
-  private readonly controlsText: Phaser.GameObjects.Text;
-  private readonly skillsText: Phaser.GameObjects.Text;
+  private readonly armorText: Phaser.GameObjects.Text;
   private readonly debugText: Phaser.GameObjects.Text;
+  // Active-weapon panel (top-right).
+  private readonly apBg: Phaser.GameObjects.Graphics;
+  private readonly apIcon: Phaser.GameObjects.Image;
+  private readonly apTag: Phaser.GameObjects.Text;
+  private readonly apName: Phaser.GameObjects.Text;
   private deathText?: Phaser.GameObjects.Text;
   private readonly layer?: Phaser.GameObjects.Layer;
 
@@ -73,24 +82,28 @@ export class HUD {
       mk(PANEL_X + 8, y - 1, "11px", "#c8d2dc").setText(b.label); // static label
       this.valueTexts.push(mk(BAR_X + BAR_W + 8, y - 1, "11px", "#f4efe2"));
     });
-    this.weaponText = mk(PANEL_X + 8, 0, "12px", "#cdd9e5");
-    this.invText = mk(PANEL_X + 8, 0, "12px", "#e8e2d0");
-    this.logText = scene.add
-      .text(PANEL_X + 8, 0, "", {
-        fontFamily: "monospace",
-        fontSize: "11px",
-        color: "#cdb89a",
-        wordWrap: { width: PANEL_W - 20 },
-      })
+    this.armorText = mk(PANEL_X + 8, 0, "11px", "#9fb3c8");
+    this.debugText = mk(PANEL_X + 8, 0, "10px", "#5f7488");
+
+    // Active-weapon panel (top-right), rendered each frame from the active selection.
+    this.apBg = scene.add.graphics().setScrollFactor(0).setDepth(DEPTH);
+    this.apIcon = scene.add.image(0, 0, iconKey("Fists")).setScrollFactor(0).setDepth(DEPTH + 1).setVisible(false);
+    this.apTag = scene.add
+      .text(0, 0, "ACTIVE", { fontFamily: "monospace", fontSize: "9px", color: "#7f93a8" })
       .setScrollFactor(0)
       .setDepth(DEPTH + 2);
-    layer?.add(this.logText);
-    this.controlsText = mk(PANEL_X + 8, 0, "11px", "#8fa3b8");
-    this.skillsText = mk(PANEL_X + 8, 0, "11px", "#bfe9ff");
-    this.debugText = mk(PANEL_X + 8, 0, "11px", "#7f93a8");
+    this.apName = scene.add
+      .text(0, 0, "", { fontFamily: "monospace", fontSize: "12px", color: "#e8eef4" })
+      .setScrollFactor(0)
+      .setDepth(DEPTH + 2);
+    layer?.add([this.apBg, this.apIcon, this.apTag, this.apName]);
   }
 
-  update(s: GameState, debug: { fps: number; tx: number; ty: number; brain: string }): void {
+  update(
+    s: GameState,
+    debug: { fps: number; tx: number; ty: number; brain: string },
+    activeWeapon?: string,
+  ): void {
     const bgName = s.background ? getBackground(s.background)?.name : undefined;
     this.dayText.setText(`${s.player.name}${bgName ? ` · ${bgName}` : ""}  ·  Day ${s.day}  ·  ${s.timeOfDay}  ·  ${weatherName(s.weather)}`);
 
@@ -104,39 +117,18 @@ export class HUD {
       this.valueTexts[i].setText(String(Math.round(v)));
     });
 
-    // Equipped weapons + ammo (rarity-coloured).
-    const weaponY = BARS_TOP + BARS.length * (BAR_H + BAR_GAP) + 6;
-    const md = equippedMeleeDef(s);
-    const rd = equippedRangedDef(s);
-    let wline = `MELEE  ${md.name}`;
-    if (rd) wline += `\nGUN    ${rd.name}  ${s.loadedAmmo ?? 0}/${ammoReserve(s, rd.ammoType)}`;
-    this.weaponText.setPosition(PANEL_X + 8, weaponY).setText(wline).setColor(rarityCss((rd ?? md).rarity));
+    // Compact armour readout (equipped body + head pieces and their stacked %).
+    const armorY = BARS_TOP + BARS.length * (BAR_H + BAR_GAP) + 4;
+    const body = equippedArmorDef(s, "body");
+    const head = equippedArmorDef(s, "head");
+    const total = Math.max(0, Math.min(85, (body?.defense ?? 0) + (head?.defense ?? 0)));
+    const armorParts = [body ? `B:${body.defense}` : "B:—", head ? `H:${head.defense}` : "H:—"].join(" ");
+    this.armorText.setPosition(PANEL_X + 8, armorY).setText(`ARMOR ${total}%  (${armorParts})`);
 
-    const invY = weaponY + this.weaponText.height + 8;
-    const list = s.inventory.length
-      ? s.inventory.map((it) => `· ${it.item} x${it.qty}`).join("\n")
-      : "· (empty)";
-    this.invText.setPosition(PANEL_X + 8, invY).setText("Inventory:\n" + list);
-
-    // Latest event — narrative continuity / shows the AI's last impact.
-    const logY = invY + this.invText.height + 8;
-    const last = s.recentEvents[s.recentEvents.length - 1] ?? "";
-    this.logText.setPosition(PANEL_X + 8, logY).setText(last ? `» ${last}` : "");
-    const cY = logY + (last ? this.logText.height + 8 : 0);
-
-    this.controlsText
-      .setPosition(PANEL_X + 8, cY)
-      .setText("WASD move · MOUSE aim/fire · SPACE/F melee · E act · Z rest\nShift run · R reload · I bag · C craft · ESC menu · scroll+Q or [1-4] quick-use");
-
-    const skY = cY + this.controlsText.height + 6;
-    this.skillsText
-      .setPosition(PANEL_X + 8, skY)
-      .setText("Skills: " + SKILLS.map((id) => `${SKILL_ABBR[id]} ${skillLevel(s, id)}`).join(" · "));
-
-    const dY = skY + this.skillsText.height + 6;
+    const dY = armorY + this.armorText.height + 6;
     this.debugText
       .setPosition(PANEL_X + 8, dY)
-      .setText(`seed ${s.seed} · ${debug.fps} fps · GM:${debug.brain}`);
+      .setText(`${debug.fps} fps · ${debug.tx},${debug.ty} · GM:${debug.brain}`);
 
     const bottom = dY + this.debugText.height + 8;
     this.bg.clear();
@@ -144,6 +136,34 @@ export class HUD {
     this.bg
       .lineStyle(1, 0x223040, 0.8)
       .strokeRoundedRect(PANEL_X, PANEL_Y, PANEL_W, bottom - PANEL_Y, 8);
+
+    this.renderActivePanel(activeWeapon);
+  }
+
+  /** Top-right ACTIVE-weapon panel: icon + rarity-coloured name of the in-hand weapon. */
+  private renderActivePanel(name?: string): void {
+    this.apBg.clear();
+    if (!name) {
+      this.apIcon.setVisible(false);
+      this.apTag.setVisible(false);
+      this.apName.setVisible(false);
+      return;
+    }
+    const def = defOf(name);
+    const ax = this.scene.scale.width - AP_W - 10;
+    const ay = 10;
+    this.apBg.fillStyle(0x07090c, 0.7).fillRoundedRect(ax, ay, AP_W, AP_H, 8);
+    this.apBg.lineStyle(1.5, RARITY_META[def.rarity].color, 0.9).strokeRoundedRect(ax, ay, AP_W, AP_H, 8);
+
+    const key = iconKey(name);
+    if (this.scene.textures.exists(key) && this.apIcon.texture.key !== key) this.apIcon.setTexture(key);
+    this.apIcon.setPosition(ax + AP_W - 22, ay + AP_H / 2).setDisplaySize(30, 30).setVisible(true);
+    this.apTag.setPosition(ax + 12, ay + 6).setVisible(true);
+    this.apName
+      .setPosition(ax + 12, ay + 19)
+      .setText(name.length > 18 ? name.slice(0, 17) + "…" : name)
+      .setColor(rarityCss(def.rarity))
+      .setVisible(true);
   }
 
   /** Minimal death banner (Phase 6 replaces this with a full GameOver summary). */

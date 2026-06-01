@@ -16,6 +16,8 @@ export interface NpcOpts {
   hp: number;
   maxHp: number;
   color?: number;
+  tier?: string; // survivor quality tier (poor/average/prime) — drives a name tag
+  tagPrefix?: string; // name-tag label (e.g. "Prime"); empty = no tag
 }
 
 const SPEED = 150;
@@ -25,6 +27,7 @@ export class Npc {
   readonly id: string;
   readonly name: string;
   readonly faction: string;
+  readonly tier?: string;
   kind: NpcKind;
   hp: number;
   maxHp: number;
@@ -32,12 +35,15 @@ export class Npc {
   lastHurt = 0; // companion damage-taken cooldown
   private facing = 0;
   private wanderUntil = 0;
+  private baseTint?: number; // tier/kind tint, re-applied after a hurt flash
+  private tag?: Phaser.GameObjects.Text; // floating quality name-tag
 
   constructor(scene: Phaser.Scene, x: number, y: number, opts: NpcOpts) {
     this.id = opts.id;
     this.name = opts.name;
     this.faction = opts.faction;
     this.kind = opts.kind;
+    this.tier = opts.tier;
     this.hp = opts.hp;
     this.maxHp = opts.maxHp;
     const tex = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
@@ -45,11 +51,27 @@ export class Npc {
     this.sprite.setCollideWorldBounds(true);
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
     body.setSize(20, 20);
-    if (opts.color !== undefined) this.sprite.setTint(opts.color);
+    if (opts.color !== undefined) {
+      this.baseTint = opts.color;
+      this.sprite.setTint(opts.color);
+    }
+    if (opts.tagPrefix) {
+      this.tag = scene.add
+        .text(x, y - 24, opts.tagPrefix, {
+          fontFamily: "monospace",
+          fontSize: "10px",
+          color: "#ffe08a",
+          stroke: "#000000",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(10);
+    }
   }
 
   /** Companions follow the player and rush nearby zombies; survivors mill about. */
   update(px: number, py: number, zombie: { x: number; y: number } | null, now: number): void {
+    if (this.tag) this.tag.setPosition(this.sprite.x, this.sprite.y - 24);
     if (this.kind === "companion") {
       if (zombie) {
         const dx = zombie.x - this.sprite.x;
@@ -93,12 +115,21 @@ export class Npc {
     this.hp -= n;
     this.sprite.setTintFill(0xffffff);
     this.sprite.scene.time.delayedCall(70, () => {
-      if (this.sprite.active) this.sprite.clearTint();
+      if (!this.sprite.active) return;
+      if (this.baseTint !== undefined) this.sprite.setTint(this.baseTint); // keep the tier/kind tint
+      else this.sprite.clearTint();
     });
     return this.hp <= 0;
   }
 
+  /** Re-tint (e.g. survivor → companion on recruit) and keep it through hurt flashes. */
+  setTint(color: number): void {
+    this.baseTint = color;
+    this.sprite.setTint(color);
+  }
+
   destroy(): void {
+    this.tag?.destroy();
     this.sprite.destroy();
   }
 }

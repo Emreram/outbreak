@@ -30,6 +30,8 @@ export interface PlayerState {
   infection: number; // 0–100 (100 = turned/dead)
   x: number;
   y: number;
+  equippedArmorBody?: string; // inventory item name of worn body armour (optional → old saves OK)
+  equippedArmorHead?: string; // inventory item name of worn head armour
 }
 
 export interface GameState {
@@ -73,6 +75,7 @@ export interface Npc {
   y: number;
   hp: number;
   maxHp: number;
+  tier?: string; // survivor quality: "poor" | "average" | "prime" (optional → old saves OK)
 }
 
 /** The building the player has claimed as their home base (Feature 7). */

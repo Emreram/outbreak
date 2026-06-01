@@ -29,11 +29,18 @@ import { compassDir, nextEventDelayMs, rollWorldEvent, type WorldEventKind } fro
 import {
   acceptOffer,
   addStanding,
+  canRecruit,
   companionCount,
   factionForBiome,
   generateOffers,
+  getStanding,
   MAX_COMPANIONS,
   npcName,
+  payRecruit,
+  recruitCost,
+  rollTier,
+  tierMeta,
+  type RecruitCost,
   type TradeOffer,
 } from "../game/npcs";
 import { isWet, rollWeather } from "../game/weather";
@@ -51,7 +58,8 @@ import {
 } from "../game/GameState";
 import { applyDecay, ratesFor } from "../game/survival";
 import { ammoMult, damageTakenMult, lootLuck, sprintDrainMult, type DamageKind } from "../game/perks";
-import { addItem, ammoReserve, autoEquip, equippedRangedDef, hasItem, quickUseItems, reloadEquipped, removeItem, useConsumable } from "../game/inventory";
+import { addItem, ammoReserve, armorDefensePct, autoEquip, equipWeapon, equippedRangedDef, hasItem, quickUseItems, reloadEquipped, removeItem, useConsumable, weaponsInBag } from "../game/inventory";
+import type { WeaponDef } from "../game/items/types";
 import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
 import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
@@ -91,7 +99,7 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, bloodDecal, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
 
 /** A streamed, parked vehicle sprite + its live persisted condition (Feature 4). */
@@ -136,6 +144,11 @@ const SAVE_MS = 4000;
 const SIEGE_MS = 600; // how often zombies gnaw at adjacent barricades / spikes wound them
 const PHASES = ["dawn", "day", "dusk", "night"] as const;
 const SEG_MS = 45000; // real seconds per time-of-day segment
+
+// The AI text-encounter that E used to open on a building/biome is DORMANT (player
+// request: E does nothing without a physical target). The encounter system stays in
+// the tree (startEncounter / EncounterModal / gameMaster) — flip this to re-enable.
+const ENABLE_TEXT_ENCOUNTERS: boolean = false;
 
 // Open-ground locations (outdoor biomes) vs enclosed buildings — shapes which
 // instant quick-actions an encounter's opening prompt offers.
@@ -198,12 +211,15 @@ export class WorldScene extends Phaser.Scene {
   private lastStep = 0;
   private glow!: Phaser.GameObjects.Image;
   private vignette!: Phaser.GameObjects.Image;
+  private hurtVignette!: Phaser.GameObjects.Image; // red screen-edge pulse on damage
   private objBanner!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
+  private controlsHint?: Phaser.GameObjects.Text; // one-time controls cheat-sheet (H re-shows)
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
-  private selectedQuick = 0; // hotbar quick-use slot under the scroll-wheel cursor (0–3)
+  private selectedQuick = 0; // quick-use slot Q / middle-click uses (0–3); set by [1-4]
+  private activeWeapon = 0; // index into the carried-weapon strip (scroll / [5-0] cycle it)
   private readonly farmSprites = new Map<string, { soil: Phaser.GameObjects.Image; crop?: Phaser.GameObjects.Image }>();
   // Vehicles (Feature 4): parked sprites streamed per chunk (mirrors farmSprites/chests).
   private readonly vehicleSprites = new Map<string, ActiveVehicle>();
@@ -248,6 +264,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   create(): void {
+    resetFx(this); // drop any blood decals pooled from a previous run
     this.dead = false;
     this.inEncounter = false;
     this.enacting = false;
@@ -272,6 +289,7 @@ export class WorldScene extends Phaser.Scene {
     this.reloading = false;
     this.lastStep = 0;
     this.selectedQuick = 0;
+    this.activeWeapon = 0;
     for (const r of this.farmSprites.values()) {
       r.soil.destroy();
       r.crop?.destroy();
@@ -427,7 +445,16 @@ export class WorldScene extends Phaser.Scene {
     this.glow = makeGlow(this, this.player.sprite.x, this.player.sprite.y); // world-space (main camera)
     this.vignette = this.add.image(0, 0, FX_VIGNETTE).setOrigin(0, 0).setScrollFactor(0).setDepth(540);
     this.vignette.setDisplaySize(this.scale.width, this.scale.height);
-    this.uiLayer.add(this.vignette);
+    // Red screen-edge pulse that flashes when the player is hurt (Batch G).
+    this.hurtVignette = this.add
+      .image(0, 0, FX_VIGNETTE)
+      .setOrigin(0, 0)
+      .setScrollFactor(0)
+      .setDepth(541)
+      .setTint(0xc41020)
+      .setAlpha(0);
+    this.hurtVignette.setDisplaySize(this.scale.width, this.scale.height);
+    this.uiLayer.add([this.vignette, this.hurtVignette]);
 
     // Minimal guides: a persistent objective banner + a contextual "Press E" hint.
     this.objBanner = this.add
@@ -495,7 +522,7 @@ export class WorldScene extends Phaser.Scene {
     this.craftUi = new CraftModal();
     this.craftUi.setHandlers(
       (r) => {
-        if (!craft(this.state, r)) return;
+        if (!craft(this.state, r, this.stationsNear())) return; // re-check station/skill/materials
         sfx.pickup();
         this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Crafted ${r.out}`, "#9ef0a0");
         pushRecentEvent(this.state, `Crafted ${r.out}.`);
@@ -543,11 +570,11 @@ export class WorldScene extends Phaser.Scene {
     // Desktop: hold left mouse to fire the equipped gun toward the cursor.
     this.input.on("pointerdown", this.onPointerDown, this);
     this.input.on("pointerup", this.onPointerUp, this);
-    // Scroll wheel cycles the highlighted quick-use slot (or the build palette while
-    // in build mode).
+    // Scroll wheel cycles the carried-weapon strip (or the build palette while in
+    // build mode). Consumables live on [1-4] / Q; weapons on the wheel + [5-0].
     this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => {
       if (this.buildMode) this.cycleBuild(dy > 0 ? 1 : -1);
-      else this.cycleQuick(dy > 0 ? 1 : -1);
+      else this.cycleWeapon(dy > 0 ? 1 : -1);
     });
 
     // Stop the page from scrolling / middle-click autoscroll over the canvas so the
@@ -557,6 +584,12 @@ export class WorldScene extends Phaser.Scene {
     const noAux = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
     canvas.addEventListener("wheel", noScroll, { passive: false });
     canvas.addEventListener("mousedown", noAux);
+
+    // Controls cheat-sheet on first spawn only (persisted via a world flag); H re-shows.
+    if (!this.state.worldFlags.includes("seen_controls")) {
+      this.state.worldFlags.push("seen_controls");
+      this.showControlsHint();
+    }
 
     window.addEventListener("beforeunload", this.saveOnUnload);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -714,12 +747,19 @@ export class WorldScene extends Phaser.Scene {
       this.hintText.setVisible(false);
     }
 
-    this.hud.update(this.state, this.debugInfo());
+    this.hud.update(this.state, this.debugInfo(), this.activeWeaponName());
     if (!quickUseItems(this.state)[this.selectedQuick]) {
       const first = quickUseItems(this.state).findIndex((q) => q); // keep the cursor on a usable slot
       if (first >= 0) this.selectedQuick = first;
     }
-    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen, this.selectedQuick);
+    const weaponCount = this.carriedWeapons().length;
+    if (weaponCount > 0) this.activeWeapon = Phaser.Math.Clamp(this.activeWeapon, 0, weaponCount - 1);
+    this.hotbar.update(
+      this.state,
+      !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen,
+      this.selectedQuick,
+      this.activeWeapon,
+    );
   }
 
   private updateObjective(): void {
@@ -817,8 +857,32 @@ export class WorldScene extends Phaser.Scene {
     this.uiCam?.setSize(size.width, size.height);
     this.nightOverlay?.setSize(size.width, size.height);
     this.vignette?.setDisplaySize(size.width, size.height);
+    this.hurtVignette?.setDisplaySize(size.width, size.height);
     this.objBanner?.setPosition(size.width / 2, 8);
     this.hintText?.setPosition(size.width / 2, size.height - 120);
+  }
+
+  /** Brief red screen-edge pulse when the player is hurt (Batch G). */
+  private hurtPulse(intensity = 0.5): void {
+    if (!this.hurtVignette) return;
+    this.tweens.killTweensOf(this.hurtVignette);
+    this.hurtVignette.setAlpha(Math.min(0.85, intensity));
+    this.tweens.add({ targets: this.hurtVignette, alpha: 0, duration: 360, ease: "Quad.easeOut" });
+  }
+
+  /** A quick camera zoom-punch for weighty hits/kills (Batch G). Base zoom is 1.25. */
+  private zoomPunch(intensity = 0.05): void {
+    const cam = this.cameras.main;
+    this.tweens.killTweensOf(cam);
+    cam.setZoom(1.25);
+    this.tweens.add({
+      targets: cam,
+      zoom: 1.25 + intensity,
+      duration: 70,
+      yoyo: true,
+      ease: "Quad.easeOut",
+      onComplete: () => cam.setZoom(1.25),
+    });
   }
 
   private takeHit(e: Enemy): void {
@@ -845,21 +909,20 @@ export class WorldScene extends Phaser.Scene {
     if (bite) p.infection = clampStat(p.infection + Phaser.Math.Between(8, 16));
     pushRecentEvent(this.state, msg);
     sfx.hurt();
-    bloodBurst(this, this.player.sprite.x, this.player.sprite.y, 6, 0xcc2222);
+    bloodBurst(this, this.player.sprite.x, this.player.sprite.y, 8, 0xcc2222);
+    bloodDecal(this, this.player.sprite.x, this.player.sprite.y, 0.7);
+    this.floatText(this.player.sprite.x, this.player.sprite.y, `-${dmg}`, "#ff6b6b");
     this.player.recoil();
-    this.cameras.main.shake(120, 0.006);
+    this.hurtPulse(Math.min(0.82, 0.32 + dmg / 55)); // bigger hits flash redder
+    this.cameras.main.shake(130, 0.007);
     this.cameras.main.flash(110, 120, 0, 0);
     if (isDead(this.state)) this.enterDeath();
   }
 
-  /** Best armor the player is carrying (worn) reduces incoming damage. */
+  /** Equipped armour (body + head) reduces incoming damage — only worn pieces
+   *  protect, and the stacked defence is clamped 0..85. */
   private playerArmorPct(): number {
-    let best = 0;
-    for (const it of this.state.inventory) {
-      const d = defOf(it.item);
-      if (d.kind === "armor") best = Math.max(best, d.defense);
-    }
-    return best;
+    return armorDefensePct(this.state);
   }
 
   // --- enemy special abilities (scene-orchestrated) --------------------------
@@ -1124,6 +1187,36 @@ export class WorldScene extends Phaser.Scene {
     this.showToast("You hear shuffling nearby…");
   }
 
+  /** Controls cheat-sheet: shown once per run on first spawn (replaces the old
+   *  always-on HUD line) and re-summonable any time with H. Fades on its own. */
+  private showControlsHint(): void {
+    this.controlsHint?.destroy();
+    const lines =
+      "WASD move · MOUSE aim/fire · SPACE/F melee · E interact · Z rest · Shift run\n" +
+      "R reload · scroll/5–0 weapon · 1–4 (or Q) quick-use · I bag · C craft · B build\n" +
+      "V claim base · M map · H this help · ESC menu";
+    const t = this.add
+      .text(this.scale.width / 2, this.scale.height - 78, lines, {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#cfe6ff",
+        align: "center",
+        backgroundColor: "rgba(7,9,12,0.72)",
+        padding: { x: 10, y: 8 },
+        stroke: "#000000",
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5, 1)
+      .setScrollFactor(0)
+      .setDepth(1400);
+    this.uiLayer.add(t);
+    this.controlsHint = t;
+    this.tweens.add({ targets: t, alpha: 0, delay: 6500, duration: 1200, onComplete: () => {
+      t.destroy();
+      if (this.controlsHint === t) this.controlsHint = undefined;
+    } });
+  }
+
   private showToast(msg: string): void {
     const t = this.add
       .text(this.scale.width / 2, 74, msg, {
@@ -1185,13 +1278,18 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     if (this.tryFarmAction()) return; // till / plant / water / harvest when applicable
-    const b = this.buildingAt();
-    if (b) {
-      const name = b.type.replace(/_/g, " ");
-      this.startEncounter(b.type, `You take stock of the ${name} around you.`, name);
-    } else {
-      const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
-      this.startEncounter(biome, "You scan the area and the way ahead.", "The area");
+    // Paths 8 & 9 — the building / biome AI text-encounter — are dormant: with no
+    // physical target above, E now does nothing (no modal, no pause). Re-enable by
+    // flipping ENABLE_TEXT_ENCOUNTERS at the top of this file.
+    if (ENABLE_TEXT_ENCOUNTERS) {
+      const b = this.buildingAt();
+      if (b) {
+        const name = b.type.replace(/_/g, " ");
+        this.startEncounter(b.type, `You take stock of the ${name} around you.`, name);
+      } else {
+        const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+        this.startEncounter(biome, "You scan the area and the way ahead.", "The area");
+      }
     }
   }
 
@@ -1695,9 +1793,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private buildingHint(b: Building): string {
-    const base = `Press E to search the ${b.type.replace(/_/g, " ")}`;
-    if (isBaseClaimed(this.state, b.gid)) return `${base} · your base (V release)`;
-    return `${base} · V to claim as base`;
+    // E no longer searches buildings (text-encounters are dormant) — the only
+    // building action is claiming it as a base, so the hint shows just that.
+    const name = b.type.replace(/_/g, " ");
+    if (isBaseClaimed(this.state, b.gid)) return `${name} · your base (V to release)`;
+    return `${name} · V to claim as base`;
   }
 
   private openStorage(): void {
@@ -1883,13 +1983,15 @@ export class WorldScene extends Phaser.Scene {
       const near = Math.hypot(rec.x - this.player.sprite.x, rec.y - this.player.sprite.y) < 600;
       const x = near ? rec.x : this.player.sprite.x + Phaser.Math.Between(-40, 40);
       const y = near ? rec.y : this.player.sprite.y + Phaser.Math.Between(-40, 40);
-      this.makeNpc(x, y, rec.id, rec.name, rec.faction, "companion", rec.hp, rec.maxHp);
+      this.makeNpc(x, y, rec.id, rec.name, rec.faction, "companion", rec.hp, rec.maxHp, rec.tier);
     }
   }
 
-  private makeNpc(x: number, y: number, id: string, name: string, faction: string, kind: "survivor" | "companion", hp: number, maxHp: number): Npc {
-    const color = kind === "companion" ? 0x6effa0 : 0x6fa8c7;
-    const npc = new Npc(this, x, y, { id, name, faction, kind, hp, maxHp, color });
+  private makeNpc(x: number, y: number, id: string, name: string, faction: string, kind: "survivor" | "companion", hp: number, maxHp: number, tier?: string): Npc {
+    const meta = tierMeta(tier);
+    const color = kind === "companion" ? 0x6effa0 : meta.tint; // companions read green; survivors tint by tier
+    const tagPrefix = kind === "companion" ? "" : meta.namePrefix; // prime survivors flagged
+    const npc = new Npc(this, x, y, { id, name, faction, kind, hp, maxHp, color, tier, tagPrefix });
     this.npcGroup.add(npc.sprite);
     this.npcs.push(npc);
     return npc;
@@ -1897,8 +1999,10 @@ export class WorldScene extends Phaser.Scene {
 
   private spawnSurvivor(x: number, y: number, faction?: string): Npc {
     const fac = faction ?? factionForBiome(this.chunks.biomeAtPx(x, y));
+    const tier = rollTier(liveRng, this.effDay(), fac);
+    const hp = Math.round(45 * tierMeta(tier).hpMul); // prime survivors are tougher, poor frailer
     const id = `npc_${Math.floor(this.time.now)}_${Math.floor(Math.random() * 1e4)}`;
-    const npc = this.makeNpc(x, y, id, npcName(liveRng), fac, "survivor", 45, 45);
+    const npc = this.makeNpc(x, y, id, npcName(liveRng), fac, "survivor", hp, hp, tier);
     spawnPopIn(this, npc.sprite);
     return npc;
   }
@@ -1929,7 +2033,7 @@ export class WorldScene extends Phaser.Scene {
         if (z && now - npc.lastHit > 700) {
           npc.lastHit = now;
           bloodBurst(this, z.sprite.x, z.sprite.y, 6);
-          if (z.takeDamage(12)) this.onEnemyKilled(z);
+          if (z.takeDamage(Math.round(12 * tierMeta(npc.tier).dmgMul))) this.onEnemyKilled(z); // prime companions hit harder
         }
         const zc = this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 24);
         if (zc && now - npc.lastHurt > 800) {
@@ -1985,6 +2089,32 @@ export class WorldScene extends Phaser.Scene {
     return best;
   }
 
+  /** Build the trade/recruit panel payload for a survivor (tier-aware). */
+  private tradeInfo(npc: Npc, offers: TradeOffer[]): {
+    name: string;
+    faction: string;
+    offers: TradeOffer[];
+    isCompanion: boolean;
+    canRecruit: boolean;
+    tier?: string;
+    cost: RecruitCost;
+    standing: number;
+    atCompanionCap: boolean;
+  } {
+    const atCap = companionCount(this.state) >= MAX_COMPANIONS;
+    return {
+      name: npc.name,
+      faction: npc.faction,
+      offers,
+      isCompanion: npc.kind === "companion",
+      canRecruit: !atCap && canRecruit(this.state, npc.faction, npc.tier),
+      tier: npc.tier,
+      cost: recruitCost(npc.tier),
+      standing: getStanding(this.state, npc.faction),
+      atCompanionCap: atCap,
+    };
+  }
+
   /** Open the trade/recruit panel for a survivor (offers are stable per survivor). */
   private openTrade(npc: Npc): void {
     if (this.dead || this.inEncounter || this.enacting) return;
@@ -1995,17 +2125,11 @@ export class WorldScene extends Phaser.Scene {
     this.player.sprite.setVelocity(0, 0);
     let offers = this.npcOffers.get(npc.id);
     if (!offers) {
-      offers = generateOffers(createRng(`${this.state.seed}:npc:${npc.id}`), npc.faction);
+      offers = generateOffers(createRng(`${this.state.seed}:npc:${npc.id}`), npc.faction, npc.tier);
       this.npcOffers.set(npc.id, offers);
     }
     sfx.ui();
-    this.tradeUi.open(this.state, {
-      name: npc.name,
-      faction: npc.faction,
-      offers,
-      isCompanion: npc.kind === "companion",
-      canRecruit: companionCount(this.state) < MAX_COMPANIONS,
-    });
+    this.tradeUi.open(this.state, this.tradeInfo(npc, offers));
   }
 
   private onTradeAccept(offer: TradeOffer): void {
@@ -2016,15 +2140,9 @@ export class WorldScene extends Phaser.Scene {
     // deplete the survivor's stock so a deal can't be repeated endlessly
     const stock = this.npcOffers.get(this.activeNpc.id);
     if (stock) this.npcOffers.set(this.activeNpc.id, stock.filter((o) => o !== offer));
-    this.hud.update(this.state, this.debugInfo());
+    this.hud.update(this.state, this.debugInfo(), this.activeWeaponName());
     this.persist();
-    this.tradeUi.open(this.state, {
-      name: this.activeNpc.name,
-      faction: this.activeNpc.faction,
-      offers: this.npcOffers.get(this.activeNpc.id) ?? [],
-      isCompanion: this.activeNpc.kind === "companion",
-      canRecruit: companionCount(this.state) < MAX_COMPANIONS,
-    });
+    this.tradeUi.open(this.state, this.tradeInfo(this.activeNpc, this.npcOffers.get(this.activeNpc.id) ?? []));
   }
 
   private onRecruitToggle(): void {
@@ -2032,7 +2150,7 @@ export class WorldScene extends Phaser.Scene {
     if (!npc) return;
     if (npc.kind === "companion") {
       npc.kind = "survivor";
-      npc.sprite.setTint(0x6fa8c7);
+      npc.setTint(tierMeta(npc.tier).tint); // back to its tier tint
       this.state.npcs = (this.state.npcs ?? []).filter((n) => n.id !== npc.id);
       this.showToast(`${npc.name} parts ways with you.`);
     } else {
@@ -2040,10 +2158,21 @@ export class WorldScene extends Phaser.Scene {
         this.showToast("You can't lead any more companions.");
         return;
       }
+      const cost = recruitCost(npc.tier);
+      if (getStanding(this.state, npc.faction) < cost.standingReq) {
+        this.showToast(`${npc.faction} don't trust you enough (need +${cost.standingReq}). Trade to earn standing.`);
+        return;
+      }
+      if (!canRecruit(this.state, npc.faction, npc.tier)) {
+        const need = cost.items.map((c) => `${c.qty} ${c.item}`).join(", ");
+        this.showToast(`Recruiting needs supplies: ${need}.`);
+        return;
+      }
+      payRecruit(this.state, npc.tier);
       npc.kind = "companion";
-      npc.sprite.setTint(0x6effa0);
+      npc.setTint(0x6effa0);
       this.state.npcs = this.state.npcs ?? [];
-      this.state.npcs.push({ id: npc.id, name: npc.name, kind: "companion", faction: npc.faction, x: npc.sprite.x, y: npc.sprite.y, hp: npc.hp, maxHp: npc.maxHp });
+      this.state.npcs.push({ id: npc.id, name: npc.name, kind: "companion", faction: npc.faction, x: npc.sprite.x, y: npc.sprite.y, hp: npc.hp, maxHp: npc.maxHp, tier: npc.tier });
       addStanding(this.state, npc.faction, 5);
       this.showToast(`${npc.name} joins you.`);
       pushRecentEvent(this.state, `${npc.name} joined your group.`);
@@ -2393,6 +2522,7 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-B", () => this.toggleBuild()); // build mode (barricades/stations)
     kb.on("keydown-V", () => this.claimToggle()); // claim/release the building as base
     kb.on("keydown-M", () => { this.minimap.toggle(); sfx.ui(); }); // minimap (Feature 10)
+    kb.on("keydown-H", () => this.showControlsHint()); // re-show the controls cheat-sheet
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
     // E = act on your surroundings (open an AI Game Master encounter).
@@ -2402,13 +2532,21 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-SPACE", () => this.meleeAttack());
     kb.on("keydown-F", () => this.meleeAttack());
 
-    // [1-4] quick-use the hotbar slots: food / drink / heal / cure.
+    // [1-4] quick-use the consumable slots: food / drink / heal / cure.
     kb.on("keydown-ONE", () => this.useQuickSlot(0));
     kb.on("keydown-TWO", () => this.useQuickSlot(1));
     kb.on("keydown-THREE", () => this.useQuickSlot(2));
     kb.on("keydown-FOUR", () => this.useQuickSlot(3));
-    // Q = use the slot the scroll-wheel cursor is on (mouse-friendly quick-use).
+    // Q = use the currently selected quick-use slot (mouse-friendly).
     kb.on("keydown-Q", () => this.useQuickSlot(this.selectedQuick));
+
+    // [5-0] select carried-weapon strip slots 1–6 (scroll-wheel also cycles them).
+    kb.on("keydown-FIVE", () => this.selectWeapon(0));
+    kb.on("keydown-SIX", () => this.selectWeapon(1));
+    kb.on("keydown-SEVEN", () => this.selectWeapon(2));
+    kb.on("keydown-EIGHT", () => this.selectWeapon(3));
+    kb.on("keydown-NINE", () => this.selectWeapon(4));
+    kb.on("keydown-ZERO", () => this.selectWeapon(5));
   }
 
   /** Use the consumable in quick-slot i (number keys 1–4); no-op if empty. */
@@ -2424,19 +2562,39 @@ export class WorldScene extends Phaser.Scene {
     this.persist();
   }
 
-  /** Move the hotbar scroll-wheel cursor to the next/prev FILLED quick-use slot. */
-  private cycleQuick(dir: number): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen) return;
-    const q = quickUseItems(this.state);
-    const filled = [0, 1, 2, 3].filter((i) => q[i]);
-    if (filled.length === 0) return;
-    const cur = filled.indexOf(this.selectedQuick);
-    if (cur < 0) {
-      this.selectedQuick = dir > 0 ? filled[0] : filled[filled.length - 1];
-    } else {
-      this.selectedQuick = filled[(cur + (dir > 0 ? 1 : -1) + filled.length) % filled.length];
-    }
+  /** Carried weapons (melee-first) the hotbar weapon strip cycles through. */
+  private carriedWeapons(): WeaponDef[] {
+    return weaponsInBag(this.state);
+  }
+
+  /** Name of the in-hand (ACTIVE) weapon — the selected carried weapon, or the
+   *  equipped fallback (e.g. Fists) when the bag holds no weapons. */
+  private activeWeaponName(): string | undefined {
+    const list = this.carriedWeapons();
+    if (list.length === 0) return this.state.equippedRanged ?? this.state.equippedMelee;
+    const i = Phaser.Math.Clamp(this.activeWeapon, 0, list.length - 1);
+    return list[i].name;
+  }
+
+  /** Select carried-weapon slot i: equip it (melee→melee slot, gun→gun slot) and make
+   *  it the in-hand active weapon. No-op if empty or a modal/build mode is open. */
+  private selectWeapon(i: number): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.buildMode) return;
+    const list = this.carriedWeapons();
+    if (i < 0 || i >= list.length) return;
+    this.activeWeapon = i;
+    equipWeapon(this.state, list[i].name);
     sfx.ui();
+    this.updateWeaponSprite();
+  }
+
+  /** Scroll-wheel cycle through the carried-weapon strip (wraps), equipping each. */
+  private cycleWeapon(dir: number): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen) return;
+    const list = this.carriedWeapons();
+    if (list.length === 0) return;
+    const cur = Phaser.Math.Clamp(this.activeWeapon, 0, list.length - 1);
+    this.selectWeapon((cur + (dir > 0 ? 1 : -1) + list.length) % list.length);
   }
 
   private enterDeath(reason?: string): void {
@@ -2502,18 +2660,25 @@ export class WorldScene extends Phaser.Scene {
   /** Apply one melee weapon's resolved hit (damage + abilities) to a target. */
   private applyMeleeHit(e: Enemy, hit: MeleeHit, px: number, py: number): void {
     const execute = hit.executePct > 0 && e.hpFrac() * 100 <= hit.executePct;
-    const dead = e.takeDamage(execute ? e.hp : hit.damage);
-    bloodBurst(this, e.sprite.x, e.sprite.y, hit.crit ? 14 : dead ? 12 : 6, hit.crit ? 0xff5a6e : 0x9c1414);
-    if (hit.crit) this.floatText(e.sprite.x, e.sprite.y, "CRIT!", "#ffd23f");
-    else if (execute) this.floatText(e.sprite.x, e.sprite.y, "EXECUTE", "#ff5a6e");
+    const dmg = execute ? e.hp : hit.damage;
+    const dead = e.takeDamage(dmg);
+    const len = Math.hypot(e.sprite.x - px, e.sprite.y - py) || 1;
+    const ndir = { x: (e.sprite.x - px) / len, y: (e.sprite.y - py) / len };
+    bloodBurst(this, e.sprite.x, e.sprite.y, hit.crit ? 18 : dead ? 16 : 9, hit.crit ? 0xff5a6e : 0x9c1414, ndir);
+    bloodDecal(this, e.sprite.x, e.sprite.y, hit.crit ? 1.2 : 0.85);
+    // Damage number on EVERY hit (CRIT/EXECUTE called out above it).
+    this.floatText(e.sprite.x, e.sprite.y, execute ? "EXECUTE" : String(Math.round(dmg)), hit.crit ? "#ffd23f" : execute ? "#ff5a6e" : "#ffffff");
+    if (hit.crit && !execute) this.floatText(e.sprite.x, e.sprite.y - 13, "CRIT!", "#ffd23f");
     if (hit.bleed > 0) e.applyDot(hit.bleed, hit.bleedMs);
     if (hit.stunMs > 0) e.applyStun(hit.stunMs);
-    if (hit.knockback > 0) {
-      const ang = Math.atan2(e.sprite.y - py, e.sprite.x - px);
-      e.knockback(Math.cos(ang), Math.sin(ang), hit.knockback, this.time.now);
+    // Ability knockback, else a light stagger so every blow lands with weight.
+    e.knockback(ndir.x, ndir.y, hit.knockback > 0 ? hit.knockback : 90, this.time.now);
+    if (hit.crit || execute) {
+      this.cameras.main.shake(70, 0.006);
+      this.zoomPunch(0.05);
     }
     if (dead) {
-      this.hitstop(55);
+      this.hitstop(hit.crit || execute ? 95 : 60); // longer freeze on a heavy/crit kill
       this.onEnemyKilled(e);
     }
   }
@@ -2523,6 +2688,8 @@ export class WorldScene extends Phaser.Scene {
     this.kills += 1;
     this.grantXp("combat", 4);
     sfx.kill();
+    gibs(this, e.sprite.x, e.sprite.y); // gore chunks fly
+    bloodDecal(this, e.sprite.x, e.sprite.y, 1.5); // a pool where it fell
     pushRecentEvent(this.state, `Put down a ${e.def.name}.`);
     this.onDeathTraits(e); // exploder / splitter / bloated bursts
     this.dropLoot(e);
@@ -2538,7 +2705,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private updateWeaponSprite(): void {
-    const name = this.state.equippedRanged ?? this.state.equippedMelee;
+    const name = this.activeWeaponName();
     if (!name) {
       this.weaponSprite.setVisible(false);
       this.weaponGlow.setVisible(false);
@@ -2809,9 +2976,12 @@ export class WorldScene extends Phaser.Scene {
 
   private applyShotHit(e: Enemy, data: ProjData): void {
     const execute = data.executePct > 0 && e.hpFrac() * 100 <= data.executePct;
-    const dead = e.takeDamage(execute ? e.hp : data.damage);
-    bloodBurst(this, e.sprite.x, e.sprite.y, data.crit ? 12 : 6, data.crit ? 0xff5a6e : 0x9c1414);
-    if (data.crit) this.floatText(e.sprite.x, e.sprite.y, "CRIT!", "#ffd23f");
+    const dmg = execute ? e.hp : data.damage;
+    const dead = e.takeDamage(dmg);
+    bloodBurst(this, e.sprite.x, e.sprite.y, data.crit ? 16 : dead ? 12 : 8, data.crit ? 0xff5a6e : 0x9c1414, { x: data.dirX, y: data.dirY });
+    bloodDecal(this, e.sprite.x, e.sprite.y, data.crit ? 1.0 : 0.7);
+    this.floatText(e.sprite.x, e.sprite.y, execute ? "EXECUTE" : String(Math.round(dmg)), data.crit ? "#ffd23f" : execute ? "#ff5a6e" : "#ffffff");
+    if (data.crit && !execute) this.floatText(e.sprite.x, e.sprite.y - 13, "CRIT!", "#ffd23f");
     if (data.bleed > 0) e.applyDot(data.bleed, data.bleedMs);
     if (data.burn > 0) e.applyDot(data.burn, 3000);
     if (data.stunMs > 0) e.applyStun(data.stunMs);

@@ -98,11 +98,11 @@ export class Player {
   lunge(): void {
     this.sprite.scene.tweens.add({
       targets: this.sprite,
-      scaleX: 1.18,
-      scaleY: 0.88,
-      duration: 90,
+      scaleX: 1.3,
+      scaleY: 0.8,
+      duration: 100,
       yoyo: true,
-      ease: "Quad.easeOut",
+      ease: "Back.easeOut",
     });
   }
 
@@ -110,11 +110,11 @@ export class Player {
   recoil(): void {
     this.sprite.scene.tweens.add({
       targets: this.sprite,
-      scaleX: 1.25,
-      scaleY: 1.25,
-      duration: 100,
+      scaleX: 1.34,
+      scaleY: 1.34,
+      duration: 120,
       yoyo: true,
-      ease: "Quad.easeOut",
+      ease: "Back.easeOut",
     });
   }
 

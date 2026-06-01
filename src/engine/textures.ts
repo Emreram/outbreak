@@ -36,9 +36,11 @@ export const TILE_COLORS: Record<Tile, { fill: number; line: number }> = {
   [Tile.Sand]: { fill: 0xcdb482, line: 0xb89f6e },
   [Tile.Dirt]: { fill: 0x6b5638, line: 0x5a472e },
   [Tile.Trail]: { fill: 0x8a7350, line: 0x6f5c40 },
-  [Tile.Tree]: { fill: 0x1f3d22, line: 0x16301a },
-  [Tile.Bush]: { fill: 0x33572f, line: 0x294626 },
-  [Tile.TallGrass]: { fill: 0x46663a, line: 0x3a5630 },
+  // Tree/Bush tiles sit on visible ground (the canopy is drawn raised on top in
+  // drawTileMotif) so a blocking tree reads as an object, not as patterned grass.
+  [Tile.Tree]: { fill: 0x35492c, line: 0x243318 },
+  [Tile.Bush]: { fill: 0x3a5236, line: 0x2c3f25 },
+  [Tile.TallGrass]: { fill: 0x44603a, line: 0x38522e },
   [Tile.Rubble]: { fill: 0x4a4640, line: 0x3a3732 },
   [Tile.Pavement]: { fill: 0x44484e, line: 0x383b40 },
   [Tile.Rail]: { fill: 0x55504a, line: 0x3f3b36 },
@@ -148,20 +150,52 @@ function drawTileMotif(
       }
       break;
     case Tile.Grass:
-    case Tile.TallGrass:
       g.lineStyle(1, light, 0.6);
-      for (let b = 0; b < (tile === Tile.TallGrass ? 12 : 7); b++) {
+      for (let b = 0; b < 7; b++) {
         const x = ox + rng.int(3, size - 3);
         const y = rng.int(8, size - 2);
-        const h = tile === Tile.TallGrass ? rng.int(5, 9) : rng.int(2, 4);
-        g.lineBetween(x, y, x + rng.int(-1, 1), y - h);
+        g.lineBetween(x, y, x + rng.int(-1, 1), y - rng.int(2, 4));
       }
       break;
-    case Tile.Tree:
-    case Tile.Bush:
-      g.fillStyle(light, 0.7).fillCircle(ox + mid - 3, mid - 2, size * 0.22);
-      g.fillStyle(dark, 0.6).fillCircle(ox + mid + 4, mid + 3, size * 0.18);
+    case Tile.TallGrass: {
+      // A raised, brighter tuft so tall grass reads as cover, not flat ground.
+      g.fillStyle(0x0e1c0e, 0.28).fillEllipse(ox + mid + 1, size - 4, size * 0.55, size * 0.2); // base shadow
+      const blade = (col: number, a: number, n: number, hi: number) => {
+        g.lineStyle(1.4, col, a);
+        for (let b = 0; b < n; b++) {
+          const x = ox + rng.int(3, size - 3);
+          const y = rng.int(size - 6, size - 2);
+          g.lineBetween(x, y, x + rng.int(-2, 2), y - rng.int(hi - 3, hi));
+        }
+      };
+      blade(0x2f4a26, 0.8, 9, 10); // dark backs
+      blade(0x6fa64a, 0.85, 9, 12); // bright fronts
       break;
+    }
+    case Tile.Tree: {
+      // Raised tree: cast shadow ring + dark trunk + layered bright canopy + rim light.
+      g.fillStyle(0x0c170d, 0.4).fillEllipse(ox + mid + 2, mid + 7, size * 0.66, size * 0.34); // cast shadow
+      g.fillStyle(0x3f2c19, 1).fillRect(ox + mid - 2, mid + 1, 4, size * 0.34); // trunk
+      g.fillStyle(0x2c1d10, 0.7).fillRect(ox + mid + 1, mid + 1, 2, size * 0.34); // trunk shade
+      g.fillStyle(0x274c24, 1).fillCircle(ox + mid, mid - 1, size * 0.36); // canopy base
+      g.fillStyle(0x1d3a1c, 0.6).fillCircle(ox + mid + 5, mid + 2, size * 0.2); // shaded lobe (down-right)
+      g.fillStyle(0x3c7a37, 1).fillCircle(ox + mid - 3, mid - 4, size * 0.24); // lit lobe
+      g.fillStyle(0x5fb04c, 0.95).fillCircle(ox + mid - 5, mid - 6, size * 0.14); // bright highlight
+      g.lineStyle(1.5, 0x86d06a, 0.85); // rim light on the top-left
+      g.beginPath();
+      g.arc(ox + mid, mid - 1, size * 0.36, Math.PI * 1.05, Math.PI * 1.55);
+      g.strokePath();
+      break;
+    }
+    case Tile.Bush: {
+      // Low rounded shrub: small shadow + a couple of bright lobes (no trunk).
+      g.fillStyle(0x0e1c0e, 0.32).fillEllipse(ox + mid + 1, mid + 6, size * 0.56, size * 0.26); // shadow
+      g.fillStyle(0x2f5a2b, 1).fillCircle(ox + mid - 3, mid + 1, size * 0.22); // body
+      g.fillStyle(0x418a39, 1).fillCircle(ox + mid + 3, mid, size * 0.19); // lit lobe
+      g.fillStyle(0x60ab4d, 0.9).fillCircle(ox + mid - 1, mid - 3, size * 0.12); // highlight
+      g.fillStyle(0x1f3d1f, 0.5).fillCircle(ox + mid + 5, mid + 4, size * 0.12); // shade
+      break;
+    }
     case Tile.Crop:
       g.fillStyle(dark, 0.5);
       for (let x = 5; x < size; x += 7) g.fillRect(ox + x, 2, 2, size - 4); // planted rows

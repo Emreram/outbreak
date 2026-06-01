@@ -14,18 +14,29 @@ type Draw = (g: Phaser.GameObjects.Graphics) => void;
 
 const DRAWERS: Record<string, Draw> = {
   tree: (g) => {
-    g.fillStyle(0x5a4326, 1).fillRect(13, 16, 4, 10); // trunk
-    g.fillStyle(0x2f6b34, 1).fillCircle(15, 12, 11);
-    g.fillStyle(0x3f8a45, 1).fillCircle(12, 10, 6);
+    g.fillStyle(0x0c170d, 0.35).fillEllipse(16, 26, 21, 8); // ground drop shadow
+    g.fillStyle(0x4a3420, 1).fillRect(13, 15, 4, 11); // trunk
+    g.fillStyle(0x2c1d10, 0.7).fillRect(15, 15, 2, 11); // trunk shade
+    g.fillStyle(0x244a22, 1).fillCircle(15, 12, 12); // canopy base (dark)
+    g.fillStyle(0x16301a, 0.55).fillCircle(20, 15, 5); // shaded lobe (down-right)
+    g.fillStyle(0x357a33, 1).fillCircle(13, 10, 8); // mid lobe
+    g.fillStyle(0x4f9e45, 1).fillCircle(11, 8, 5); // bright lobe
+    g.fillStyle(0x7cc85e, 0.9).fillCircle(10, 7, 2.6); // highlight glint
   },
   pine: (g) => {
-    g.fillStyle(0x5a4326, 1).fillRect(13, 20, 4, 8);
-    g.fillStyle(0x1f5a2a, 1).fillTriangle(15, 2, 4, 22, 26, 22);
-    g.fillStyle(0x2c7236, 1).fillTriangle(15, 7, 7, 18, 23, 18);
+    g.fillStyle(0x0c170d, 0.35).fillEllipse(15, 27, 16, 7); // ground drop shadow
+    g.fillStyle(0x4a3420, 1).fillRect(13, 19, 4, 9); // trunk
+    g.fillStyle(0x163d1c, 1).fillTriangle(15, 1, 3, 22, 27, 22); // dark base skirt
+    g.fillStyle(0x257032, 1).fillTriangle(15, 5, 6, 19, 24, 19); // mid tier
+    g.fillStyle(0x3f9a45, 1).fillTriangle(15, 9, 9, 16, 21, 16); // bright top tier
+    g.fillStyle(0x7cc85e, 0.85).fillTriangle(15, 6, 12, 11, 18, 11); // rim highlight
   },
   bush: (g) => {
-    g.fillStyle(0x34622f, 1).fillCircle(11, 18, 7);
-    g.fillStyle(0x3f7a39, 1).fillCircle(18, 16, 8);
+    g.fillStyle(0x0e1c0e, 0.3).fillEllipse(15, 24, 18, 7); // drop shadow
+    g.fillStyle(0x2c5a2a, 1).fillCircle(11, 17, 8);
+    g.fillStyle(0x357a33, 1).fillCircle(19, 16, 8);
+    g.fillStyle(0x4f9e45, 1).fillCircle(14, 14, 5); // bright crown
+    g.fillStyle(0x7cc85e, 0.85).fillCircle(13, 13, 2.4); // highlight glint
   },
   rock: (g) => {
     g.fillStyle(0x6b6f76, 1).fillCircle(14, 17, 8);

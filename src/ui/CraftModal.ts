@@ -1,5 +1,5 @@
 import type { GameState } from "../shared/contracts";
-import { RECIPES, canCraft, type Recipe } from "../game/crafting";
+import { RECIPES, CRAFT_CATEGORIES, canCraft, hasSkill, hasStation, type Recipe } from "../game/crafting";
 import { itemCount } from "../game/inventory";
 
 // Crafting UI (Feature 8): a DOM overlay listing recipes with have/need readouts
@@ -13,9 +13,12 @@ const CSS = `
 .ob-craft.ob-on{display:flex}
 .ob-craftp{width:min(560px,95vw);max-height:84vh;display:flex;flex-direction:column;gap:10px;overflow:auto;
   background:#0e1318;border:1px solid #2a3a4a;border-radius:12px;padding:16px;color:#e8eef4;box-shadow:0 18px 60px rgba(0,0,0,.6)}
-.ob-crafth{display:flex;justify-content:space-between;align-items:center}
+.ob-crafth{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .ob-crafth b{font-size:15px;letter-spacing:.08em}
+.ob-craftcount{flex:1;font-size:11px;color:#9ef0a0;text-align:center}
 .ob-craftx{background:none;border:1px solid #34506a;color:#cdd9e5;border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
+.ob-craftcat{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#7fd3ff;margin:6px 2px 1px;border-bottom:1px solid #1d2a36;padding-bottom:3px}
+.ob-rinfo .req{font-size:11px;color:#ffb454;margin-top:2px}
 .ob-recipe{display:flex;justify-content:space-between;align-items:center;gap:10px;
   background:#0c1620;border:1px solid #24384a;border-radius:8px;padding:9px 11px}
 .ob-rinfo{font-size:13px;min-width:0}
@@ -30,6 +33,7 @@ const CSS = `
 export class CraftModal {
   private readonly root: HTMLDivElement;
   private readonly listEl: HTMLDivElement;
+  private countEl!: HTMLDivElement;
   private onCraft?: (r: Recipe) => void;
   private onClose?: () => void;
   private opened = false;
@@ -49,11 +53,12 @@ export class CraftModal {
     const head = div("ob-crafth");
     const title = document.createElement("b");
     title.textContent = "CRAFTING";
+    this.countEl = div("ob-craftcount");
     const x = document.createElement("button");
     x.className = "ob-craftx";
     x.textContent = "Close (Esc)";
     x.addEventListener("click", () => this.close());
-    head.append(title, x);
+    head.append(title, this.countEl, x);
     this.listEl = div("ob-craft-list");
     const tip = div("ob-crafttip");
     tip.textContent = "Materials are consumed on craft. Find/scavenge components out in the world.";
@@ -110,34 +115,61 @@ export class CraftModal {
     const s = this.state;
     if (!s) return;
     this.listEl.innerHTML = "";
-    for (const r of RECIPES) {
-      const stationOk = !r.station || this.stations.has(r.station);
-      const row = div("ob-recipe");
-      const info = div("ob-rinfo");
-      const nm = document.createElement("div");
-      nm.className = "nm";
-      nm.textContent = `${r.out}${r.outQty > 1 ? ` ×${r.outQty}` : ""}${r.station ? `  ·  ${r.station}${stationOk ? "" : " (need station)"}` : ""}`;
-      const ds = document.createElement("div");
-      ds.className = "ds";
-      ds.textContent = r.desc;
-      const ing = document.createElement("div");
-      ing.className = "ing";
-      ing.innerHTML = r.inputs
-        .map((i) => {
-          const have = itemCount(s, i.item);
-          const okc = have >= i.qty ? "#5ed66e" : "#ff6b6b";
-          return `<span style="color:${okc}">${i.item} ${have}/${i.qty}</span>`;
-        })
-        .join("  ·  ");
-      info.append(nm, ds, ing);
-      const btn = document.createElement("button");
-      btn.className = "ob-craftb";
-      btn.textContent = stationOk ? "Craft" : r.station ?? "Station";
-      btn.disabled = !canCraft(s, r) || !stationOk;
-      btn.addEventListener("click", () => stationOk && this.onCraft?.(r));
-      row.append(info, btn);
-      this.listEl.appendChild(row);
+    let craftable = 0;
+
+    for (const cat of CRAFT_CATEGORIES) {
+      const recipes = RECIPES.filter((r) => r.category === cat);
+      if (recipes.length === 0) continue;
+      const header = div("ob-craftcat");
+      header.textContent = cat;
+      this.listEl.appendChild(header);
+
+      for (const r of recipes) {
+        const stationOk = hasStation(r, this.stations);
+        const skillOk = hasSkill(s, r);
+        const ready = canCraft(s, r, this.stations);
+        if (ready) craftable++;
+
+        const row = div("ob-recipe");
+        const info = div("ob-rinfo");
+        const nm = document.createElement("div");
+        nm.className = "nm";
+        nm.textContent = `${r.out}${r.outQty > 1 ? ` ×${r.outQty}` : ""}`;
+        const ds = document.createElement("div");
+        ds.className = "ds";
+        ds.textContent = r.desc;
+        const ing = document.createElement("div");
+        ing.className = "ing";
+        ing.innerHTML = r.inputs
+          .map((i) => {
+            const have = itemCount(s, i.item);
+            const okc = have >= i.qty ? "#5ed66e" : "#ff6b6b";
+            return `<span style="color:${okc}">${i.item} ${have}/${i.qty}</span>`;
+          })
+          .join("  ·  ");
+        info.append(nm, ds, ing);
+
+        // Station / skill requirements (only when they gate the recipe).
+        const reqs: string[] = [];
+        if (r.station) reqs.push(`${r.station}${stationOk ? " ✓" : " (need station)"}`);
+        if (r.skill) reqs.push(`Crafting ${r.skill.level}${skillOk ? " ✓" : " (locked)"}`);
+        if (reqs.length) {
+          const req = div("req");
+          req.textContent = reqs.join("  ·  ");
+          info.append(req);
+        }
+
+        const btn = document.createElement("button");
+        btn.className = "ob-craftb";
+        btn.textContent = !stationOk ? r.station ?? "Station" : !skillOk ? `Skill ${r.skill?.level}` : "Craft";
+        btn.disabled = !ready;
+        btn.addEventListener("click", () => ready && this.onCraft?.(r));
+        row.append(info, btn);
+        this.listEl.appendChild(row);
+      }
     }
+
+    this.countEl.textContent = `${craftable} of ${RECIPES.length} craftable now`;
   }
 }
 

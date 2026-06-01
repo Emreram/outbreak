@@ -115,6 +115,7 @@ export interface MaterialDef extends BaseDef {
 export interface ArmorDef extends BaseDef {
   kind: "armor";
   defense: number; // % incoming damage reduced
+  slot?: "head" | "body"; // equip slot (default body); body + head stack
 }
 
 export type ItemDef = WeaponDef | ConsumableDef | AmmoDef | ThrowableDef | MaterialDef | ArmorDef;
