@@ -83,16 +83,20 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   if (biome.urban) carveUrban(grid, seed, cx, cy, size, biome, rng, buildings);
   else carveNatural(grid, cx, cy, size, biome, rng, buildings);
 
-  // 2) Loot containers inside buildings.
+  // 2) Loot containers inside buildings — SCARCE. Most buildings hold nothing
+  //    worth a container; high-tier buildings (police/lab/military) are likelier
+  //    to, and only rarely hold two. Scavenging should feel lean and earned.
   let ci = 0;
   for (const b of buildings) {
-    const n = 1 + (rng.chance(0.35) ? 1 : 0);
+    const tier = CONTAINER_TIER[b.type] ?? 1;
+    if (!rng.chance(0.14 + tier * 0.13)) continue; // house ~14% … military ~66%
+    const n = rng.chance(0.12 + tier * 0.05) ? 2 : 1;
     const used = new Set<string>();
     for (let i = 0; i < n; i++) {
       const tile = floorTileIn(grid, b, gx0, gy0, rng, used);
       if (tile) {
         used.add(`${tile.x},${tile.y}`);
-        containers.push({ gid: `${cx}_${cy}_c${ci++}`, tx: tile.x, ty: tile.y, tier: CONTAINER_TIER[b.type] ?? 1, type: b.type });
+        containers.push({ gid: `${cx}_${cy}_c${ci++}`, tx: tile.x, ty: tile.y, tier, type: b.type });
       }
     }
   }
