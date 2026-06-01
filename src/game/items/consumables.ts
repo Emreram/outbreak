@@ -99,6 +99,10 @@ const MATERIALS: MaterialDef[] = [
   mat("Tomato Seeds", "common", 0xe2462f),
   mat("Potato Seeds", "common", 0xb98a4a),
   mat("Carrot Seeds", "common", 0xe07a2f),
+  // Crafting materials (Feature 8). Hide drops from hunted animals (Feature 6).
+  mat("Hide", "common", 0x8a6a3a),
+  mat("Leather", "common", 0x6b4a2a),
+  mat("Barricade Kit", "uncommon", 0x9c6b3f),
 ];
 
 const ARMOR: ArmorDef[] = [
