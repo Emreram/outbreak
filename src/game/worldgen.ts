@@ -129,24 +129,28 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   return { cx, cy, size, tileSize, biome: biome.id, grid, buildings, containers, props, landmarks };
 }
 
-/** A walkable world-pixel spawn point for a freshly-generated chunk (prefers road). */
+/** A walkable world-pixel spawn point for a freshly-generated chunk: the nearest
+ *  OPEN tile to the centre (road/ground), avoiding building interiors. */
 export function chunkStartPx(chunk: ChunkData): { x: number; y: number } {
   const { grid, size, tileSize, cx, cy } = chunk;
   const c = Math.floor(size / 2);
+  const toPx = (lx: number, ly: number) => ({ x: (cx * size + lx + 0.5) * tileSize, y: (cy * size + ly + 0.5) * tileSize });
+  let firstWalkable: { x: number; y: number } | null = null;
   for (let r = 0; r < size; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // ring only
         const lx = c + dx;
         const ly = c + dy;
         if (lx < 0 || ly < 0 || lx >= size || ly >= size) continue;
-        if (!isSolid(grid[ly][lx])) {
-          return { x: (cx * size + lx + 0.5) * tileSize, y: (cy * size + ly + 0.5) * tileSize };
-        }
+        const t = grid[ly][lx];
+        if (isSolid(t)) continue;
+        if (!firstWalkable) firstWalkable = toPx(lx, ly);
+        if (t !== Tile.Floor && t !== Tile.Door) return toPx(lx, ly); // prefer open ground
       }
     }
   }
-  return { x: (cx * size + c + 0.5) * tileSize, y: (cy * size + c + 0.5) * tileSize };
+  return firstWalkable ?? toPx(c, c);
 }
 
 // --- urban generation ------------------------------------------------------

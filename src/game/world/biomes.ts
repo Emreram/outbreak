@@ -6,7 +6,7 @@
 
 import { Tile, type BuildingType } from "./tiles";
 import { field, hashUnit } from "./noise";
-import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../constants";
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y, SPAWN_CHUNK } from "../constants";
 
 export type BiomeId =
   | "downtown" | "suburb" | "commercial_strip" | "industrial" | "warehouse_district"
@@ -237,6 +237,10 @@ const TABLE: BiomeId[][] = [
 // Rare special districts, injected where a third noise spikes over dense areas.
 const SPECIALS: BiomeId[] = ["police_district", "military_base", "shopping_mall"];
 
+// Always-playable land biomes for the spawn chunk (no water/marsh starts), still
+// varied per seed so the opening location differs run to run.
+const START_BIOMES: BiomeId[] = ["suburb", "commercial_strip", "forest", "farmland", "grassland", "parkland"];
+
 // fbm noise clusters near 0.5; stretch around the midpoint so the extreme
 // bands (corner biomes like downtown/lake/grassland/quarry) actually appear.
 function band(v: number): number {
@@ -252,6 +256,13 @@ function edgeDistChunks(cx: number, cy: number): number {
 /** The biome for a chunk — contiguous via low-frequency noise, ocean at the edge. */
 export function biomeAt(seed: string, cx: number, cy: number): BiomeDef {
   if (edgeDistChunks(cx, cy) <= 0) return BIOMES.ocean;
+
+  // The spawn chunk is always a playable land biome (varied per seed) so a run
+  // never opens with the player stuck wading in a lake/marsh.
+  if (cx === SPAWN_CHUNK.x && cy === SPAWN_CHUNK.y) {
+    const i = Math.floor(hashUnit(seed + ":start", cx, cy) * START_BIOMES.length) % START_BIOMES.length;
+    return BIOMES[START_BIOMES[i]];
+  }
 
   const density = field(seed + ":dens", cx, cy, 6, 3);
   const moisture = field(seed + ":moist", cx, cy, 8, 3);
