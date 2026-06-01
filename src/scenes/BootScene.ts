@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { TILE_SIZE } from "../game/constants";
 import { ASSET_PATHS, generatePlayerTexture, generateTileTexture } from "../engine/textures";
+import { loadGeneratedAssets } from "../engine/assets";
 import { generatePropTextures } from "../engine/propSprites";
 import { generateFxTextures } from "../engine/fx";
 import { generateAllIcons, generateLootWorldTextures } from "../engine/icons";
@@ -20,6 +21,8 @@ export class BootScene extends Phaser.Scene {
     for (const [key, path] of Object.entries(ASSET_PATHS)) {
       this.load.image(key, path);
     }
+    // Optional: AI-generated PNGs override procedural art when present (Feature 3).
+    loadGeneratedAssets(this);
   }
 
   async create(): Promise<void> {

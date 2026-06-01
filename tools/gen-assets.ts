@@ -61,7 +61,16 @@ async function main(): Promise<void> {
     made++;
     console.error(`  ->  ${outPath}`);
   }
-  console.error(`done. generated ${made}, ${specs.length - made} already present.`);
+
+  // Write a manifest (spec-key → file) of every asset that now exists so BootScene's
+  // AssetManifest can load them and override the procedural art for those keys.
+  const manifest: Record<string, string> = {};
+  for (const s of specs) {
+    const fn = s.key.replace(/[^a-z0-9]+/gi, "_") + ".png";
+    if (await exists(join(OUT, fn))) manifest[s.key] = fn;
+  }
+  await writeFile(join(OUT, "manifest.json"), JSON.stringify(manifest, null, 2));
+  console.error(`done. generated ${made}, ${specs.length - made} already present. manifest: ${Object.keys(manifest).length} keys.`);
 }
 
 /** Key the flat background to transparency, trim the margin, resize to game res. */
