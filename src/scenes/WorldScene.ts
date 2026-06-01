@@ -1,6 +1,8 @@
 import Phaser from "phaser";
-import type { GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
-import type { Building } from "../game/worldgen";
+import type { FarmPlot, GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
+import { Tile, type Building } from "../game/worldgen";
+import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
+import { propKey } from "../engine/propSprites";
 import { randomSeed, liveRng } from "../game/rng";
 import {
   clampStat,
@@ -123,6 +125,7 @@ export class WorldScene extends Phaser.Scene {
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
   private selectedQuick = 0; // hotbar quick-use slot under the scroll-wheel cursor (0–3)
+  private readonly farmSprites = new Map<string, { soil: Phaser.GameObjects.Image; crop?: Phaser.GameObjects.Image }>();
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -153,6 +156,11 @@ export class WorldScene extends Phaser.Scene {
     this.reloading = false;
     this.lastStep = 0;
     this.selectedQuick = 0;
+    for (const r of this.farmSprites.values()) {
+      r.soil.destroy();
+      r.crop?.destroy();
+    }
+    this.farmSprites.clear();
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
     const fromUrl = this.registry.get("seedFromUrl") === true;
@@ -301,6 +309,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.hud = new HUD(this, this.uiLayer);
     this.hotbar = new HotBar(this, this.uiLayer);
+    for (const p of this.state.farmPlots ?? []) this.refreshPlotSprites(p); // restore farm plots
 
     // Split rendering: the main (zoomed, player-following) camera draws the world
     // and ignores the fixed UI; the UI camera draws only the screen-fixed UI (its
@@ -430,8 +439,10 @@ export class WorldScene extends Phaser.Scene {
     // is the invitation to engage; exploring never forces one.
     if (!this.dead && !this.inEncounter) {
       const chest = this.nearestChest(42);
-      const near = chest ? null : this.buildingAt();
+      const farm = chest ? null : this.farmHint();
+      const near = chest || farm ? null : this.buildingAt();
       if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
+      else if (farm) this.hintText.setText(farm).setVisible(true);
       else if (near) this.hintText.setText(`Press E to search the ${near.type.replace(/_/g, " ")}`).setVisible(true);
       else this.hintText.setVisible(false);
     } else {
@@ -489,6 +500,8 @@ export class WorldScene extends Phaser.Scene {
     if (next === 0) this.state.day += 1; // wrapped night -> dawn
     this.state.timeOfDay = PHASES[next];
     this.applyPhaseVisual();
+    growPlots(this.state); // crops advance one segment per time-of-day step
+    for (const p of this.state.farmPlots ?? []) this.refreshPlotSprites(p);
     this.persist();
   }
 
@@ -779,6 +792,7 @@ export class WorldScene extends Phaser.Scene {
       this.openChest(chest);
       return;
     }
+    if (this.tryFarmAction()) return; // till / plant / water / harvest when applicable
     const b = this.buildingAt();
     if (b) {
       const name = b.type.replace(/_/g, " ");
@@ -787,6 +801,109 @@ export class WorldScene extends Phaser.Scene {
       const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
       this.startEncounter(biome, "You scan the area and the way ahead.", "The area");
     }
+  }
+
+  // --- farming (Feature 5) -----------------------------------------------------
+
+  /** Context farm action on the tile under the player: harvest > water > plant > till. */
+  private tryFarmAction(): boolean {
+    const { tx, ty } = this.player.tilePos();
+    const plot = plotAt(this.state, tx, ty);
+
+    if (plot?.crop && plot.growth >= 1) {
+      const def = CROPS[plot.crop];
+      if (def) {
+        addItem(this.state, def.produce, def.yieldQty);
+        addItem(this.state, def.seed, def.seedReturn);
+        this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `+${def.yieldQty} ${def.produce}`, "#9ef0a0");
+        sfx.pickup();
+        plot.crop = undefined;
+        plot.growth = 0;
+        plot.watered = false;
+        this.refreshPlotSprites(plot);
+        this.persist();
+      }
+      return true;
+    }
+    if (plot?.crop && plot.growth < 1) {
+      if (!hasItem(this.state, "Watering Can")) return false;
+      if (!plot.watered) {
+        plot.watered = true;
+        this.floatText(this.player.sprite.x, this.player.sprite.y - 8, "Watered", "#4ec3ff");
+        sfx.ui();
+        this.persist();
+      }
+      return true;
+    }
+    if (plot && !plot.crop) {
+      const seedStack = this.state.inventory.find((s) => SEED_TO_CROP[s.item]);
+      if (!seedStack) {
+        this.showToast("No seeds to plant");
+        return true;
+      }
+      const crop = SEED_TO_CROP[seedStack.item];
+      removeItem(this.state, seedStack.item, 1);
+      plot.crop = crop;
+      plot.growth = 0;
+      plot.watered = false;
+      this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Planted ${CROPS[crop].name}`, "#9ef0a0");
+      sfx.ui();
+      this.refreshPlotSprites(plot);
+      this.persist();
+      return true;
+    }
+    if (!plot && hasItem(this.state, "Hoe") && this.isTillable(tx, ty)) {
+      const p = tillPlot(this.state, tx, ty);
+      this.floatText(this.player.sprite.x, this.player.sprite.y - 8, "Tilled soil", "#cdb89a");
+      sfx.ui();
+      this.refreshPlotSprites(p);
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  private isTillable(tx: number, ty: number): boolean {
+    if (this.buildingAt()) return false;
+    const t = this.chunks.tileAt(tx, ty);
+    return t === Tile.Grass || t === Tile.Dirt || t === Tile.TallGrass || t === Tile.Trail;
+  }
+
+  /** The contextual "Press E" farm label under the player, or null. */
+  private farmHint(): string | null {
+    const { tx, ty } = this.player.tilePos();
+    const plot = plotAt(this.state, tx, ty);
+    if (plot?.crop && plot.growth >= 1) return `Press E to harvest ${CROPS[plot.crop]?.name ?? "crop"}`;
+    if (plot?.crop && plot.growth < 1) return hasItem(this.state, "Watering Can") ? "Press E to water the crop" : null;
+    if (plot && !plot.crop) {
+      const seed = this.state.inventory.find((s) => SEED_TO_CROP[s.item]);
+      return seed ? `Press E to plant ${CROPS[SEED_TO_CROP[seed.item]].name}` : "Tilled soil — need seeds";
+    }
+    if (!plot && hasItem(this.state, "Hoe") && this.isTillable(tx, ty)) return "Press E to till soil";
+    return null;
+  }
+
+  /** Create/update the soil + crop-stage sprites for a plot (world-space). */
+  private refreshPlotSprites(plot: FarmPlot): void {
+    const k = `${plot.tx},${plot.ty}`;
+    const x = (plot.tx + 0.5) * TILE_SIZE;
+    const y = (plot.ty + 0.5) * TILE_SIZE;
+    let rec = this.farmSprites.get(k);
+    if (!rec) {
+      rec = { soil: this.add.image(x, y, propKey("farm_tilled")).setDepth(3) };
+      this.farmSprites.set(k, rec);
+    }
+    const stage = plotStage(plot);
+    if (stage === 0) {
+      rec.crop?.destroy();
+      rec.crop = undefined;
+      return;
+    }
+    const tex = propKey(["", "farm_sprout", "farm_growing", "farm_ripe"][stage]);
+    if (!rec.crop) rec.crop = this.add.image(x, y, tex).setDepth(5);
+    else rec.crop.setTexture(tex);
+    if (stage === 3 && plot.crop && CROPS[plot.crop]) rec.crop.setTint(CROPS[plot.crop].color);
+    else rec.crop.clearTint();
   }
 
   private toggleLoot(): void {

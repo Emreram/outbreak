@@ -136,6 +136,26 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x556b5a, 1).fillRoundedRect(4, 8, 22, 16, 3);
     g.fillStyle(0x6e8a72, 1).fillRect(7, 11, 16, 7);
   },
+
+  // --- farming (Feature 5): tilled soil + 3 crop growth stages ---
+  farm_tilled: (g) => {
+    g.fillStyle(0x5a3f24, 1).fillRect(1, 1, 28, 28);
+    g.lineStyle(1, 0x3e2c18, 1);
+    for (let i = 0; i < 4; i++) g.lineBetween(2, 5 + i * 7, 28, 5 + i * 7);
+  },
+  farm_sprout: (g) => {
+    g.fillStyle(0x3f8a45, 1).fillRect(14, 16, 2, 8);
+    g.fillStyle(0x5ed66e, 1).fillCircle(12, 15, 2).fillCircle(18, 15, 2);
+  },
+  farm_growing: (g) => {
+    g.fillStyle(0x2f6b34, 1).fillRect(14, 10, 2, 14);
+    g.fillStyle(0x3f8a45, 1).fillTriangle(15, 4, 9, 16, 21, 16);
+  },
+  // ripe: white "fruit" so the scene can tint the whole sprite to the crop colour.
+  farm_ripe: (g) => {
+    g.fillStyle(0x2f6b34, 1).fillRect(14, 9, 2, 15);
+    g.fillStyle(0xffffff, 1).fillCircle(11, 10, 3).fillCircle(19, 10, 3).fillCircle(15, 6, 3);
+  },
 };
 
 export function generatePropTextures(scene: Phaser.Scene): void {

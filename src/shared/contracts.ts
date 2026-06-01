@@ -49,6 +49,17 @@ export interface GameState {
   background?: string; // chosen background/class id (character creation)
   perks?: string[]; // active perk ids from the background
   appearance?: { color?: number }; // survivor sprite tint
+  // --- persistent world entities (optional → old saves stay valid) ---
+  farmPlots?: FarmPlot[]; // player-tilled crop plots (Feature 5)
+}
+
+/** A player-created farm plot. Keyed by global tile; persists + grows on the clock. */
+export interface FarmPlot {
+  tx: number; // GLOBAL tile coords
+  ty: number;
+  crop?: string; // crop id once planted (e.g. "wheat"); undefined = tilled, empty
+  growth: number; // 0..1; ripe at >= 1
+  watered: boolean; // watered plots grow faster (reset as they dry)
 }
 
 /** Choices from the character-creation screen, applied after the AI scenario. */

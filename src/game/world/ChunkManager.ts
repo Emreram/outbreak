@@ -151,6 +151,15 @@ export class ChunkManager {
     return !SOLID.has(lc.data.grid[ly][lx]);
   }
 
+  /** The raw tile value at a global tile, or null if not in a loaded chunk. */
+  tileAt(gtx: number, gty: number): number | null {
+    const lc = this.chunkAt(Math.floor(gtx / CHUNK_TILES), Math.floor(gty / CHUNK_TILES));
+    if (!lc) return null;
+    const lx = gtx - lc.cx * CHUNK_TILES;
+    const ly = gty - lc.cy * CHUNK_TILES;
+    return lc.data.grid[ly]?.[lx] ?? null;
+  }
+
   /** The building whose interior contains a global tile, or null. */
   buildingAt(gtx: number, gty: number): Building | null {
     const lc = this.chunkAt(Math.floor(gtx / CHUNK_TILES), Math.floor(gty / CHUNK_TILES));
