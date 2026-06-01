@@ -159,9 +159,12 @@ export class WorldScene extends Phaser.Scene {
       isChestLooted: (gid) => this.state.worldFlags.includes(`chest_${gid}`),
     });
 
-    // New runs spawn at the spawn-chunk's central road; resumed runs keep their spot.
-    const startX = saved ? this.state.player.x : this.chunks.start.x;
-    const startY = saved ? this.state.player.y : this.chunks.start.y;
+    // A fresh run (new game / character creation / ?seed) carries an AI intro, and
+    // its freshly-saved state sits at the unplaced (0,0) origin — which is the ocean
+    // border. Spawn it at the world's spawn chunk instead; a resumed run keeps its spot.
+    const freshRun = !saved || !!this.registry.get("intro");
+    const startX = freshRun ? this.chunks.start.x : this.state.player.x;
+    const startY = freshRun ? this.chunks.start.y : this.state.player.y;
     this.player = new Player(this, startX, startY);
     this.player.setAppearance(this.state.appearance?.color); // character-creation tint
 
@@ -173,8 +176,12 @@ export class WorldScene extends Phaser.Scene {
     // scrollFactor(0) UI, which clips the HUD off the top. So all fixed UI goes
     // into uiLayer, rendered by a dedicated unzoomed UI camera; the main camera
     // ignores uiLayer. (DOM modals are HTML and unaffected.)
+    // The UI camera's world-view is parked far OUTSIDE the finite map, so every
+    // world object (scrollFactor 1) is culled off-view and never draws over the
+    // HUD — while screen-fixed UI (scrollFactor 0) ignores scroll and stays put.
     this.uiLayer = this.add.layer();
     this.uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+    this.uiCam.setScroll(-1_000_000, -1_000_000);
 
     // Equipped weapon shown in-hand (icon swaps on equip).
     this.weaponSprite = this.add.image(startX, startY, iconKey("Fists")).setDepth(11).setScale(0.42).setVisible(false);
@@ -261,7 +268,7 @@ export class WorldScene extends Phaser.Scene {
     this.scale.on("resize", this.onResize, this);
     this.applyPhaseVisual();
 
-    if (!saved) {
+    if (freshRun) {
       this.state.player.x = startX;
       this.state.player.y = startY;
       saveGame(this.state);
@@ -270,15 +277,11 @@ export class WorldScene extends Phaser.Scene {
     this.hud = new HUD(this, this.uiLayer);
 
     // Split rendering: the main (zoomed, player-following) camera draws the world
-    // and ignores the fixed UI; the UI camera (zoom 1, parked at origin) draws only
-    // uiLayer. World objects sit far from origin so the UI camera frustum-culls
-    // them; ignore the persistent ones too for safety. floatText/glow stay on main.
+    // and ignores the fixed UI; the UI camera draws only the screen-fixed UI (its
+    // off-map scroll culls every scrollFactor-1 world object). The night overlay is
+    // scrollFactor(0) and lives on the main camera, so the UI camera must skip it.
     this.cameras.main.ignore(this.uiLayer);
-    this.uiCam.ignore([this.player.sprite, this.weaponSprite, this.glow, this.nightOverlay]);
-    this.uiCam.ignore(this.enemyGroup);
-    this.uiCam.ignore(this.projectileGroup);
-    this.uiCam.ignore(this.enemyProjGroup);
-    this.uiCam.ignore(this.itemGroup);
+    this.uiCam.ignore(this.nightOverlay);
 
     this.modal = new EncounterModal();
     this.modal.setHandlers(
