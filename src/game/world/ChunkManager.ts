@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { generateChunk, chunkStartPx, SOLID_TILES, type Building, type ChunkData } from "../worldgen";
+import { generateChunk, chunkStartPx, SOLID_TILES, type Building, type ChunkData, type ContainerKind } from "../worldgen";
 import { biomeAt } from "./biomes";
 import { dangerTierAt, lootBiasAt } from "./scaling";
 import {
@@ -13,7 +13,7 @@ import {
   WORLD_HEIGHT_PX,
 } from "../constants";
 import { ChunkView, type ColliderSpec } from "../../engine/ChunkRenderer";
-import { CHEST_CLOSED } from "../../engine/icons";
+import { CHEST_CLOSED, PADLOCK } from "../../engine/icons";
 
 // Streams the enormous, finite world: keeps a (2r+1)² ring of generated chunks
 // resident around the player, generating/destroying them on chunk-boundary
@@ -28,9 +28,27 @@ const UNLOAD_RADIUS = CHUNK_LOAD_RADIUS + 1; // hysteresis so borders don't thra
 export interface ActiveChest {
   gid: string;
   sprite: Phaser.GameObjects.Image;
+  badge?: Phaser.GameObjects.Image; // padlock overlay while locked
   tier: number;
+  kind: ContainerKind;
+  locked: boolean;
   opened: boolean;
 }
+
+// Cheap per-kind tint of the chest sprite so container variety reads at a glance
+// (dedicated kind sprites arrive with the AI/procedural art pass).
+const KIND_TINT: Record<ContainerKind, number> = {
+  crate: 0xb5853f,
+  drawer: 0x9c6b3f,
+  cabinet: 0x8a8f98,
+  locker: 0x5f86a8,
+  fridge: 0xdfe6ec,
+  toolbox: 0xd1483a,
+  register: 0x6e7b86,
+  med_cabinet: 0xeef2f5,
+  gun_cabinet: 0x4a4036,
+  safe: 0x676b71,
+};
 
 interface LoadedChunk {
   cx: number;
@@ -92,10 +110,12 @@ export class ChunkManager {
     const chests: ActiveChest[] = [];
     for (const c of data.containers) {
       if (this.opts.isChestLooted(c.gid)) continue;
-      const spr = this.scene.add
-        .image((c.tx + 0.5) * TILE_SIZE, (c.ty + 0.5) * TILE_SIZE, CHEST_CLOSED)
-        .setDepth(6);
-      chests.push({ gid: c.gid, sprite: spr, tier: c.tier, opened: false });
+      const x = (c.tx + 0.5) * TILE_SIZE;
+      const y = (c.ty + 0.5) * TILE_SIZE;
+      const spr = this.scene.add.image(x, y, CHEST_CLOSED).setDepth(6).setTint(KIND_TINT[c.kind] ?? KIND_TINT.crate);
+      const chest: ActiveChest = { gid: c.gid, sprite: spr, tier: c.tier, kind: c.kind, locked: c.locked, opened: false };
+      if (c.locked) chest.badge = this.scene.add.image(x + 9, y - 8, PADLOCK).setDepth(7);
+      chests.push(chest);
     }
     this.loaded.set(key(cx, cy), { cx, cy, data, view, chests });
   }
@@ -104,7 +124,10 @@ export class ChunkManager {
     const lc = this.loaded.get(k);
     if (!lc) return;
     lc.view.destroy();
-    for (const c of lc.chests) c.sprite.destroy();
+    for (const c of lc.chests) {
+      c.sprite.destroy();
+      c.badge?.destroy();
+    }
     this.loaded.delete(k);
   }
 

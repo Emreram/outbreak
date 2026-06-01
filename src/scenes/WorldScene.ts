@@ -13,7 +13,7 @@ import {
 } from "../game/GameState";
 import { applyDecay, ratesFor } from "../game/survival";
 import { ammoMult, damageTakenMult, lootLuck, sprintDrainMult, type DamageKind } from "../game/perks";
-import { addItem, ammoReserve, autoEquip, equippedRangedDef, quickUseItems, reloadEquipped, useConsumable } from "../game/inventory";
+import { addItem, ammoReserve, autoEquip, equippedRangedDef, hasItem, quickUseItems, reloadEquipped, removeItem, useConsumable } from "../game/inventory";
 import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
 import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
@@ -431,7 +431,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.dead && !this.inEncounter) {
       const chest = this.nearestChest(42);
       const near = chest ? null : this.buildingAt();
-      if (chest) this.hintText.setText("Press E to open the chest").setVisible(true);
+      if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
       else if (near) this.hintText.setText(`Press E to search the ${near.type.replace(/_/g, " ")}`).setVisible(true);
       else this.hintText.setVisible(false);
     } else {
@@ -1317,16 +1317,46 @@ export class WorldScene extends Phaser.Scene {
 
   private openChest(chest: ActiveChest): void {
     if (chest.opened) return;
+    if (chest.locked && !this.tryUnlock(chest)) return; // blocked — tryUnlock explains why
     chest.opened = true;
-    chest.sprite.setTexture(CHEST_OPEN);
+    chest.sprite.setTexture(CHEST_OPEN).clearTint();
+    chest.badge?.destroy();
+    chest.badge = undefined;
     if (!this.state.worldFlags.includes(`chest_${chest.gid}`)) this.state.worldFlags.push(`chest_${chest.gid}`);
     sfx.pickup();
-    this.floatText(chest.sprite.x, chest.sprite.y, "Chest opened!", "#ffd23f");
-    const bias = lootLuck(this.state) + this.chunks.lootBias(chest.sprite.x, chest.sprite.y);
-    for (const s of rollLoot(`chest:${chest.tier}`, liveRng, 2 + chest.tier, bias)) {
+    this.floatText(chest.sprite.x, chest.sprite.y, `${chest.kind.replace(/_/g, " ")} looted`, "#ffd23f");
+    // Scarcer + smaller hauls (1+tier); locked containers reward the effort with a bias bump,
+    // and specialised kinds route to themed loot (guns/meds/food/tools).
+    const bias = lootLuck(this.state) + this.chunks.lootBias(chest.sprite.x, chest.sprite.y) + (chest.locked ? 0.4 : 0);
+    for (const s of rollLoot(this.containerLootSource(chest.kind, chest.tier), liveRng, 1 + chest.tier, bias)) {
       this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
     }
     this.persist();
+  }
+
+  /** Locked containers need a tool: Crowbar/Bolt Cutters are reusable; a Lockpick is consumed. */
+  private tryUnlock(chest: ActiveChest): boolean {
+    const tool = ["Bolt Cutters", "Crowbar", "Lockpick"].find((t) => hasItem(this.state, t));
+    if (!tool) {
+      this.showToast("Locked — need a Crowbar, Bolt Cutters, or Lockpick");
+      sfx.ui();
+      return false;
+    }
+    if (tool === "Lockpick") removeItem(this.state, "Lockpick", 1);
+    this.floatText(chest.sprite.x, chest.sprite.y - 10, tool === "Lockpick" ? "Picked the lock" : `Forced with ${tool}`, "#9ef0a0");
+    sfx.swing();
+    return true;
+  }
+
+  /** Specialised containers pull from themed loot; everything else uses the chest table. */
+  private containerLootSource(kind: ActiveChest["kind"], tier: number): string {
+    switch (kind) {
+      case "gun_cabinet": return "police_station";
+      case "med_cabinet": return "pharmacy";
+      case "fridge": return "grocery";
+      case "toolbox": return "hardware_store";
+      default: return `chest:${Math.max(0, Math.min(4, tier))}`;
+    }
   }
 
   // --- ranged combat ---------------------------------------------------------

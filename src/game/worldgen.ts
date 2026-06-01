@@ -12,6 +12,7 @@ import {
   type BuildingType,
   type Building,
   type Container,
+  type ContainerKind,
   type Prop,
   type Landmark,
   type ChunkData,
@@ -29,10 +30,51 @@ export {
   type BuildingType,
   type Building,
   type Container,
+  type ContainerKind,
   type Prop,
   type Landmark,
   type ChunkData,
 } from "./world/tiles";
+
+// Which container kinds a building type tends to hold (first ~= most likely).
+const KINDS_BY_TYPE: Partial<Record<BuildingType, ContainerKind[]>> = {
+  pharmacy: ["med_cabinet", "cabinet", "drawer"],
+  hospital: ["med_cabinet", "cabinet", "locker"],
+  police_station: ["gun_cabinet", "locker", "safe"],
+  military_depot: ["gun_cabinet", "locker", "crate"],
+  bunker: ["safe", "gun_cabinet", "locker"],
+  hardware_store: ["toolbox", "crate", "cabinet"],
+  warehouse: ["crate", "crate", "toolbox"],
+  port_warehouse: ["crate", "crate", "locker"],
+  factory: ["toolbox", "crate", "locker"],
+  grocery: ["fridge", "register", "crate"],
+  diner: ["fridge", "register", "cabinet"],
+  gas_station: ["register", "fridge", "toolbox"],
+  house: ["drawer", "cabinet", "fridge"],
+  cabin: ["drawer", "cabinet", "crate"],
+  motel: ["drawer", "cabinet", "fridge"],
+  office: ["drawer", "cabinet", "locker"],
+  school: ["locker", "cabinet", "drawer"],
+  church: ["cabinet", "drawer", "crate"],
+  mall: ["register", "cabinet", "crate"],
+  fire_station: ["locker", "toolbox", "cabinet"],
+  lab: ["med_cabinet", "safe", "cabinet"],
+  barn: ["crate", "toolbox", "cabinet"],
+  silo: ["crate", "crate", "toolbox"],
+  ranger_station: ["cabinet", "drawer", "locker"],
+};
+
+function containerKindFor(type: BuildingType, rng: Rng): ContainerKind {
+  return rng.pick(KINDS_BY_TYPE[type] ?? ["crate"]);
+}
+
+/** Safes/gun-cabinets are usually locked; higher-tier buildings lock more often. */
+function lockedFor(kind: ContainerKind, tier: number, rng: Rng): boolean {
+  if (kind === "safe") return true;
+  if (kind === "gun_cabinet") return rng.chance(0.8);
+  if (kind === "register") return rng.chance(0.4);
+  return rng.chance(0.06 + tier * 0.08);
+}
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
 const isSolid = (t: Tile): boolean => SOLID.has(t);
@@ -96,7 +138,8 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
       const tile = floorTileIn(grid, b, gx0, gy0, rng, used);
       if (tile) {
         used.add(`${tile.x},${tile.y}`);
-        containers.push({ gid: `${cx}_${cy}_c${ci++}`, tx: tile.x, ty: tile.y, tier, type: b.type });
+        const kind = containerKindFor(b.type, rng);
+        containers.push({ gid: `${cx}_${cy}_c${ci++}`, tx: tile.x, ty: tile.y, tier, type: b.type, kind, locked: lockedFor(kind, tier, rng) });
       }
     }
   }
@@ -109,7 +152,7 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
     const gx = gx0 + t.x;
     const gy = gy0 + t.y;
     landmarks.push({ kind: lm.kind, label: lm.label, x: (gx + 0.5) * tileSize, y: (gy + 0.5) * tileSize });
-    containers.push({ gid: `${cx}_${cy}_L${ci++}`, tx: gx, ty: gy, tier: 3, type: "warehouse" });
+    containers.push({ gid: `${cx}_${cy}_L${ci++}`, tx: gx, ty: gy, tier: 3, type: "warehouse", kind: "crate", locked: rng.chance(0.5) });
   }
 
   // 4) Decorative props (non-blocking sprites).
@@ -125,7 +168,7 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
     if (t) {
       const gx = gx0 + t.x;
       const gy = gy0 + t.y;
-      containers.push({ gid: `${cx}_${cy}_x0`, tx: gx, ty: gy, tier: 1, type: "house" });
+      containers.push({ gid: `${cx}_${cy}_x0`, tx: gx, ty: gy, tier: 1, type: "house", kind: "crate", locked: false });
       landmarks.push({ kind: "supply_cache", label: "Supply cache", x: (gx + 0.5) * tileSize, y: (gy + 0.5) * tileSize });
     }
   }
