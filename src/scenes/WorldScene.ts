@@ -2,6 +2,7 @@ import Phaser from "phaser";
 import type { FarmPlot, GameState, GMResponse, Spawn, TurnInput } from "../shared/contracts";
 import { Tile, type Building } from "../game/worldgen";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
+import { isWet, rollWeather } from "../game/weather";
 import { propKey } from "../engine/propSprites";
 import { randomSeed, liveRng } from "../game/rng";
 import {
@@ -109,6 +110,7 @@ export class WorldScene extends Phaser.Scene {
   private ambientDelay = 30000;
   private aiNoticeShown = false; // show the "AI offline" toast at most once per run
   private nightOverlay!: Phaser.GameObjects.Rectangle;
+  private weatherRect?: Phaser.GameObjects.Rectangle;
   private segAcc = 0;
   private kills = 0;
   private lastMelee = 0;
@@ -166,6 +168,7 @@ export class WorldScene extends Phaser.Scene {
       r.crop?.destroy();
     }
     this.farmSprites.clear();
+    this.weatherRect = undefined; // re-created on the fresh uiLayer below
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
     const fromUrl = this.registry.get("seedFromUrl") === true;
@@ -305,6 +308,8 @@ export class WorldScene extends Phaser.Scene {
 
     this.scale.on("resize", this.onResize, this);
     this.applyPhaseVisual();
+    if (!this.state.weather) this.state.weather = rollWeather(liveRng);
+    this.applyWeatherVisual();
 
     if (freshRun) {
       this.state.player.x = startX;
@@ -522,6 +527,11 @@ export class WorldScene extends Phaser.Scene {
     if (next === 0) this.state.day += 1; // wrapped night -> dawn
     this.state.timeOfDay = PHASES[next];
     this.applyPhaseVisual();
+    if (liveRng.chance(0.35)) {
+      this.state.weather = rollWeather(liveRng); // conditions shift
+      this.applyWeatherVisual();
+    }
+    if (isWet(this.state.weather)) for (const p of this.state.farmPlots ?? []) p.watered = true; // rain waters crops
     growPlots(this.state); // crops advance one segment per time-of-day step
     for (const p of this.state.farmPlots ?? []) this.refreshPlotSprites(p);
     this.persist();
@@ -540,6 +550,28 @@ export class WorldScene extends Phaser.Scene {
 
     const glowAlpha: Record<string, number> = { dawn: 0.22, day: 0, dusk: 0.5, night: 0.72 };
     if (this.glow) this.tweens.add({ targets: this.glow, alpha: glowAlpha[this.state.timeOfDay] ?? 0, duration: 1200 });
+  }
+
+  /** Screen-space weather haze (on the UI layer so it tracks the camera). */
+  private applyWeatherVisual(): void {
+    if (!this.weatherRect) {
+      this.weatherRect = this.add
+        .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0)
+        .setOrigin(0, 0)
+        .setScrollFactor(0)
+        .setDepth(535);
+      this.uiLayer.add(this.weatherRect);
+    }
+    const styles: Record<string, { c: number; a: number }> = {
+      clear: { c: 0x000000, a: 0 },
+      cloudy: { c: 0x2a3038, a: 0.12 },
+      rain: { c: 0x3a4a60, a: 0.26 },
+      fog: { c: 0xb8c0c8, a: 0.3 },
+      storm: { c: 0x141c2a, a: 0.42 },
+    };
+    const v = styles[this.state.weather ?? "clear"] ?? styles.clear;
+    this.weatherRect.setFillStyle(v.c, 1);
+    this.tweens.add({ targets: this.weatherRect, alpha: v.a, duration: 1500 });
   }
 
   private onResize(size: Phaser.Structs.Size): void {
@@ -763,7 +795,7 @@ export class WorldScene extends Phaser.Scene {
     const base = nextAmbientDelayMs();
     const day = this.effDay();
     const dayFactor = day === 0 ? 2.6 : 1 / (1 + day * 0.12);
-    return base * dayFactor * (this.isNight() ? 0.6 : 1);
+    return base * dayFactor * (this.isNight() ? 0.6 : 1) * (this.state.weather === "storm" ? 0.7 : 1);
   }
 
   private ambientEvent(): void {

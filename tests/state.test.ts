@@ -15,6 +15,8 @@ import { addItem, removeItem, hasItem, itemCount, useConsumable, quickUseItems, 
 import { applyDecay, DEFAULT_DECAY } from "../src/game/survival";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../src/game/farming";
 import { RECIPES, canCraft, craft } from "../src/game/crafting";
+import { WEATHERS, isWet, rollWeather, weatherName } from "../src/game/weather";
+import { createRng } from "../src/game/rng";
 
 // in-memory localStorage shim so persistence is testable under Node
 const store = new Map<string, string>();
@@ -145,6 +147,12 @@ const craftBandages0 = itemCount(cg, "Bandage");
 ok(canCraft(cg, bandageR) && craft(cg, bandageR), "craft a bandage with 2 cloth");
 ok(itemCount(cg, "Cloth") === 0 && itemCount(cg, "Bandage") === craftBandages0 + 1, "craft consumed inputs and produced the output");
 ok(!craft(cg, bandageR), "crafting again fails once materials run out");
+
+// --- weather (Feature 9) ---
+const wr = createRng("weather");
+ok([...Array(50)].every(() => (WEATHERS as readonly string[]).includes(rollWeather(wr))), "rollWeather returns valid kinds");
+ok(isWet("rain") && isWet("storm") && !isWet("clear") && !isWet(undefined), "isWet detects wet weather");
+ok(weatherName("storm") === "storm" && weatherName(undefined) === "clear", "weatherName maps weather to label");
 
 console.log(fail === 0 ? "ALL STATE CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);
