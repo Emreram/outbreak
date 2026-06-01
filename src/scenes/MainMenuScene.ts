@@ -100,33 +100,52 @@ export class MainMenuScene extends Phaser.Scene {
       if (ctx) {
         const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
         g.addColorStop(0, "rgba(255,255,255,1)");
-        g.addColorStop(0.5, "rgba(255,255,255,0.55)");
+        g.addColorStop(0.45, "rgba(255,255,255,0.5)");
         g.addColorStop(1, "rgba(255,255,255,0)");
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, size, size);
         canvas?.refresh();
       }
     }
+    // Fallback: if the canvas texture didn't take (renderer/browser quirk), build a
+    // guaranteed soft dot with Graphics so the animation can NEVER silently vanish.
+    if (!this.textures.exists(KEY)) {
+      const size = 64;
+      const r = size / 2;
+      const gg = this.add.graphics();
+      for (let i = 18; i >= 1; i--) {
+        const t = i / 18;
+        gg.fillStyle(0xffffff, 0.16 * (1 - t) + 0.02);
+        gg.fillCircle(r, r, r * t);
+      }
+      gg.generateTexture(KEY, size, size);
+      gg.destroy();
+    }
 
     // Distant fires glowing & breathing along the bottom edge.
-    const glow = this.add.image(cx, h + 20, KEY).setTint(0x6e1606).setBlendMode(Phaser.BlendModes.ADD).setDepth(-9);
-    glow.setScale((w / glow.width) * 1.6, (h * 0.7) / glow.height);
-    glow.setAlpha(0.2);
-    this.tweens.add({ targets: glow, alpha: 0.42, duration: 2600, yoyo: true, repeat: -1, ease: "Sine.InOut" });
+    const glow = this.add
+      .image(cx, h, KEY)
+      .setOrigin(0.5, 1)
+      .setTint(0xc23a12)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(-9);
+    glow.setScale((w / glow.width) * 1.4, (h * 0.55) / glow.height);
+    glow.setAlpha(0.3);
+    this.tweens.add({ targets: glow, alpha: 0.6, duration: 3000, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
 
-    // Embers rising from the bottom, fading as they climb.
+    // Embers streaming up the full screen — the headline effect.
     this.add
       .particles(0, 0, KEY, {
         x: { min: 0, max: w },
-        y: h + 10,
-        lifespan: { min: 4500, max: 9000 },
-        speedY: { min: -25, max: -65 },
-        speedX: { min: -14, max: 14 },
-        scale: { start: 0.5, end: 0 },
-        alpha: { start: 0.85, end: 0 },
-        tint: [0xff7b3a, 0xffb056, 0xff5630],
+        y: { min: h * 0.6, max: h + 12 },
+        lifespan: { min: 5000, max: 11000 },
+        speedY: { min: -30, max: -78 },
+        speedX: { min: -18, max: 18 },
+        scale: { start: 0.7, end: 0.05 },
+        alpha: { start: 0.95, end: 0 },
+        tint: [0xff7b3a, 0xffb056, 0xff5630, 0xffd27a],
         blendMode: "ADD",
-        frequency: 200,
+        frequency: 130,
         quantity: 1,
       })
       .setDepth(-8);
@@ -135,17 +154,34 @@ export class MainMenuScene extends Phaser.Scene {
     this.add
       .particles(0, 0, KEY, {
         x: { min: 0, max: w },
-        y: -10,
+        y: -12,
         lifespan: { min: 9000, max: 15000 },
-        speedY: { min: 10, max: 26 },
-        speedX: { min: -12, max: 12 },
-        scale: { start: 0.24, end: 0.12 },
-        alpha: { start: 0.3, end: 0 },
+        speedY: { min: 12, max: 30 },
+        speedX: { min: -14, max: 14 },
+        scale: { start: 0.28, end: 0.12 },
+        alpha: { start: 0.35, end: 0 },
         tint: 0x9aa3ab,
-        frequency: 480,
+        frequency: 420,
         quantity: 1,
       })
       .setDepth(-8);
+
+    // A red aura behind the title that breathes — clearly visible horror glow.
+    const titleGlow = this.add
+      .text(title.x, title.y, title.text, { fontFamily: "monospace", fontSize: "56px", color: "#ff2a14" })
+      .setOrigin(0.5)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0.22)
+      .setDepth(-1);
+    this.tweens.add({
+      targets: titleGlow,
+      alpha: 0.5,
+      scale: 1.04,
+      duration: 2400,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
 
     // Title flickers occasionally, like a dying emergency light.
     this.time.addEvent({
@@ -153,7 +189,7 @@ export class MainMenuScene extends Phaser.Scene {
       loop: true,
       callback: () => {
         if (this.menuDestroyed || !title.active) return;
-        this.tweens.add({ targets: title, alpha: 0.45, duration: 55, yoyo: true, repeat: 2, ease: "Linear" });
+        this.tweens.add({ targets: title, alpha: 0.4, duration: 55, yoyo: true, repeat: 2, ease: "Linear" });
       },
     });
   }
