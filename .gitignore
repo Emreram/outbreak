@@ -13,3 +13,6 @@ dist-ssr/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+
+# Claude Code transient scheduler lock
+.claude/scheduled_tasks.lock
