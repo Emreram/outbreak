@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { FarmPlot, GameState, GMResponse, KnownLocation, Placeable, Spawn, TurnInput, Vehicle } from "../shared/contracts";
+import type { DisasterZone, FarmPlot, GameState, GMResponse, KnownLocation, Placeable, Spawn, TurnInput, Vehicle } from "../shared/contracts";
 import { Tile, type Building } from "../game/worldgen";
 import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../game/farming";
 import {
@@ -56,14 +56,16 @@ import {
   pushRecentEvent,
   saveGame,
 } from "../game/GameState";
-import { applyDecay, ratesFor } from "../game/survival";
+import { applyDecay, ratesFor, ignitePlayer, soakPlayer, tickBurning, isBurning } from "../game/survival";
+import { terrainEffect } from "../game/terrain";
+import { scheduleDisaster, disasterPhase, intensityAt, inZone, type LiveDisaster } from "../game/disasters";
 import { ammoMult, damageTakenMult, lootLuck, sprintDrainMult, type DamageKind } from "../game/perks";
 import { addItem, ammoReserve, armorDefensePct, autoEquip, equipWeapon, equippedRangedDef, hasItem, quickUseItems, reloadEquipped, removeItem, useConsumable, weaponsInBag } from "../game/inventory";
 import type { WeaponDef } from "../game/items/types";
 import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
 import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
-import { RARITY_META } from "../game/items/rarity";
+import { RARITY_META, rarityGlowSpec } from "../game/items/rarity";
 import {
   CHEST_OPEN,
   heldKey,
@@ -79,13 +81,14 @@ import { nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
 import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
 import type { ColliderSpec } from "../engine/ChunkRenderer";
+import { AnimatedTerrain } from "../engine/AnimatedTerrain";
 import { Player } from "../engine/Player";
 import { PLAYER_KEY } from "../engine/textures";
 import { Enemy } from "../engine/Enemy";
 import { Animal, ANIMALS, type AnimalKind } from "../engine/Animal";
 import { Npc } from "../engine/Npc";
 import type { ZombieDef } from "../game/enemies/types";
-import { rollAmbientUndead, rollZombie } from "../game/enemies/spawnTable";
+import { rollAmbientUndead, rollZombie, resetSpawnVariety } from "../game/enemies/spawnTable";
 import { getZombie } from "../game/enemies/catalog";
 import { setupCamera } from "../engine/Camera";
 import { HUD } from "../ui/HUD";
@@ -99,7 +102,7 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, bloodDecal, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
 
 /** A streamed, parked vehicle sprite + its live persisted condition (Feature 4). */
@@ -144,6 +147,36 @@ const SAVE_MS = 4000;
 const SIEGE_MS = 600; // how often zombies gnaw at adjacent barricades / spikes wound them
 const PHASES = ["dawn", "day", "dusk", "night"] as const;
 const SEG_MS = 45000; // real seconds per time-of-day segment
+const BLOOD_MOON_CHANCE = 0.06; // per-night chance the moon turns red and the dead swarm
+
+// Continuous day/night lighting. `t` runs 0→1 across one full day (dawn→day→dusk→night)
+// and advances smoothly WITHIN each phase, so the world eases through twilight, golden
+// hours, and deep night instead of snapping between four flat tints. Each keyframe is a
+// screen overlay tint (color), its darkness (a = alpha), and the player light's strength
+// (glow). applyLighting() interpolates between the two surrounding keys every frame.
+const LIGHT_KEYS: { t: number; color: number; a: number; glow: number }[] = [
+  { t: 0.0, color: 0x121a33, a: 0.5, glow: 0.55 }, // ~05:00 pre-dawn — deep cold blue, still dark
+  { t: 0.1, color: 0x46365e, a: 0.33, glow: 0.3 }, // dawn twilight — violet
+  { t: 0.17, color: 0xff9e5e, a: 0.16, glow: 0.06 }, // sunrise — warm golden hour
+  { t: 0.25, color: 0xfff2d8, a: 0.04, glow: 0.0 }, // early morning — faint warm wash
+  { t: 0.375, color: 0x000000, a: 0.0, glow: 0.0 }, // noon — neutral, brightest
+  { t: 0.5, color: 0xfff0d0, a: 0.05, glow: 0.0 }, // late afternoon — warm
+  { t: 0.6, color: 0xff8a3c, a: 0.18, glow: 0.1 }, // sunset — warm orange golden hour
+  { t: 0.68, color: 0x7a3550, a: 0.34, glow: 0.34 }, // dusk afterglow — magenta fading
+  { t: 0.78, color: 0x16203f, a: 0.52, glow: 0.6 }, // nightfall — cold blue
+  { t: 0.875, color: 0x070c1e, a: 0.66, glow: 0.78 }, // ~02:00 deep night — darkest
+  { t: 1.0, color: 0x121a33, a: 0.5, glow: 0.55 }, // wraps back to pre-dawn
+];
+
+/** Linear blend between two 0xRRGGBB colors (f = 0 → a, 1 → b). */
+function lerpColor(a: number, b: number, f: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * f);
+  const g = Math.round(ag + (bg - ag) * f);
+  const bl = Math.round(ab + (bb - ab) * f);
+  return (r << 16) | (g << 8) | bl;
+}
 
 // Open-ground locations (outdoor biomes) vs enclosed buildings — shapes which
 // instant quick-actions an encounter's opening prompt offers.
@@ -165,6 +198,7 @@ const SAFE_BIOMES = new Set<string>([
 export class WorldScene extends Phaser.Scene {
   private player!: Player;
   private chunks!: ChunkManager;
+  private terrain!: AnimatedTerrain; // animated water/lava overlay (Living World)
   private hud!: HUD;
   private modal!: EncounterModal;
   private loot!: LootModal;
@@ -206,6 +240,14 @@ export class WorldScene extends Phaser.Scene {
   private lastStep = 0;
   private glow!: Phaser.GameObjects.Image;
   private vignette!: Phaser.GameObjects.Image;
+  private burnFx?: Phaser.GameObjects.Particles.ParticleEmitter; // flame plume while the player is on fire
+  // Natural disasters (Living World): live (transient) instances + their Phaser
+  // visuals keyed by id; lasting scars persist on state.disasters.
+  private liveDisasters: LiveDisaster[] = [];
+  private disasterVis = new Map<string, Phaser.GameObjects.GameObject[]>();
+  private disasterAcc = 0;
+  private disasterDelay = 95000;
+  private disasterSeq = 0;
   private hurtVignette!: Phaser.GameObjects.Image; // red screen-edge pulse on damage
   private objBanner!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
@@ -338,9 +380,14 @@ export class WorldScene extends Phaser.Scene {
     this.npcGroup = this.physics.add.group(); // survivors / companions (Feature 10b)
 
     const collide: ColliderSpec[] = [];
+    this.terrain = new AnimatedTerrain(this); // created before the manager so the first chunk loads get overlays
     this.chunks = new ChunkManager(this, this.state.seed, {
       collide,
       isChestLooted: (gid) => this.state.worldFlags.includes(`chest_${gid}`),
+      disasters: () => this.state.disasters ?? [],
+      currentDay: () => this.state.day,
+      onChunkLoad: (data) => this.terrain.syncChunk(data),
+      onChunkUnload: (cx, cy) => this.terrain.dropChunk(cx, cy),
     });
 
     // A fresh run (new game / character creation / ?seed) carries an AI intro, and
@@ -598,11 +645,13 @@ export class WorldScene extends Phaser.Scene {
       this.storeUi.destroy();
       this.tradeUi.destroy();
       this.touch.destroy();
+      this.terrain.destroy();
       this.chunks.destroy();
       this.persist();
     });
 
     // Day 0 is nearly empty — the streets fill as the outbreak spreads.
+    resetSpawnVariety(); // fresh anti-repeat memory for this run
     if (!isDead(this.state)) this.spawnAmbientWalkers(this.ambientStartCount());
     this.ambientDelay = this.scheduleAmbientMs();
 
@@ -622,6 +671,16 @@ export class WorldScene extends Phaser.Scene {
     if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
+      // Living World: the tile underfoot slows wading/mud/lava, kicks up contact FX,
+      // and ignites you on lava (stepping into water elsewhere douses the fire).
+      const terr = terrainEffect(
+        this.chunks.tileAt(Math.floor(this.player.sprite.x / TILE_SIZE), Math.floor(this.player.sprite.y / TILE_SIZE)),
+      );
+      this.player.terrainMult = this.driving ? 1 : terr.mult; // vehicles plough through
+      if (!this.driving) {
+        if (terr.hazard === "lava") ignitePlayer(this.state, 1600, time);
+        else if (terr.stepFx === "splash") soakPlayer(this.state, 2200, time);
+      }
       if (time < this.grabbedUntil) {
         this.player.sprite.setVelocity(0, 0); // held fast by a grabber
       } else {
@@ -662,6 +721,14 @@ export class WorldScene extends Phaser.Scene {
         this.worldEvent();
       }
 
+      this.disasterAcc += delta;
+      if (this.disasterAcc >= this.disasterDelay) {
+        this.disasterAcc = 0;
+        this.disasterDelay = this.nextDisasterDelayMs();
+        this.maybeSpawnDisaster(time);
+      }
+      this.updateDisasters(time, delta);
+
       if (hasItem(this.state, "Radio")) {
         this.radioAcc += delta;
         if (this.radioAcc >= 75000) {
@@ -672,7 +739,12 @@ export class WorldScene extends Phaser.Scene {
 
       if (this.player.isMoving() && time - this.lastStep > 300) {
         this.lastStep = time;
-        dustPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 2);
+        const fx = this.player.sprite.x;
+        const fy = this.player.sprite.y + 8;
+        if (terr.stepFx === "splash") splashPuff(this, fx, fy, 5);
+        else if (terr.stepFx === "ember") emberPuff(this, fx, fy, 4);
+        else if (terr.stepFx === "mud") dustPuff(this, fx, fy, 3);
+        else dustPuff(this, fx, fy, 2);
       }
 
       if (this.firing) this.fire(this.aimAngle()); // auto-fire while mouse held
@@ -682,6 +754,7 @@ export class WorldScene extends Phaser.Scene {
       if (this.decayAcc >= DECAY_MS) {
         this.decayAcc -= DECAY_MS;
         applyDecay(this.state, ratesFor(this.state));
+        if (tickBurning(this.state, time) > 0) this.hurtPulse(0.4); // fire chips HP each tick
         if (isDead(this.state)) this.enterDeath();
       }
 
@@ -714,6 +787,9 @@ export class WorldScene extends Phaser.Scene {
 
     // The flashlight glow tracks the player even while paused.
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
+    this.updateBurningFx(time);
+    this.terrain.update(delta); // animate water/lava shimmer + shoreline FX
+    this.applyLighting(this.dayFraction()); // continuous day/night easing (frozen while paused)
     this.updateWeaponSprite();
     this.minimap.render(this.state.seed, this.state, this.scale.width);
 
@@ -742,7 +818,7 @@ export class WorldScene extends Phaser.Scene {
       this.hintText.setVisible(false);
     }
 
-    this.hud.update(this.state, this.debugInfo(), this.activeWeaponName());
+    this.hud.update(this.state, this.debugInfo(), this.activeWeaponName(), this.clockLabel());
     if (!quickUseItems(this.state)[this.selectedQuick]) {
       const first = quickUseItems(this.state).findIndex((q) => q); // keep the cursor on a usable slot
       if (first >= 0) this.selectedQuick = first;
@@ -772,13 +848,23 @@ export class WorldScene extends Phaser.Scene {
       (this.player.isMoving() ? 45 : 0) + (this.player.sprinting ? 70 : 0) + this.nightNoise() + engine;
     for (const e of this.enemies) {
       e.update(px, py, noise, now);
+      // The dead don't fear terrain: lava sears + bogs them (kite them into it),
+      // shallow water/mud slows them. Cheap single tile lookup per enemy/frame.
+      const et = this.chunks.tileAt(Math.floor(e.sprite.x / TILE_SIZE), Math.floor(e.sprite.y / TILE_SIZE));
+      if (et === Tile.Lava) {
+        e.applyDot(14, 600);
+        this.scaleBodyVelocity(e.sprite, 0.3);
+      } else if (et === Tile.ShallowWater || et === Tile.Mud) {
+        this.scaleBodyVelocity(e.sprite, 0.6);
+      }
       if (e.tryAttack(px, py, now) && !this.driving) this.takeHit(e); // in a car you're out of reach
       this.enemySpecials(e, px, py, now);
+      if (e.tryBleedTrail(now)) bloodTrail(this, e.sprite.x, e.sprite.y, e.blood, e.velocity()); // wounded foes leave a trail
     }
     // reap enemies finished off by bleed/burn damage-over-time
     for (const e of [...this.enemies]) {
       if (e.hp <= 0) {
-        bloodBurst(this, e.sprite.x, e.sprite.y, 8);
+        splatHit(this, e.sprite.x, e.sprite.y, e.blood, undefined, 1.1);
         this.onEnemyKilled(e);
       }
     }
@@ -795,12 +881,16 @@ export class WorldScene extends Phaser.Scene {
     return 0;
   }
 
-  private advanceClock(): void {
+  private advanceClock(announce = true): void {
     const idx = PHASES.indexOf(this.state.timeOfDay);
     const next = (idx + 1) % PHASES.length;
     if (next === 0) this.state.day += 1; // wrapped night -> dawn
     this.state.timeOfDay = PHASES[next];
+    const wasBlood = this.state.bloodMoon;
+    this.updateBloodMoon(); // roll a new blood moon as night falls; lift it at dawn
     this.applyPhaseVisual();
+    // Flavour the transition — but let the blood moon's own banner/fade speak for itself.
+    if (announce && this.state.bloodMoon === wasBlood) this.announcePhase();
     if (liveRng.chance(0.35)) {
       this.state.weather = rollWeather(liveRng); // conditions shift
       this.applyWeatherVisual();
@@ -811,19 +901,107 @@ export class WorldScene extends Phaser.Scene {
     this.persist();
   }
 
-  private applyPhaseVisual(): void {
-    const tints: Record<string, { color: number; alpha: number }> = {
-      dawn: { color: 0x24304f, alpha: 0.22 },
-      day: { color: 0x000000, alpha: 0.0 },
-      dusk: { color: 0x3a1f10, alpha: 0.3 },
-      night: { color: 0x00040c, alpha: 0.56 },
+  /** A short, atmospheric toast as the light shifts — and a reminder that night is deadly. */
+  private announcePhase(): void {
+    const lines: Record<string, string> = {
+      dawn: "Dawn breaks — the dead lose their nerve.",
+      day: "Daylight floods the streets.",
+      dusk: "Dusk settles — shadows pool in the alleys.",
+      night: "Night falls — the dead grow bold.",
     };
-    const v = tints[this.state.timeOfDay] ?? tints.day;
-    this.nightOverlay.setFillStyle(v.color, 1);
-    this.tweens.add({ targets: this.nightOverlay, alpha: v.alpha, duration: 1200 });
+    const m = lines[this.state.timeOfDay];
+    if (m) this.showToast(m);
+  }
 
-    const glowAlpha: Record<string, number> = { dawn: 0.22, day: 0, dusk: 0.5, night: 0.72 };
-    if (this.glow) this.tweens.add({ targets: this.glow, alpha: glowAlpha[this.state.timeOfDay] ?? 0, duration: 1200 });
+  // --- blood moon (rare, deadly night) ---------------------------------------
+
+  /** Rolled each time the clock changes phase: a small chance a blood moon rises as
+   *  night falls, and it always lifts at dawn. While active, the sky bleeds red and
+   *  the undead swarm in far greater, faster numbers (see enemyCap / ambientEvent). */
+  private updateBloodMoon(): void {
+    if (this.state.timeOfDay === "night") {
+      if (!this.state.bloodMoon && liveRng.chance(BLOOD_MOON_CHANCE)) this.beginBloodMoon();
+    } else if (this.state.bloodMoon && this.state.timeOfDay === "dawn") {
+      this.endBloodMoon();
+    }
+  }
+
+  private beginBloodMoon(): void {
+    this.state.bloodMoon = true;
+    pushRecentEvent(this.state, "A blood moon rose — the dead swarmed in the red light.");
+    sfx.boom();
+    this.cameras.main.flash(700, 140, 0, 0);
+    this.cameras.main.shake(420, 0.004);
+    this.showBloodMoonBanner();
+    // An immediate surge floods the streets around the player — runner-heavy.
+    this.spawnNear([
+      { type: "zombie_runner", count: Phaser.Math.Between(4, 6) },
+      { type: "zombie", count: Phaser.Math.Between(5, 8) },
+    ]);
+  }
+
+  private endBloodMoon(): void {
+    this.state.bloodMoon = false;
+    pushRecentEvent(this.state, "The blood moon faded with the dawn. You survived the night.");
+    this.showToast("The blood moon fades. Dawn breaks — you survived the night.");
+  }
+
+  private showBloodMoonBanner(): void {
+    this.modal.showBanner(
+      "🔴 BLOOD MOON 🔴\n\nThe moon turns the colour of blood. The dead pour into the streets — " +
+        "faster, and without number. Find cover and survive until dawn.",
+      "",
+    );
+    this.modal.dismissSoon(6000);
+  }
+
+  /** Continuous progress through the day: 0 at the start of dawn → 1 at the end of night.
+   *  Combines the discrete phase index with sub-progress through the current segment, so
+   *  the lighting (and clock) advance smoothly rather than in four jumps. */
+  private dayFraction(): number {
+    const idx = Math.max(0, PHASES.indexOf(this.state.timeOfDay));
+    const sub = Phaser.Math.Clamp(this.segAcc / SEG_MS, 0, 1);
+    return (idx + sub) / PHASES.length;
+  }
+
+  /** Evocative HH:MM clock for the HUD, derived from the day fraction (dawn ≈ 05:00). */
+  private clockLabel(): string {
+    const hour = (this.dayFraction() * 24 + 5) % 24;
+    const h = Math.floor(hour);
+    const m = Math.floor((hour - h) * 60);
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  /** Drive the darkness overlay + player glow from the continuous day fraction by
+   *  interpolating the surrounding LIGHT_KEYS. Called every frame, so phases ease into
+   *  one another. A blood moon overrides the tint with deep red until dawn. */
+  private applyLighting(t: number): void {
+    let hi = 1;
+    while (hi < LIGHT_KEYS.length - 1 && LIGHT_KEYS[hi].t < t) hi++;
+    const lo = LIGHT_KEYS[hi - 1];
+    const up = LIGHT_KEYS[hi];
+    const f = Phaser.Math.Clamp((t - lo.t) / (up.t - lo.t || 1), 0, 1);
+    let color = lerpColor(lo.color, up.color, f);
+    const alpha = lo.a + (up.a - lo.a) * f;
+    const glow = lo.glow + (up.glow - lo.glow) * f;
+
+    // A blood moon drowns night (and dusk) in a deep, ominous red.
+    const bloody = this.state.bloodMoon && this.isNight();
+    if (bloody) color = 0x3a0008;
+    if (this.nightOverlay) {
+      this.nightOverlay.setFillStyle(color, 1);
+      this.nightOverlay.setAlpha(alpha);
+    }
+    if (this.glow) {
+      this.glow.setAlpha(glow);
+      this.glow.setTint(bloody ? 0xff3a3a : 0xffffff); // the flashlight runs red under the blood moon
+    }
+  }
+
+  /** Snap the lighting to the current time (no tween) — called on load and on each phase
+   *  change; the per-frame applyLighting() in update() keeps the transition smooth. */
+  private applyPhaseVisual(): void {
+    this.applyLighting(this.dayFraction());
   }
 
   /** Screen-space weather haze (on the UI layer so it tracks the camera). */
@@ -863,6 +1041,25 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.killTweensOf(this.hurtVignette);
     this.hurtVignette.setAlpha(Math.min(0.85, intensity));
     this.tweens.add({ targets: this.hurtVignette, alpha: 0, duration: 360, ease: "Quad.easeOut" });
+  }
+
+  /** Dampen an arcade sprite's current-frame velocity (terrain drag). */
+  private scaleBodyVelocity(sprite: Phaser.GameObjects.GameObject, f: number): void {
+    const b = (sprite as Phaser.Physics.Arcade.Sprite).body as Phaser.Physics.Arcade.Body | null;
+    if (b) b.velocity.scale(f);
+  }
+
+  /** Start/stop the flame plume that clings to the player while they're on fire,
+   *  with a steam puff when the fire is doused. Cheap; runs every frame. */
+  private updateBurningFx(now: number): void {
+    const burning = !this.dead && isBurning(this.state, now);
+    if (burning && !this.burnFx) {
+      this.burnFx = startBurning(this, this.player.sprite);
+    } else if (!burning && this.burnFx) {
+      stopBurning(this, this.burnFx);
+      this.burnFx = undefined;
+      steamPuff(this, this.player.sprite.x, this.player.sprite.y);
+    }
   }
 
   /** A quick camera zoom-punch for weighty hits/kills (Batch G). Base zoom is 1.25. */
@@ -999,13 +1196,17 @@ export class WorldScene extends Phaser.Scene {
     if (e.hasTrait("exploder")) {
       sfx.boom();
       this.cameras.main.shake(120, 0.01);
-      bloodBurst(this, x, y, 16, 0x8fd14a);
+      splatHit(this, x, y, e.blood, undefined, 2.0); // bursts in its own fluid
+      bloodDecal(this, x, y, 1.6, e.blood.pool);
       const radius = 84;
       if (Math.hypot(this.player.sprite.x - x, this.player.sprite.y - y) < radius) {
         this.damagePlayer(Math.round(8 + e.damage * 0.5), true, "Caught in the burst.", "toxic");
       }
       for (const o of [...this.enemies]) {
-        if (o !== e && Math.hypot(o.sprite.x - x, o.sprite.y - y) < radius && o.takeDamage(12)) this.onEnemyKilled(o);
+        if (o === e || Math.hypot(o.sprite.x - x, o.sprite.y - y) >= radius) continue;
+        const od = { x: o.sprite.x - x, y: o.sprite.y - y };
+        if (o.takeDamage(12)) this.onEnemyKilled(o);
+        else splatHit(this, o.sprite.x, o.sprite.y, o.blood, od, 0.9); // splashed neighbours bleed too
       }
     }
     if (e.hasTrait("bloated") || e.hasTrait("toxic")) this.spawnToxicCloud(x, y);
@@ -1049,11 +1250,17 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private spawnEnemy(def: ZombieDef, x: number, y: number): void {
-    if (this.enemies.length >= 40) return; // safety cap
+    if (this.enemies.length >= this.enemyCap()) return; // safety cap
     const e = new Enemy(this, x, y, def);
     this.enemyGroup.add(e.sprite);
     this.enemies.push(e);
     spawnPopIn(this, e.sprite);
+  }
+
+  /** Live ceiling on concurrent enemies — far higher on a blood moon so the streets
+   *  genuinely swarm rather than hitting the normal cap. */
+  private enemyCap(): number {
+    return this.state.bloodMoon ? 80 : 40;
   }
 
   /** Effective danger driver for spawns: the day plus the local distance/biome tier. */
@@ -1068,7 +1275,7 @@ export class WorldScene extends Phaser.Scene {
     for (const s of spawns) {
       for (let i = 0; i < s.count; i++) {
         const tile = this.chunks.walkableNear(ptx, pty, 3, 8);
-        if (tile) this.spawnEnemy(rollZombie(s.type, liveRng, day), tile.x, tile.y);
+        if (tile) this.spawnEnemy(rollZombie(s.type, liveRng, day, this.chunks.biomeAtPx(tile.x, tile.y)), tile.x, tile.y);
       }
     }
   }
@@ -1153,7 +1360,7 @@ export class WorldScene extends Phaser.Scene {
     const day = this.effDay();
     for (let i = 0; i < n; i++) {
       const tile = this.chunks.randomWalkableInView(this.player.sprite.x, this.player.sprite.y, 12);
-      if (tile) this.spawnEnemy(rollAmbientUndead(liveRng, day), tile.x, tile.y);
+      if (tile) this.spawnEnemy(rollAmbientUndead(liveRng, day, this.chunks.biomeAtPx(tile.x, tile.y)), tile.x, tile.y);
     }
   }
 
@@ -1168,18 +1375,21 @@ export class WorldScene extends Phaser.Scene {
     const base = nextAmbientDelayMs();
     const day = this.effDay();
     const dayFactor = day === 0 ? 2.6 : 1 / (1 + day * 0.12);
-    return base * dayFactor * (this.isNight() ? 0.6 : 1) * (this.state.weather === "storm" ? 0.7 : 1);
+    const bloodFactor = this.state.bloodMoon ? 0.35 : 1; // relentless waves under a blood moon
+    return base * dayFactor * (this.isNight() ? 0.6 : 1) * (this.state.weather === "storm" ? 0.7 : 1) * bloodFactor;
   }
 
   private ambientEvent(): void {
     const day = this.effDay();
+    const bloodMoon = !!this.state.bloodMoon;
     const extra = this.state.difficultyModifier > 1.15 ? 1 : 0;
     const dayBonus = Math.floor(day / 3);
-    const n = Math.min(Phaser.Math.Between(1, 2) + extra + dayBonus, 6);
-    const runnerChance = this.isNight() ? 0.32 : 0.12 + day * 0.02;
+    const surge = bloodMoon ? Phaser.Math.Between(4, 6) : 0; // blood moon floods every wave
+    const n = Math.min(Phaser.Math.Between(1, 2) + extra + dayBonus + surge, bloodMoon ? 14 : 6);
+    const runnerChance = bloodMoon ? 0.7 : this.isNight() ? 0.32 : 0.12 + day * 0.02;
     const kind: Spawn["type"] = Math.random() < runnerChance ? "zombie_runner" : "zombie";
     this.spawnNear([{ type: kind, count: n }]);
-    this.showToast("You hear shuffling nearby…");
+    if (!bloodMoon) this.showToast("You hear shuffling nearby…");
   }
 
   /** Controls cheat-sheet: shown once per run on first spawn (replaces the old
@@ -1588,10 +1798,17 @@ export class WorldScene extends Phaser.Scene {
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
     const reach = 30 * vehicleDef(this.driving.type).scale;
+    const now = this.time.now;
     for (const e of [...this.enemies]) {
       if (Math.hypot(e.sprite.x - px, e.sprite.y - py) < reach) {
-        bloodBurst(this, e.sprite.x, e.sprite.y, 12, 0x9c1414);
-        if (e.takeDamage(60)) this.onEnemyKilled(e);
+        const dead = e.takeDamage(60);
+        if (dead) this.onEnemyKilled(e); // gibs + pool handled there
+        else if (e.crushFxReady(now)) {
+          // throttled so a slow boss under the wheels doesn't spray every frame
+          const rdir = { x: e.sprite.x - px, y: e.sprite.y - py };
+          splatHit(this, e.sprite.x, e.sprite.y, e.blood, rdir, 1.5); // crushed under the wheels
+          bloodDecal(this, e.sprite.x, e.sprite.y, 1.1, e.blood.pool); // splatHit already lays the smear
+        }
       }
     }
   }
@@ -1806,7 +2023,7 @@ export class WorldScene extends Phaser.Scene {
         for (const e of [...this.enemies]) {
           if (Math.hypot(e.sprite.x - x, e.sprite.y - y) < 22) {
             hits++;
-            bloodBurst(this, e.sprite.x, e.sprite.y, 5, 0x9c1414);
+            splatHit(this, e.sprite.x, e.sprite.y, e.blood, { x: e.sprite.x - x, y: e.sprite.y - y }, 0.9); // spikes bite
             if (e.takeDamage(def.damage)) this.onEnemyKilled(e);
           }
         }
@@ -1885,8 +2102,8 @@ export class WorldScene extends Phaser.Scene {
     const kind: WorldEventKind = rollWorldEvent(liveRng, day, this.isNight());
     switch (kind) {
       case "horde": {
-        const n = Math.min(5 + Math.floor(day / 2), 12);
-        this.spawnNear([{ type: this.isNight() ? "zombie_runner" : "zombie", count: n }]);
+        const n = Math.min(5 + Math.floor(day / 2) + (this.state.bloodMoon ? 6 : 0), this.state.bloodMoon ? 18 : 12);
+        this.spawnNear([{ type: this.isNight() || this.state.bloodMoon ? "zombie_runner" : "zombie", count: n }]);
         this.showToast("A horde is moving through the area…");
         break;
       }
@@ -1913,6 +2130,254 @@ export class WorldScene extends Phaser.Scene {
       case "dilemma":
         this.dilemmaEvent(); // the rare event that opens the GM choice/chat modal
         break;
+    }
+  }
+
+  // --- natural disasters (Living World) -------------------------------------
+
+  /** Time until the next disaster roll — rarer early, faster on deeper/stormier days. */
+  private nextDisasterDelayMs(): number {
+    const day = this.effDay();
+    let base = (95000 + Math.random() * 85000) / (1 + day * 0.05); // ~1.5–3 min, tightening
+    if (this.state.weather === "storm") base *= 0.5;
+    return Math.max(35000, base);
+  }
+
+  /** Roll the context (day/weather/biome) for a disaster and, if one fires, begin it. */
+  private maybeSpawnDisaster(now: number): void {
+    if (this.dead) return;
+    const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+    const spec = scheduleDisaster(liveRng, this.effDay(), this.state.weather, biome);
+    if (!spec) return;
+    // Epicentre near the player; cataclysms can land right on you, common ones offset.
+    const ang = Math.random() * Math.PI * 2;
+    const dist = (spec.cataclysm ? Math.random() * 3 : 5 + Math.random() * 7) * TILE_SIZE;
+    const x = this.player.sprite.x + Math.cos(ang) * dist;
+    const y = this.player.sprite.y + Math.sin(ang) * dist;
+    let radius = spec.radius;
+    // The common tier spares the player's claimed base; only a rare cataclysm wrecks it.
+    if (!spec.cataclysm && this.state.base) {
+      const bd = Math.hypot(this.state.base.x - x, this.state.base.y - y) / TILE_SIZE;
+      if (bd < radius + 3) radius = Math.max(4, Math.floor(bd - 3));
+    }
+    const d: LiveDisaster = {
+      id: `dis_${this.disasterSeq++}`, kind: spec.kind, x, y, radius,
+      cataclysm: spec.cataclysm, startedAt: now, telegraphMs: spec.telegraphMs, activeMs: spec.activeMs,
+    };
+    this.liveDisasters.push(d);
+    this.showToast(this.disasterWarning(d));
+    sfx.ui();
+    this.spawnTelegraph(d);
+  }
+
+  private disasterWarning(d: LiveDisaster): string {
+    const hard = d.cataclysm;
+    switch (d.kind) {
+      case "earthquake": return hard ? "⚠ The earth is tearing apart — RUN!" : "The ground begins to tremble…";
+      case "wildfire": return hard ? "⚠ A firestorm is sweeping in — flee!" : "Smoke on the wind — a wildfire is spreading.";
+      case "flood": return hard ? "⚠ A flash flood is surging in — get to high ground!" : "Floodwaters are rising nearby.";
+      case "eruption": return hard ? "⚠ The ground splits — lava is erupting!" : "The earth glows — a lava vent is opening.";
+      case "storm_lightning": return hard ? "⚠ The storm is striking everywhere — take cover!" : "Lightning is striking nearby — keep off open ground.";
+    }
+  }
+
+  /** A pulsing danger ring so the player can see where the disaster will hit (agency). */
+  private spawnTelegraph(d: LiveDisaster): void {
+    const col = d.kind === "flood" ? 0x4aa3ff : d.kind === "storm_lightning" ? 0xdff0ff : 0xff7a2a;
+    const rPx = d.radius * TILE_SIZE;
+    const ring = this.add.circle(d.x, d.y, rPx, col, 0.06).setStrokeStyle(3, col, 0.85).setDepth(8);
+    this.tweens.add({ targets: ring, alpha: 0.32, scaleX: 1.04, scaleY: 1.04, yoyo: true, repeat: -1, duration: 520, ease: "Sine.easeInOut" });
+    const dot = this.add.circle(d.x, d.y, 7, col, 0.9).setDepth(8);
+    this.tweens.add({ targets: dot, scaleX: 1.7, scaleY: 1.7, alpha: 0.2, yoyo: true, repeat: -1, duration: 420 });
+    this.pushVis(d.id, ring);
+    this.pushVis(d.id, dot);
+  }
+
+  private pushVis(id: string, obj: Phaser.GameObjects.GameObject): void {
+    const arr = this.disasterVis.get(id) ?? [];
+    arr.push(obj);
+    this.disasterVis.set(id, arr);
+  }
+
+  private clearDisasterVis(id: string): void {
+    const arr = this.disasterVis.get(id);
+    if (arr) for (const o of arr) o.destroy();
+    this.disasterVis.delete(id);
+  }
+
+  /** Advance all live disasters: fire one-shot activation effects, run per-frame VFX
+   *  + continuous damage during the active window, and reap the expired. */
+  private updateDisasters(now: number, delta: number): void {
+    if (this.liveDisasters.length === 0) return;
+    const keep: LiveDisaster[] = [];
+    for (const d of this.liveDisasters) {
+      const phase = disasterPhase(d, now);
+      if (phase === "telegraph") {
+        keep.push(d);
+      } else if (phase === "active") {
+        if (!d.activated) this.activateDisaster(d);
+        this.disasterTick(d, now, delta);
+        keep.push(d);
+      } else {
+        this.clearDisasterVis(d.id); // expired — drop visuals (scar already persisted)
+      }
+    }
+    this.liveDisasters = keep;
+  }
+
+  /** Fire the one-shot punch when a disaster goes active: write its lasting scar,
+   *  shake the camera, and (quakes) hurl + hurt everything in the zone. */
+  private activateDisaster(d: LiveDisaster): void {
+    d.activated = true;
+    this.clearDisasterVis(d.id); // telegraph ring done
+    const cam = this.cameras.main;
+    switch (d.kind) {
+      case "earthquake":
+        cam.shake(d.activeMs, d.cataclysm ? 0.016 : 0.008);
+        sfx.boom();
+        this.quakeImpact(d);
+        this.scarWorld(d); // rubble — permanent
+        break;
+      case "eruption":
+        cam.shake(Math.min(d.activeMs, 2600), d.cataclysm ? 0.014 : 0.007);
+        sfx.boom();
+        this.scarWorld(d); // fresh lava + basalt — permanent
+        break;
+      case "wildfire":
+        this.scarWorld(d, d.cataclysm ? 8 : 5); // scorch — regrows over days
+        break;
+      case "flood":
+        sfx.boom();
+        this.scarWorld(d, d.cataclysm ? 6 : 4); // water — recedes over days
+        break;
+      case "storm_lightning":
+        break; // strikes land individually during disasterTick
+    }
+  }
+
+  /** Persist a disaster's lasting terrain scar + re-derive the resident chunks so it
+   *  shows immediately. `healInDays` omitted = permanent (quake rubble / fresh lava). */
+  private scarWorld(d: LiveDisaster, healInDays?: number): void {
+    const zone: DisasterZone = {
+      id: d.id, kind: d.kind, px: d.x, py: d.y, radius: d.radius,
+      startDay: this.state.day,
+      healDay: healInDays === undefined ? undefined : this.state.day + healInDays,
+      intensity: d.cataclysm ? 1 : 0.82,
+      cataclysm: d.cataclysm,
+    };
+    (this.state.disasters ??= []).push(zone);
+    this.chunks.refreshLoaded();
+  }
+
+  private quakeImpact(d: LiveDisaster): void {
+    const now = this.time.now;
+    if (inZone(d, this.player.sprite.x, this.player.sprite.y)) {
+      this.hurtPulse(0.7);
+      this.damagePlayer(d.cataclysm ? 20 : 9, false, "The ground heaves and throws you off your feet.", "physical");
+      this.grabbedUntil = Math.max(this.grabbedUntil, now + 350);
+    }
+    for (const e of this.enemies) {
+      if (!inZone(d, e.sprite.x, e.sprite.y)) continue;
+      const dx = e.sprite.x - d.x;
+      const dy = e.sprite.y - d.y;
+      const len = Math.hypot(dx, dy) || 1;
+      e.knockback(dx / len, dy / len, 260, now);
+      e.takeDamage(d.cataclysm ? 22 : 11);
+    }
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * d.radius * TILE_SIZE;
+      dustPuff(this, d.x + Math.cos(a) * r, d.y + Math.sin(a) * r, 3);
+    }
+  }
+
+  /** Per-frame VFX + continuous effects while a disaster is active. */
+  private disasterTick(d: LiveDisaster, now: number, delta: number): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    const inside = inZone(d, px, py);
+    const I = intensityAt(d, now);
+    const randInZone = (): { x: number; y: number } => {
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.sqrt(Math.random()) * d.radius * TILE_SIZE;
+      return { x: d.x + Math.cos(a) * r, y: d.y + Math.sin(a) * r };
+    };
+    switch (d.kind) {
+      case "wildfire":
+      case "eruption": {
+        if (Math.random() < delta / 80) {
+          const p = randInZone();
+          emberPuff(this, p.x, p.y, 3);
+          if (Math.random() < 0.4) dustPuff(this, p.x, p.y - 6, 2); // smoke
+        }
+        if (d.kind === "eruption" && Math.random() < delta / 650) {
+          const p = randInZone(); // ember-bomb landing
+          emberPuff(this, p.x, p.y, 6);
+        }
+        if (inside) ignitePlayer(this.state, 1400, now); // burn DoT ticks on the survival cadence
+        for (const e of this.enemies) if (inZone(d, e.sprite.x, e.sprite.y)) e.applyDot(12, 800);
+        break;
+      }
+      case "flood": {
+        if (inside) {
+          soakPlayer(this.state, 1600, now);
+          const b = this.player.sprite.body as Phaser.Physics.Arcade.Body;
+          const dx = px - d.x;
+          const dy = py - d.y;
+          const len = Math.hypot(dx, dy) || 1;
+          b.velocity.x += (dx / len) * 34 * I; // the current shoves you outward
+          b.velocity.y += (dy / len) * 34 * I;
+        }
+        if (Math.random() < delta / 120) {
+          const p = randInZone();
+          splashPuff(this, p.x, p.y, 2);
+        }
+        break;
+      }
+      case "storm_lightning": {
+        if (Math.random() < delta / (d.cataclysm ? 320 : 620)) this.lightningStrike(d, now);
+        break;
+      }
+      case "earthquake": {
+        if (Math.random() < delta / 170) {
+          const p = randInZone();
+          dustPuff(this, p.x, p.y, 2);
+        }
+        break;
+      }
+    }
+  }
+
+  /** A single lightning bolt: flash + thunder + jagged bolt + scorch + local damage. */
+  private lightningStrike(d: LiveDisaster, now: number): void {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.random() * d.radius * TILE_SIZE;
+    const sx = d.x + Math.cos(a) * r;
+    const sy = d.y + Math.sin(a) * r;
+    this.cameras.main.flash(120, 200, 220, 255);
+    sfx.boom();
+    const g = this.add.graphics().setDepth(60);
+    g.lineStyle(3, 0xdff0ff, 0.95);
+    g.beginPath();
+    g.moveTo(sx, sy - 380);
+    const segs = 8;
+    for (let i = 1; i <= segs; i++) {
+      const t = i / segs;
+      g.lineTo(sx + (Math.random() - 0.5) * 26 * (1 - t), sy - 380 + 380 * t);
+    }
+    g.strokePath();
+    this.tweens.add({ targets: g, alpha: 0, duration: 180, onComplete: () => g.destroy() });
+    emberPuff(this, sx, sy, 6);
+    bloodDecal(this, sx, sy, 0.5, 0x1c140e); // a lingering scorch mark (transient decal — no save bloat)
+    if (Math.hypot(sx - this.player.sprite.x, sy - this.player.sprite.y) < 44) {
+      this.damagePlayer(d.cataclysm ? 24 : 14, false, "Lightning splits the air beside you.", "shock");
+      ignitePlayer(this.state, 1200, now);
+    }
+    for (const e of this.enemies) {
+      if (Math.hypot(sx - e.sprite.x, sy - e.sprite.y) < 36) {
+        e.takeDamage(d.cataclysm ? 30 : 18);
+        e.applyDot(8, 1200);
+      }
     }
   }
 
@@ -2019,7 +2484,8 @@ export class WorldScene extends Phaser.Scene {
         const z = this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 34);
         if (z && now - npc.lastHit > 700) {
           npc.lastHit = now;
-          bloodBurst(this, z.sprite.x, z.sprite.y, 6);
+          const cdir = { x: z.sprite.x - npc.sprite.x, y: z.sprite.y - npc.sprite.y };
+          splatHit(this, z.sprite.x, z.sprite.y, z.blood, cdir, 1);
           if (z.takeDamage(Math.round(12 * tierMeta(npc.tier).dmgMul))) this.onEnemyKilled(z); // prime companions hit harder
         }
         const zc = this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 24);
@@ -2194,8 +2660,8 @@ export class WorldScene extends Phaser.Scene {
       this.showToast("Too dangerous to rest here");
       return;
     }
-    this.advanceClock();
-    this.advanceClock(); // ~2 segments pass (crops grow, weather may shift)
+    this.advanceClock(false);
+    this.advanceClock(false); // ~2 segments pass (crops grow, weather may shift); rest speaks for itself
     this.state.player.stamina = clampStat(100);
     this.state.player.hunger = clampStat(this.state.player.hunger - 8);
     this.state.player.thirst = clampStat(this.state.player.thirst - 10);
@@ -2352,7 +2818,7 @@ export class WorldScene extends Phaser.Scene {
         const e = this.nearestEnemy(180);
         if (e) {
           const ang = Math.atan2(e.sprite.y - py, e.sprite.x - px);
-          bloodBurst(this, e.sprite.x, e.sprite.y, 8);
+          splatHit(this, e.sprite.x, e.sprite.y, e.blood, { x: Math.cos(ang), y: Math.sin(ang) }, 1.2);
           e.knockback(Math.cos(ang), Math.sin(ang), 220, this.time.now);
           // No NEW threat drawn in and the narrative reads like a win → finish it.
           if (result.spawns.length === 0 && this.narrativeImpliesKill(gm.narrative)) {
@@ -2673,8 +3139,8 @@ export class WorldScene extends Phaser.Scene {
     const dead = e.takeDamage(dmg);
     const len = Math.hypot(e.sprite.x - px, e.sprite.y - py) || 1;
     const ndir = { x: (e.sprite.x - px) / len, y: (e.sprite.y - py) / len };
-    bloodBurst(this, e.sprite.x, e.sprite.y, hit.crit ? 18 : dead ? 16 : 9, hit.crit ? 0xff5a6e : 0x9c1414, ndir);
-    bloodDecal(this, e.sprite.x, e.sprite.y, hit.crit ? 1.2 : 0.85);
+    splatHit(this, e.sprite.x, e.sprite.y, e.blood, ndir, hit.crit ? 1.6 : execute ? 1.5 : dead ? 1.3 : 1);
+    bloodDecal(this, e.sprite.x, e.sprite.y, hit.crit ? 1.2 : 0.85, e.blood.pool); // splatHit lays the directional smear
     // Damage number on EVERY hit (CRIT/EXECUTE called out above it).
     this.floatText(e.sprite.x, e.sprite.y, execute ? "EXECUTE" : String(Math.round(dmg)), hit.crit ? "#ffd23f" : execute ? "#ff5a6e" : "#ffffff");
     if (hit.crit && !execute) this.floatText(e.sprite.x, e.sprite.y - 13, "CRIT!", "#ffd23f");
@@ -2697,8 +3163,8 @@ export class WorldScene extends Phaser.Scene {
     this.kills += 1;
     this.grantXp("combat", 4);
     sfx.kill();
-    gibs(this, e.sprite.x, e.sprite.y); // gore chunks fly
-    bloodDecal(this, e.sprite.x, e.sprite.y, 1.5); // a pool where it fell
+    gibs(this, e.sprite.x, e.sprite.y, e.blood); // gore chunks fly (type-coloured)
+    bloodDecal(this, e.sprite.x, e.sprite.y, 1.5, e.blood.pool); // a pool where it fell
     pushRecentEvent(this.state, `Put down a ${e.def.name}.`);
     this.onDeathTraits(e); // exploder / splitter / bloated bursts
     this.dropLoot(e);
@@ -2757,28 +3223,26 @@ export class WorldScene extends Phaser.Scene {
     if (this.itemGroup.countActive(true) > 60) return; // perf cap
     const ox = (Math.random() - 0.5) * 16;
     const oy = (Math.random() - 0.5) * 16;
+    const px = x + ox;
+    const py = y + oy;
     const def = defOf(item);
     if (def.kind === "ammo" || def.kind === "material") qty = Math.round(qty * ammoMult(this.state)); // Scrapper perk
-    const color = RARITY_META[def.rarity].color;
-    const glow = this.add.image(x + ox, y + oy, FX_GLOW).setTint(color).setScale(0.22).setDepth(6).setAlpha(0.5);
-    const spr = this.itemGroup.create(x + ox, y + oy, iconKey(item)) as Phaser.Physics.Arcade.Image;
+    // Rarity-driven glow: a faint shimmer on commons, a beacon on the rare stuff.
+    const glow = makeDropGlow(this, px, py, rarityGlowSpec(def.rarity));
+    const spr = this.itemGroup.create(px, py, iconKey(item)) as Phaser.Physics.Arcade.Image;
     spr.setScale(0.5).setDepth(7);
     spr.setData("item", item);
     spr.setData("qty", qty);
     spr.setData("glow", glow);
-    this.tweens.add({ targets: [spr, glow], y: "-=4", duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
-    this.tweens.add({ targets: glow, alpha: 0.2, duration: 600, yoyo: true, repeat: -1 });
+    this.tweens.add({ targets: [spr, ...glow.layers], y: "-=4", duration: 700, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     this.time.delayedCall(45000, () => this.destroyDrop(spr));
   }
 
   private destroyDrop(spr: Phaser.Physics.Arcade.Image): void {
     if (!spr || !spr.active) return;
-    const glow = spr.getData("glow") as Phaser.GameObjects.Image | undefined;
+    const glow = spr.getData("glow") as DropGlow | undefined;
     this.tweens.killTweensOf(spr); // stop the infinite bob/glow tweens before destroying
-    if (glow) {
-      this.tweens.killTweensOf(glow);
-      glow.destroy();
-    }
+    glow?.destroy();
     spr.destroy();
   }
 
@@ -2987,8 +3451,9 @@ export class WorldScene extends Phaser.Scene {
     const execute = data.executePct > 0 && e.hpFrac() * 100 <= data.executePct;
     const dmg = execute ? e.hp : data.damage;
     const dead = e.takeDamage(dmg);
-    bloodBurst(this, e.sprite.x, e.sprite.y, data.crit ? 16 : dead ? 12 : 8, data.crit ? 0xff5a6e : 0x9c1414, { x: data.dirX, y: data.dirY });
-    bloodDecal(this, e.sprite.x, e.sprite.y, data.crit ? 1.0 : 0.7);
+    const sdir = { x: data.dirX, y: data.dirY };
+    splatHit(this, e.sprite.x, e.sprite.y, e.blood, sdir, data.crit ? 1.5 : execute ? 1.4 : dead ? 1.3 : 1);
+    bloodDecal(this, e.sprite.x, e.sprite.y, data.crit ? 1.0 : 0.7, e.blood.pool); // splatHit lays the directional smear
     this.floatText(e.sprite.x, e.sprite.y, execute ? "EXECUTE" : String(Math.round(dmg)), data.crit ? "#ffd23f" : execute ? "#ff5a6e" : "#ffffff");
     if (data.crit && !execute) this.floatText(e.sprite.x, e.sprite.y - 13, "CRIT!", "#ffd23f");
     if (data.bleed > 0) e.applyDot(data.bleed, data.bleedMs);
@@ -3001,13 +3466,19 @@ export class WorldScene extends Phaser.Scene {
   private explode(x: number, y: number, data: ProjData): void {
     sfx.boom();
     this.cameras.main.shake(140, 0.012);
-    bloodBurst(this, x, y, 18, 0xffa23f);
+    bloodBurst(this, x, y, 18, 0xffa23f); // the fireball flash itself
     for (const e of [...this.enemies]) {
       if (data.hits.has(e)) continue;
       if (Math.hypot(e.sprite.x - x, e.sprite.y - y) <= data.explosive) {
         const dead = e.takeDamage(Math.round(data.damage * 0.7));
         if (data.burn > 0) e.applyDot(data.burn, 3000);
+        // each caught enemy bleeds its OWN fluid, flung away from the blast
+        const bdir = { x: e.sprite.x - x, y: e.sprite.y - y };
         if (dead) this.onEnemyKilled(e);
+        else {
+          splatHit(this, e.sprite.x, e.sprite.y, e.blood, bdir, 1.2);
+          bloodDecal(this, e.sprite.x, e.sprite.y, 0.7, e.blood.pool);
+        }
       }
     }
   }

@@ -25,10 +25,20 @@ export enum Tile {
   Rail = 16,
   Crop = 17,
   Bridge = 18,
+  // Living-world terrain (animated water/lava + disaster-scar tiles). Contiguous
+  // so each value still === its tileset frame index (engine/textures.ts).
+  DeepWater = 19, // open water (ocean/lake centres) — darker, animated
+  Mud = 20, // wet ground (marsh/wetland/flood fringe) — walkable, slows
+  Foam = 21, // shoreline wet sand fringe — static
+  Scorched = 22, // burned ground (wildfire scar / volcanic apron) — walkable
+  Ash = 23, // deep ash (eruption/burn core) — walkable
+  Basalt = 24, // cooled lava rock — SOLID
+  Lava = 25, // molten rock — animated, walkable-but-burning (NOT solid)
+  Stump = 26, // burned tree remnant — walkable
 }
 
 /** Total number of distinct tiles (used to size the generated tileset). */
-export const TILE_COUNT = 19;
+export const TILE_COUNT = 27;
 
 /**
  * Canonical tile order for the generated tileset: frame index i renders Tile
@@ -39,10 +49,22 @@ export const TILE_ORDER: Tile[] = [
   Tile.Road, Tile.Sidewalk, Tile.Floor, Tile.Wall, Tile.Door, Tile.Grass,
   Tile.Water, Tile.ShallowWater, Tile.Sand, Tile.Dirt, Tile.Trail, Tile.Tree,
   Tile.Bush, Tile.TallGrass, Tile.Rubble, Tile.Pavement, Tile.Rail, Tile.Crop, Tile.Bridge,
+  Tile.DeepWater, Tile.Mud, Tile.Foam, Tile.Scorched, Tile.Ash, Tile.Basalt, Tile.Lava, Tile.Stump,
 ];
 
-/** Tile indices the player (and enemies/projectiles) cannot pass. */
-export const SOLID_TILES: readonly Tile[] = [Tile.Wall, Tile.Water, Tile.Tree, Tile.Rubble, Tile.Rail];
+/** Tile indices the player (and enemies/projectiles) cannot pass. Lava is
+ *  deliberately NOT here — it is a walkable hazard that burns (see HAZARD_TILES),
+ *  not an invisible wall; Basalt (cooled lava) and DeepWater are hard barriers. */
+export const SOLID_TILES: readonly Tile[] = [
+  Tile.Wall, Tile.Water, Tile.Tree, Tile.Rubble, Tile.Rail, Tile.DeepWater, Tile.Basalt,
+];
+
+/** Tiles the renderer animates (driven by engine/AnimatedTerrain.ts). */
+export const ANIMATED_WATER_TILES: readonly Tile[] = [Tile.Water, Tile.ShallowWater, Tile.DeepWater];
+export const ANIMATED_LAVA_TILES: readonly Tile[] = [Tile.Lava];
+
+/** Walkable tiles that damage anything standing on them (engine applies per-tick). */
+export const HAZARD_TILES: readonly Tile[] = [Tile.Lava];
 
 export type BuildingType =
   // original city

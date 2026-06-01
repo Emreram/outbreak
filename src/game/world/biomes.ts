@@ -12,7 +12,8 @@ export type BiomeId =
   | "downtown" | "suburb" | "commercial_strip" | "industrial" | "warehouse_district"
   | "hospital_zone" | "police_district" | "military_base" | "school_campus" | "shopping_mall"
   | "trainyard" | "construction_site" | "forest" | "dense_woods" | "farmland" | "grassland"
-  | "riverbank" | "lake" | "marsh" | "coast" | "quarry" | "parkland" | "ocean";
+  | "riverbank" | "lake" | "marsh" | "coast" | "quarry" | "parkland" | "ocean"
+  | "volcanic" | "wetland" | "badlands";
 
 export interface ScatterRule {
   tile: Tile;
@@ -218,24 +219,57 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     labelColor: 0xbfe3a8,
   }),
   ocean: def({
-    id: "ocean", name: "Open water", base: Tile.Water,
+    id: "ocean", name: "Open water", base: Tile.DeepWater,
     scatter: [{ tile: Tile.Water, p: 0 }], buildingPool: [], propDensity: 0, props: [],
     lootSource: "street", lootBias: 0, danger: 0, landmarks: [],
     labelColor: 0x6fa8c7,
   }),
+  // --- Living-World biomes -------------------------------------------------
+  volcanic: def({
+    id: "volcanic", name: "Volcanic field", base: Tile.Scorched,
+    scatter: [{ tile: Tile.Lava, p: 0.05 }, { tile: Tile.Basalt, p: 0.09 }, { tile: Tile.Ash, p: 0.13 }],
+    buildingPool: ["bunker"], structureChance: 0.06, props: ["boulder", "rock", "wreck", "corpse"],
+    propDensity: 9, lootSource: "industrial", lootBias: 0.35, danger: 4,
+    landmarks: [{ kind: "lava_vent", label: "Lava vent", p: 0.22 }],
+    labelColor: 0xff8a4a,
+  }),
+  wetland: def({
+    id: "wetland", name: "Wetland", base: Tile.Mud,
+    scatter: [{ tile: Tile.ShallowWater, p: 0.2 }, { tile: Tile.TallGrass, p: 0.18 }, { tile: Tile.Water, p: 0.08 }, { tile: Tile.Bush, p: 0.05 }],
+    buildingPool: ["cabin"], structureChance: 0.05, props: ["bush", "tree", "corpse"], propDensity: 10,
+    lootSource: "forest", lootBias: 0.12, danger: 2,
+    landmarks: [{ kind: "sunken_shack", label: "Sunken shack", p: 0.1 }],
+    labelColor: 0x9fb38a,
+  }),
+  badlands: def({
+    id: "badlands", name: "Badlands", base: Tile.Dirt,
+    scatter: [{ tile: Tile.Rubble, p: 0.1 }, { tile: Tile.Sand, p: 0.1 }, { tile: Tile.Basalt, p: 0.02 }],
+    buildingPool: ["cabin", "warehouse"], structureChance: 0.06, props: ["boulder", "rock", "wreck", "corpse"],
+    propDensity: 11, lootSource: "street", lootBias: 0.15, danger: 2,
+    landmarks: [{ kind: "mining_rig", label: "Abandoned dig site", p: 0.1 }],
+    labelColor: 0xc8a878,
+  }),
 };
 
 // 5×5 lookup over (density row, moisture col); each quantised band picks a biome.
+// (coast is no longer in the table — it's produced by the continental coastline
+//  field in biomeAt; the freed slot becomes wetland.)
 const TABLE: BiomeId[][] = [
-  ["grassland", "grassland", "parkland", "marsh", "lake"],
+  ["badlands", "grassland", "parkland", "marsh", "lake"],
   ["farmland", "farmland", "forest", "dense_woods", "riverbank"],
-  ["construction_site", "suburb", "suburb", "forest", "coast"],
+  ["construction_site", "suburb", "suburb", "forest", "wetland"],
   ["commercial_strip", "suburb", "school_campus", "warehouse_district", "trainyard"],
   ["downtown", "downtown", "hospital_zone", "industrial", "quarry"],
 ];
 
 // Rare special districts, injected where a third noise spikes over dense areas.
 const SPECIALS: BiomeId[] = ["police_district", "military_base", "shopping_mall"];
+
+// Continental land/sea thresholds (low-frequency field): below OCEAN_LEVEL is open
+// water, the thin band up to COAST_LEVEL is the coastline. Conservative so land
+// dominates (protects biome-count + building-density invariants).
+const OCEAN_LEVEL = 0.26;
+const COAST_LEVEL = 0.32;
 
 // Always-playable land biomes for the spawn chunk (no water/marsh starts), still
 // varied per seed so the opening location differs run to run.
@@ -253,19 +287,40 @@ function edgeDistChunks(cx: number, cy: number): number {
   return Math.min(cx, cy, WORLD_CHUNKS_X - 1 - cx, WORLD_CHUNKS_Y - 1 - cy);
 }
 
-/** The biome for a chunk — contiguous via low-frequency noise, ocean at the edge. */
+/** The biome for a chunk — contiguous via low-frequency noise, with organic
+ *  coastlines (continental field), meandering biome borders (domain warp), rare
+ *  isolated volcanic regions, and ocean at the world edge. Pure + deterministic. */
 export function biomeAt(seed: string, cx: number, cy: number): BiomeDef {
   if (edgeDistChunks(cx, cy) <= 0) return BIOMES.ocean;
 
   // The spawn chunk is always a playable land biome (varied per seed) so a run
-  // never opens with the player stuck wading in a lake/marsh.
+  // never opens with the player stuck wading in a lake/marsh. It also keeps the
+  // continental field below from ever drowning the opening location.
   if (cx === SPAWN_CHUNK.x && cy === SPAWN_CHUNK.y) {
     const i = Math.floor(hashUnit(seed + ":start", cx, cy) * START_BIOMES.length) % START_BIOMES.length;
     return BIOMES[START_BIOMES[i]];
   }
 
-  const density = field(seed + ":dens", cx, cy, 6, 3);
-  const moisture = field(seed + ":moist", cx, cy, 8, 3);
+  // Continental land/sea: a very-low-frequency field carves real bays + coastlines
+  // INSIDE the map, not just at the border — so water has shape and you actually
+  // reach a shore. Land still dominates (conservative thresholds).
+  const cont = field(seed + ":cont", cx, cy, 17, 2);
+  if (cont < OCEAN_LEVEL) return BIOMES.ocean;
+  if (cont < COAST_LEVEL) return BIOMES.coast;
+
+  // Rare, isolated volcanic regions — a distinct, dangerous landmark, independent
+  // of the urban/density axis so it reads as "a volcano", not a city block. Tuned
+  // so every seed has a few volcanic fields to find (lava) without being overrun.
+  if (field(seed + ":volc", cx, cy, 5, 2) > 0.83) return BIOMES.volcanic;
+
+  // Domain warp: perturb the sample point with a low-frequency field so biome
+  // borders meander organically instead of snapping to an axis-aligned grid
+  // (the old "blocky/repetitive" look). Warp wavelength ≫ feature size keeps
+  // regions contiguous.
+  const wx = (field(seed + ":warpx", cx, cy, 12, 2) - 0.5) * 6;
+  const wy = (field(seed + ":warpy", cx, cy, 12, 2) - 0.5) * 6;
+  const density = field(seed + ":dens", cx + wx, cy + wy, 6, 3);
+  const moisture = field(seed + ":moist", cx + wx, cy + wy, 8, 3);
   const dRow = band(density);
 
   // Rare special districts only in built-up (high-density) regions.

@@ -116,6 +116,26 @@ const ENEMY: Record<string, SourceTable> = {
   boss: { weights: { pistol: 2, rifle: 2, sniper: 1, special: 1, ammo: 3, medical: 2, armor: 2, melee: 1 }, bias: 1.4 },
 };
 
+// Weapons should turn up OFTEN and in VARIETY — but this only changes HOW OFTEN a
+// weapon *category* is rolled, never which rarity it lands on. The rarity ladder
+// (rarity.ts) is deliberately left untouched, so the powerful rare/legendary/mythic
+// pieces stay exactly as scarce: you'll find a weapon more often, a great one no
+// more often than before.
+const WEAPON_CATS: ReadonlySet<Category> = new Set([
+  "melee", "pistol", "auto", "shotgun", "rifle", "sniper", "bow", "special",
+]);
+const WEAPON_FREQ = 2; // any weapon category already in a table is this much likelier
+const MELEE_FLOOR = 1.5; // and every lootable place yields at least some improvised melee
+
+/** Scale up weapon categories and guarantee a baseline of improvised melee, so
+ *  weapons show up more frequently and in more places — without touching rarity. */
+function boostWeapons(weights: Partial<Record<Category, number>>): Partial<Record<Category, number>> {
+  const out: Partial<Record<Category, number>> = { ...weights };
+  for (const c of WEAPON_CATS) if (out[c]) out[c] = out[c]! * WEAPON_FREQ;
+  out.melee = Math.max(out.melee ?? 0, MELEE_FLOOR);
+  return out;
+}
+
 function pickCategory(weights: Partial<Record<Category, number>>, rng: Rng): Category {
   const entries = Object.entries(weights) as [Category, number][];
   const total = entries.reduce((s, [, w]) => s + w, 0);
@@ -178,9 +198,10 @@ function tableFor(source: string): SourceTable {
 /** Roll `n` loot stacks from a named source. `extraBias` (e.g. the Lucky perk) shifts toward rarer. */
 export function rollLoot(source: string, rng: Rng, n = 1, extraBias = 0): LootStack[] {
   const { weights, bias } = tableFor(source);
+  const boosted = boostWeapons(weights);
   const out: LootStack[] = [];
   for (let i = 0; i < n; i++) {
-    const cat = pickCategory(weights, rng);
+    const cat = pickCategory(boosted, rng);
     const d = pickFromCategory(cat, rng, bias + extraBias);
     if (d) out.push({ item: d.name, qty: qtyFor(d, rng) });
   }

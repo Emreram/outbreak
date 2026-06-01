@@ -33,6 +33,7 @@ const STYLES: Record<string, LandmarkStyle> = {
   beached_boat: { glyph: "⛵", color: "#e6d8a8", prop: "wreck" },
   mining_rig: { glyph: "⛏", color: "#cdb89a", prop: "boulder" },
   bandstand: { glyph: "♪", color: "#bfe3a8", prop: "bench" },
+  lava_vent: { glyph: "▲", color: "#ff7a2a", prop: "boulder" },
 };
 
 const DEFAULT_STYLE: LandmarkStyle = { glyph: "⚑", color: "#ffe6a8", prop: "crate" };

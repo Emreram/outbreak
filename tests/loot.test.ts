@@ -165,6 +165,33 @@ function main(): void {
   const farmGuns = countGuns("farmland", "fl");
   ok(milBiomeGuns > farmGuns, `military_base biome out-guns farmland (${milBiomeGuns} vs ${farmGuns})`);
 
+  // --- weapon boost: improvised melee turns up even where there's no weapon table ---
+  const wf = createRng("weapon-floor");
+  let groceryMelee = 0;
+  for (let i = 0; i < 600; i++)
+    for (const s of rollLoot("grocery", wf, 1)) {
+      const d = getItemDef(s.item);
+      if (d && isWeaponDef(d) && d.hand === "melee") groceryMelee++;
+    }
+  ok(groceryMelee > 0, `improvised melee turns up even in groceries (${groceryMelee})`);
+
+  // --- ...but OP loot stays rare: legendary+ is a tiny slice of all drops ---
+  const op = createRng("op-scarce");
+  let totalStacks = 0;
+  let legendaryPlus = 0;
+  for (let i = 0; i < 4000; i++) {
+    const src = ["house", "police_station", "military", "hardware_store", "gas_station"][i % 5];
+    for (const s of rollLoot(src, op, 1)) {
+      totalStacks++;
+      const r = getItemDef(s.item)?.rarity;
+      if (r === "legendary" || r === "mythic") legendaryPlus++;
+    }
+  }
+  ok(
+    totalStacks > 0 && legendaryPlus / totalStacks < 0.05,
+    `legendary+ stays rare after the weapon boost (${((legendaryPlus / totalStacks) * 100).toFixed(2)}% < 5%)`,
+  );
+
   // --- isWeaponName sanity ---
   ok(isWeaponName("Katana") && !isWeaponName("Bandage"), "isWeaponName classifies correctly");
 

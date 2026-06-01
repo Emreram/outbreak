@@ -22,6 +22,9 @@ export class Player {
   private _sprinting = false;
   /** Movement multiplier — 1 on foot, raised while driving a vehicle (Feature 4). */
   speedMult = 1;
+  /** Terrain multiplier — 1 on dry ground, <1 wading shallow water / mud / lava
+   *  (set each frame by the scene from the tile underfoot; Living World). */
+  terrainMult = 1;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
@@ -73,7 +76,7 @@ export class Player {
     const len = Math.hypot(vx, vy);
     const sprint = len > 0 && canSprint && (this.cursors.shift.isDown || ext?.sprint === true);
     this._sprinting = sprint;
-    const speed = (sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED) * this.speedMult;
+    const speed = (sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED) * this.speedMult * this.terrainMult;
 
     // Normalise so diagonals aren't faster.
     if (len > 0) {

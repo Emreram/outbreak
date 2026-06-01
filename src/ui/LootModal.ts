@@ -240,9 +240,13 @@ export class LootModal {
       const def = defOf(it.item);
       const cell = document.createElement("button");
       cell.className = "ob-cell" + (this.selected === it.item ? " sel" : "");
-      cell.style.borderColor = RARITY_META[def.rarity].css;
-      cell.style.boxShadow = `inset 0 0 14px ${RARITY_META[def.rarity].css}22, inset 0 1px 0 rgba(255,255,255,.05)`;
-      cell.title = `${def.name} (${RARITY_META[def.rarity].label})`;
+      // The rarer the item, the hotter its cell glows — and epic+ gets an outer aura.
+      const meta = RARITY_META[def.rarity];
+      const a = ["22", "30", "40", "5c", "80", "aa"][meta.rank];
+      const outer = meta.rank >= 3 ? `, 0 0 ${4 + meta.rank * 3}px ${meta.css}${a}` : "";
+      cell.style.borderColor = meta.css;
+      cell.style.boxShadow = `inset 0 0 ${10 + meta.rank * 4}px ${meta.css}${a}${outer}, inset 0 1px 0 rgba(255,255,255,.05)`;
+      cell.title = `${def.name} (${meta.label})`;
       const img = document.createElement("img");
       img.src = iconDataUrl(it.item);
       cell.append(img);

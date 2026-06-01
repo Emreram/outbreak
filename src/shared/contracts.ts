@@ -32,6 +32,11 @@ export interface PlayerState {
   y: number;
   equippedArmorBody?: string; // inventory item name of worn body armour (optional → old saves OK)
   equippedArmorHead?: string; // inventory item name of worn head armour
+  // Environmental status (Living World; scene-clock ms timestamps, optional → old saves OK).
+  status?: {
+    burningUntil?: number; // HP burns down while now < this (lava/fire); refreshed by contact
+    wetUntil?: number; // soaked (water) — douses fire + briefly resists ignition
+  };
 }
 
 export interface GameState {
@@ -62,6 +67,28 @@ export interface GameState {
   discovered?: string[]; // visited chunk keys "cx,cy" — minimap fog-of-war (Feature 10)
   npcs?: Npc[]; // recruited companions (persisted); ambient survivors are transient (Feature 10)
   factions?: Record<string, number>; // standing per faction, -100..100 (Feature 10)
+  bloodMoon?: boolean; // a blood-moon night: red sky + far more, faster undead (optional → old saves OK)
+  disasters?: DisasterZone[]; // lasting natural-disaster scars (Living World); overlaid on regenerated terrain
+}
+
+/** A natural-disaster type. Live VFX/damage are transient (engine-side); the
+ *  lasting terrain SCAR is what persists on GameState.disasters. */
+export type DisasterKind = "earthquake" | "wildfire" | "flood" | "eruption" | "storm_lightning";
+
+/** A persisted disaster SCAR (Living World). Compact (one record per event, not
+ *  per tile) so saves stay tiny; ChunkManager re-derives the scarred terrain by
+ *  overlaying these zones onto each freshly-generated chunk (terrain itself is
+ *  never saved — see CLAUDE.md §10). Lifecycle is measured in game-days. */
+export interface DisasterZone {
+  id: string;
+  kind: DisasterKind;
+  px: number; // epicentre, GLOBAL world pixels
+  py: number;
+  radius: number; // scar radius in TILES
+  startDay: number; // game-day the scar appeared
+  healDay?: number; // game-day the scar fully reverts to base terrain (omit = permanent)
+  intensity: number; // 0..1 — how strongly terrain is converted (radial falloff)
+  cataclysm: boolean; // rare destructive tier (larger, can damage the base)
 }
 
 /** A survivor NPC. Recruited companions persist on GameState.npcs; ambient survivors

@@ -81,9 +81,13 @@ ok(s.recentEvents.length === 6 && s.recentEvents[5] === "e9", "recentEvents trim
 s = newGame("save-seed");
 s.player.hp = 42;
 addItem(s, "Map", 1);
+s.disasters = [
+  { id: "d1", kind: "eruption", px: 1234, py: 5678, radius: 14, startDay: 2, healDay: 9, intensity: 0.8, cataclysm: true },
+];
 saveGame(s);
 const loaded = loadGame();
 ok(loaded !== null && JSON.stringify(loaded) === JSON.stringify(s), "save/load round-trip identical");
+ok(loaded?.disasters?.[0]?.kind === "eruption" && loaded?.disasters?.[0]?.cataclysm === true, "disaster scars survive a save/load round-trip");
 clearSave();
 ok(loadGame() === null, "clearSave -> null");
 store.set("outbreak_save_v1", "{not json");

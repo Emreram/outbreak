@@ -46,6 +46,16 @@ export const TILE_COLORS: Record<Tile, { fill: number; line: number }> = {
   [Tile.Rail]: { fill: 0x55504a, line: 0x3f3b36 },
   [Tile.Crop]: { fill: 0x7e8a3a, line: 0x69742f },
   [Tile.Bridge]: { fill: 0x6e5640, line: 0x5a4634 },
+  // Living-world terrain. Water/Lava are the STATIC underlay beneath the animated
+  // overlay (AnimatedTerrain) — kept readable but quiet so the animation reads.
+  [Tile.DeepWater]: { fill: 0x183349, line: 0x102434 },
+  [Tile.Mud]: { fill: 0x4a3d2a, line: 0x3a2f20 },
+  [Tile.Foam]: { fill: 0xa9c4d6, line: 0x8fb0c4 },
+  [Tile.Scorched]: { fill: 0x2a241f, line: 0x1d1814 },
+  [Tile.Ash]: { fill: 0x4a463f, line: 0x35322c },
+  [Tile.Basalt]: { fill: 0x2b2622, line: 0x18140f },
+  [Tile.Lava]: { fill: 0x8a3010, line: 0x551c08 },
+  [Tile.Stump]: { fill: 0x3a2c1e, line: 0x281d12 },
 };
 
 /** Scale a packed RGB colour's brightness by `amt` (e.g. -0.2 darker, +0.15 lighter). */
@@ -139,7 +149,10 @@ function drawTileMotif(
       break;
     case Tile.Water:
     case Tile.ShallowWater:
-      g.lineStyle(1, light, 0.5);
+    case Tile.DeepWater:
+      // Quiet static ripple lines — the animated overlay (AnimatedTerrain) is the
+      // star, so keep the underlay subtle.
+      g.lineStyle(1, light, 0.35);
       for (let k = 0; k < 3; k++) {
         const y = 6 + k * 9;
         g.beginPath();
@@ -149,6 +162,52 @@ function drawTileMotif(
         g.strokePath();
       }
       break;
+    case Tile.Lava: {
+      // Dark cooling crust with a few bright molten cracks (the GPU/overlay layer
+      // adds the live glow + flow on top).
+      g.fillStyle(0x1c1410, 0.55);
+      for (let s = 0; s < 7; s++) g.fillCircle(ox + rng.int(3, size - 3), rng.int(3, size - 3), rng.int(2, 4));
+      g.lineStyle(1.5, 0xff7a2a, 0.85);
+      for (let k = 0; k < 3; k++) {
+        const y = 5 + k * 9;
+        g.beginPath();
+        g.moveTo(ox + rng.int(2, 6), y);
+        g.lineTo(ox + mid + rng.int(-3, 3), y + rng.int(2, 5));
+        g.lineTo(ox + size - rng.int(2, 6), y + rng.int(-2, 2));
+        g.strokePath();
+      }
+      g.fillStyle(0xffd27a, 0.7).fillCircle(ox + mid + rng.int(-6, 6), mid + rng.int(-6, 6), 1.6);
+      break;
+    }
+    case Tile.Mud: {
+      // Wet, dark earth with a couple of glossy puddles + speckle.
+      g.fillStyle(dark, 0.5);
+      for (let s = 0; s < 5; s++) g.fillCircle(ox + rng.int(3, size - 3), rng.int(3, size - 3), rng.int(1, 2));
+      g.fillStyle(0x2a3038, 0.4).fillEllipse(ox + rng.int(8, size - 8), rng.int(8, size - 8), 9, 5);
+      g.fillStyle(0x2a3038, 0.35).fillEllipse(ox + rng.int(8, size - 8), rng.int(8, size - 8), 7, 4);
+      break;
+    }
+    case Tile.Foam: {
+      // Bright wet-sand fringe: foam dabs over a light base.
+      g.fillStyle(0xffffff, 0.4);
+      for (let s = 0; s < 6; s++) g.fillCircle(ox + rng.int(3, size - 3), rng.int(3, size - 3), rng.range(1, 2.4));
+      g.lineStyle(1, 0xffffff, 0.3);
+      g.lineBetween(ox + 3, mid, ox + size - 3, mid + rng.int(-3, 3));
+      break;
+    }
+    case Tile.Stump: {
+      // Burned tree remnant: charred ground + a low ringed trunk cross-section.
+      g.fillStyle(0x140f0a, 0.5);
+      for (let s = 0; s < 5; s++) g.fillCircle(ox + rng.int(3, size - 3), rng.int(3, size - 3), rng.int(1, 2));
+      g.fillStyle(0x3a2c1e, 1).fillCircle(ox + mid, mid, size * 0.22);
+      g.lineStyle(1, 0x1c130c, 0.8);
+      g.strokeCircle(ox + mid, mid, size * 0.13);
+      g.fillStyle(0x5a4632, 0.8).fillCircle(ox + mid, mid, size * 0.06);
+      break;
+    }
+    case Tile.Scorched:
+    case Tile.Ash:
+    case Tile.Basalt:
     case Tile.Grass:
       g.lineStyle(1, light, 0.6);
       for (let b = 0; b < 7; b++) {

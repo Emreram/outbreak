@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import type { EnemyFamily, LootFamily, ZombieDef, ZombieTrait } from "../game/enemies/types";
+import { bloodProfileFor, type BloodProfile } from "../game/enemies/blood";
 import { zombieTextureKey } from "./zombieSprites";
 import { ZOMBIE_KEY, PLAYER_KEY } from "./textures";
 import { RARITY_META, rarityRank } from "../game/items/rarity";
@@ -20,6 +21,7 @@ export class Enemy {
   readonly traits: ReadonlySet<ZombieTrait>;
   readonly damage: number;
   readonly bite: boolean;
+  readonly blood: BloodProfile; // per-type gore identity (colour + fluid)
   hp: number;
   readonly maxHp: number;
   state: EnemyState = "wander";
@@ -40,6 +42,8 @@ export class Enemy {
   private lastLeap = 0;
   private lastSpecial = 0;
   private revived = false;
+  private lastDrip = 0;
+  private lastCrushFx = 0;
   private healthBar?: Phaser.GameObjects.Graphics;
   private label?: Phaser.GameObjects.Text;
 
@@ -51,6 +55,7 @@ export class Enemy {
     this.traits = new Set(def.traits);
     this.damage = def.damage;
     this.bite = def.bite;
+    this.blood = bloodProfileFor(def);
     this.hp = def.hp;
     this.maxHp = def.hp;
 
@@ -249,6 +254,37 @@ export class Enemy {
 
   hpFrac(): number {
     return this.maxHp > 0 ? this.hp / this.maxHp : 0;
+  }
+
+  /** True (on a jittered interval) when this enemy should leave a blood drip: it is
+   *  actively bleeding (DoT) or badly wounded AND moving. Scene calls bloodTrail()
+   *  when this fires. Bleeds faster while moving / actively bleeding. */
+  tryBleedTrail(now: number): boolean {
+    const bleeding = this.bleedDps > 0 && now < this.dotUntil;
+    const wounded = this.hpFrac() < 0.55;
+    if (!bleeding && !wounded) return false;
+    const body = this.sprite.body as Phaser.Physics.Arcade.Body | null;
+    const v = body ? body.velocity : null;
+    const moving = v ? v.x * v.x + v.y * v.y > 400 : false; // > ~20 px/s
+    if (!moving && !bleeding) return false; // wounded-but-still & not bleeding: no drip
+    const interval = bleeding ? (moving ? 150 : 420) : 260;
+    if (now - this.lastDrip < interval + (this.phase % 1) * 130) return false; // per-enemy jitter
+    this.lastDrip = now;
+    return true;
+  }
+
+  /** Current velocity, for orienting the blood trail behind movement. */
+  velocity(): { x: number; y: number } {
+    const body = this.sprite.body as Phaser.Physics.Arcade.Body | null;
+    return body ? { x: body.velocity.x, y: body.velocity.y } : { x: 0, y: 0 };
+  }
+
+  /** Throttle gate for per-frame crush gore (vehicle run-over) so a slow, high-HP
+   *  enemy lingering under the wheels can't spawn a spray every single frame. */
+  crushFxReady(now: number): boolean {
+    if (now - this.lastCrushFx < 180) return false;
+    this.lastCrushFx = now;
+    return true;
   }
 
   private flash(color: number, ms = 80): void {

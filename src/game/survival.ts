@@ -54,3 +54,40 @@ export function applyDecay(s: GameState, rates: DecayRates = DEFAULT_DECAY): voi
     p.infection = clampStat(p.infection + rates.infectionTick);
   }
 }
+
+// --- environmental status: burning (lava/fire) & wet (water) -------------------
+// Stored on player.status as scene-clock ms timestamps so it survives a mid-fire
+// autosave. The scene refreshes burning each frame the player stands in a hazard
+// and ticks the damage on the survival cadence; water douses fire.
+
+const BURN_DAMAGE_PER_TICK = 8; // HP lost per survival tick (~2s) while burning
+
+/** Set the player alight for `durationMs` (lava/fire). Soaked bodies won't catch;
+ *  otherwise the burn timer is extended, not reset, so leaving the hazard lets it lapse. */
+export function ignitePlayer(s: GameState, durationMs: number, now: number): void {
+  const st = (s.player.status ??= {});
+  if (st.wetUntil !== undefined && now < st.wetUntil) return; // soaked → resists ignition
+  st.burningUntil = Math.max(st.burningUntil ?? 0, now + durationMs);
+}
+
+/** Soak the player for `durationMs` (water): douses any fire + briefly fireproof. */
+export function soakPlayer(s: GameState, durationMs: number, now: number): void {
+  const st = (s.player.status ??= {});
+  st.wetUntil = Math.max(st.wetUntil ?? 0, now + durationMs);
+  st.burningUntil = undefined; // water puts the fire out
+}
+
+/** Is the player currently on fire? */
+export function isBurning(s: GameState, now: number): boolean {
+  const u = s.player.status?.burningUntil;
+  return u !== undefined && now < u;
+}
+
+/** Advance the burning damage-over-time by one survival tick. Returns HP lost. */
+export function tickBurning(s: GameState, now: number): number {
+  if (!isBurning(s, now)) return 0;
+  const before = s.player.hp;
+  s.player.hp = clampStat(s.player.hp - BURN_DAMAGE_PER_TICK);
+  if (before > 0 && s.player.hp <= 0) pushRecentEvent(s, "Burned alive.");
+  return before - s.player.hp;
+}

@@ -103,9 +103,14 @@ export class HUD {
     s: GameState,
     debug: { fps: number; tx: number; ty: number; brain: string },
     activeWeapon?: string,
+    clock?: string,
   ): void {
     const bgName = s.background ? getBackground(s.background)?.name : undefined;
-    this.dayText.setText(`${s.player.name}${bgName ? ` · ${bgName}` : ""}  ·  Day ${s.day}  ·  ${s.timeOfDay}  ·  ${weatherName(s.weather)}`);
+    const moon = s.bloodMoon ? "  ·  🔴 BLOOD MOON" : "";
+    const time = clock ? `${s.timeOfDay} ${clock}` : s.timeOfDay;
+    this.dayText
+      .setText(`${s.player.name}${bgName ? ` · ${bgName}` : ""}  ·  Day ${s.day}  ·  ${time}  ·  ${weatherName(s.weather)}${moon}`)
+      .setColor(s.bloodMoon ? "#ff6b6b" : "#f4efe2");
 
     this.bars.clear();
     BARS.forEach((b, i) => {

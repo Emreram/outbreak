@@ -1,6 +1,8 @@
 import Phaser from "phaser";
 import { generateChunk, chunkStartPx, SOLID_TILES, type Building, type ChunkData, type ContainerKind, type Landmark } from "../worldgen";
 import { biomeAt } from "./biomes";
+import { applyScars } from "./disasterScars";
+import type { DisasterZone } from "../../shared/contracts";
 import { dangerTierAt, lootBiasAt } from "./scaling";
 import {
   CHUNK_TILES,
@@ -61,6 +63,11 @@ interface LoadedChunk {
 export interface ChunkManagerOpts {
   collide: ColliderSpec[]; // colliders to register against every chunk layer
   isChestLooted: (gid: string) => boolean;
+  // --- Living World hooks (all optional → back-compat) ---
+  disasters?: () => readonly DisasterZone[]; // active scars to overlay on each chunk
+  currentDay?: () => number; // game-day, for scar heal lifecycle
+  onChunkLoad?: (data: ChunkData) => void; // notify (e.g. AnimatedTerrain) a chunk's grid is live
+  onChunkUnload?: (cx: number, cy: number) => void; // notify a chunk was torn down
 }
 
 export class ChunkManager {
@@ -106,6 +113,7 @@ export class ChunkManager {
 
   private load(cx: number, cy: number): void {
     const data = generateChunk(this.seed, cx, cy);
+    applyScars(data, this.opts.disasters?.(), this.opts.currentDay?.() ?? 0);
     const view = new ChunkView(this.scene, data, this.opts.collide);
     const chests: ActiveChest[] = [];
     for (const c of data.containers) {
@@ -118,6 +126,7 @@ export class ChunkManager {
       chests.push(chest);
     }
     this.loaded.set(key(cx, cy), { cx, cy, data, view, chests });
+    this.opts.onChunkLoad?.(data);
   }
 
   private unload(k: string): void {
@@ -129,6 +138,22 @@ export class ChunkManager {
       c.badge?.destroy();
     }
     this.loaded.delete(k);
+    this.opts.onChunkUnload?.(lc.cx, lc.cy);
+  }
+
+  /** Re-derive every resident chunk's terrain against the CURRENT disaster scars
+   *  and rebuild its tile layer. Call right after a disaster mutates the world so
+   *  fresh lava/burn/flood appears immediately (chests are unaffected — kept). */
+  refreshLoaded(): void {
+    for (const lc of this.loaded.values()) {
+      const data = generateChunk(this.seed, lc.cx, lc.cy);
+      applyScars(data, this.opts.disasters?.(), this.opts.currentDay?.() ?? 0);
+      lc.view.destroy();
+      lc.view = new ChunkView(this.scene, data, this.opts.collide);
+      lc.data = data;
+      this.opts.onChunkUnload?.(lc.cx, lc.cy);
+      this.opts.onChunkLoad?.(data);
+    }
   }
 
   destroy(): void {

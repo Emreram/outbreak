@@ -18,6 +18,7 @@ import {
   type ChunkData,
 } from "./world/tiles";
 import { biomeAt, type BiomeDef } from "./world/biomes";
+import { field } from "./world/noise";
 
 // Re-export the tile/data shapes so existing imports `from "../game/worldgen"`
 // keep working (WorldScene, tests, etc.).
@@ -137,15 +138,31 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   const gx0 = cx * size;
   const gy0 = cy * size;
 
-  // 1) Base terrain + probabilistic scatter (trees, water, crops, rubble…).
+  // 1) Base terrain + NOISE-MODULATED scatter: a per-tile feature field clusters
+  //    scatter into dense thickets and open clearings instead of a flat, uniform
+  //    sprinkle — so two same-biome chunks read differently and a forest has shape.
   const grid: Tile[][] = [];
   for (let ly = 0; ly < size; ly++) grid[ly] = new Array<Tile>(size).fill(biome.base);
   for (const s of biome.scatter) {
     for (let ly = 0; ly < size; ly++) {
       for (let lx = 0; lx < size; lx++) {
-        if (grid[ly][lx] === biome.base && rng.chance(s.p)) grid[ly][lx] = s.tile;
+        if (grid[ly][lx] !== biome.base) continue;
+        const m = field(`${seed}:feat`, gx0 + lx, gy0 + ly, 7, 2); // 0..1 density modulation
+        if (rng.chance(s.p * (0.3 + 1.7 * m))) grid[ly][lx] = s.tile;
       }
     }
+  }
+
+  // 1b) Seamless rivers: a global ridge-noise channel that lines up exactly across
+  //     chunk borders (pure fn of GLOBAL tile coords). Skipped in urban + already-wet
+  //     biomes so it never water-logs a buildable block.
+  if (!biome.urban && biome.base !== Tile.Water && biome.base !== Tile.DeepWater && biome.base !== Tile.ShallowWater) {
+    carveRivers(grid, seed, gx0, gy0, size);
+  }
+
+  // 1c) An occasional pond gives dry inland biomes a little water shape.
+  if (!biome.urban && biome.base !== Tile.Water && biome.base !== Tile.DeepWater && rng.chance(0.16)) {
+    carvePond(grid, size, rng);
   }
 
   const buildings: Building[] = [];
@@ -348,18 +365,21 @@ function carveNatural(
   }
 }
 
-/** True if the rectangle is mostly open (not water/wall) so a structure can sit there. */
+/** True if the rectangle can host a structure: it must NOT overlap an existing
+ *  building (any Wall/Floor/Door tile aborts — otherwise a later building can carve
+ *  over an earlier one's door) and must be mostly dry land (little open water). */
 function areaClearable(grid: Tile[][], sx: number, sy: number, ex: number, ey: number): boolean {
-  let blocked = 0;
+  let waterish = 0;
   let total = 0;
   for (let y = sy; y <= ey; y++) {
     for (let x = sx; x <= ex; x++) {
       total++;
       const t = grid[y]?.[x];
-      if (t === Tile.Water || t === Tile.Wall) blocked++;
+      if (t === Tile.Wall || t === Tile.Floor || t === Tile.Door) return false; // overlaps an existing building
+      if (t === Tile.Water || t === Tile.DeepWater) waterish++;
     }
   }
-  return total > 0 && blocked / total < 0.2;
+  return total > 0 && waterish / total < 0.2;
 }
 
 // --- building carving (shared) ---------------------------------------------
@@ -463,6 +483,43 @@ function floorTileIn(
     }
   }
   return candidates.length ? rng.pick(candidates) : null;
+}
+
+// --- rivers & ponds (seamless / per-chunk water shape) ---------------------
+
+const RIVER_SCALE = 30; // wavelength (tiles) of the river noise — bigger = sparser, smoother
+const RIVER_WATER = 0.972; // ridge threshold for open channel
+const RIVER_BANK = 0.94; // ridge threshold for shallow banks either side
+
+/** Carve a continuous river channel through this chunk wherever a global ridge
+ *  field peaks. Because it samples GLOBAL tile coords, the channel meanders
+ *  seamlessly across chunk borders (no per-chunk seams). */
+function carveRivers(grid: Tile[][], seed: string, gx0: number, gy0: number, size: number): void {
+  for (let ly = 0; ly < size; ly++) {
+    for (let lx = 0; lx < size; lx++) {
+      const v = field(`${seed}:river`, gx0 + lx, gy0 + ly, RIVER_SCALE, 2);
+      const ridge = 1 - Math.abs(2 * v - 1); // peaks (→1) along the 0.5 contour
+      if (ridge > RIVER_WATER) grid[ly][lx] = Tile.Water;
+      else if (ridge > RIVER_BANK && grid[ly][lx] !== Tile.Water) grid[ly][lx] = Tile.ShallowWater;
+    }
+  }
+}
+
+/** A small circular pond: deep Water core, ShallowWater rim. */
+function carvePond(grid: Tile[][], size: number, rng: Rng): void {
+  const cx = rng.int(6, size - 7);
+  const cy = rng.int(6, size - 7);
+  const r = rng.int(2, 4);
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const d2 = dx * dx + dy * dy;
+      if (d2 > r * r) continue;
+      const x = cx + dx;
+      const y = cy + dy;
+      if (x < 0 || y < 0 || x >= size || y >= size) continue;
+      grid[y][x] = d2 <= (r - 1) * (r - 1) ? Tile.Water : Tile.ShallowWater;
+    }
+  }
 }
 
 // --- small helpers ---------------------------------------------------------

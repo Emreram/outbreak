@@ -13,19 +13,41 @@ export interface RarityMeta {
   glow: number;
   weight: number; // base drop weight (higher = more common)
   rank: number; // 0..5
+  // --- ground-drop visual tuning (the rarer the loot, the cooler the glow) ---
+  glowScale: number; // base radius of the halo under a dropped item
+  pulseMs: number; // glow pulse period — rarer loot pulses faster, feels more alive
+  beam: boolean; // a vertical light shaft marking an exceptional find
+  sparkle: boolean; // orbiting twinkle particles around top-tier loot
 }
 
 // Weights tuned for SCARCITY: commons dominate hard, and each step up the rarity
 // ladder is much steeper — rare gear is genuinely rare and earned (good loot comes
 // from venturing into danger via distance/biome bias, not from every container).
+// The glow fields below DON'T touch drop rates — they only make each tier read
+// distinctly on the ground: commons barely shimmer, mythics are a beacon.
 export const RARITY_META: Record<Rarity, RarityMeta> = {
-  common: { label: "Common", color: 0xb8c0c8, css: "#b8c0c8", glow: 0x6b7480, weight: 1000, rank: 0 },
-  uncommon: { label: "Uncommon", color: 0x5ed66e, css: "#5ed66e", glow: 0x2f8f3c, weight: 300, rank: 1 },
-  rare: { label: "Rare", color: 0x4aa3ff, css: "#4aa3ff", glow: 0x1d62c4, weight: 90, rank: 2 },
-  epic: { label: "Epic", color: 0xb368ff, css: "#b368ff", glow: 0x7a2fcf, weight: 22, rank: 3 },
-  legendary: { label: "Legendary", color: 0xffa23f, css: "#ffa23f", glow: 0xc7641a, weight: 5, rank: 4 },
-  mythic: { label: "Mythic", color: 0xff5a6e, css: "#ff5a6e", glow: 0xc41d3a, weight: 1, rank: 5 },
+  common: { label: "Common", color: 0xb8c0c8, css: "#b8c0c8", glow: 0x6b7480, weight: 1000, rank: 0, glowScale: 0.16, pulseMs: 1500, beam: false, sparkle: false },
+  uncommon: { label: "Uncommon", color: 0x5ed66e, css: "#5ed66e", glow: 0x2f8f3c, weight: 300, rank: 1, glowScale: 0.2, pulseMs: 1250, beam: false, sparkle: false },
+  rare: { label: "Rare", color: 0x4aa3ff, css: "#4aa3ff", glow: 0x1d62c4, weight: 90, rank: 2, glowScale: 0.27, pulseMs: 1050, beam: false, sparkle: false },
+  epic: { label: "Epic", color: 0xb368ff, css: "#b368ff", glow: 0x7a2fcf, weight: 22, rank: 3, glowScale: 0.35, pulseMs: 880, beam: false, sparkle: true },
+  legendary: { label: "Legendary", color: 0xffa23f, css: "#ffa23f", glow: 0xc7641a, weight: 5, rank: 4, glowScale: 0.45, pulseMs: 700, beam: true, sparkle: true },
+  mythic: { label: "Mythic", color: 0xff5a6e, css: "#ff5a6e", glow: 0xc41d3a, weight: 1, rank: 5, glowScale: 0.58, pulseMs: 540, beam: true, sparkle: true },
 };
+
+/** A plain visual spec for the engine's drop-glow builder. Keeps the engine FX
+ *  layer decoupled from the item/rarity model — it only ever sees primitives. */
+export interface RarityGlowSpec {
+  color: number;
+  scale: number;
+  pulseMs: number;
+  beam: boolean;
+  sparkle: boolean;
+}
+
+export function rarityGlowSpec(r: Rarity): RarityGlowSpec {
+  const m = RARITY_META[r];
+  return { color: m.color, scale: m.glowScale, pulseMs: m.pulseMs, beam: m.beam, sparkle: m.sparkle };
+}
 
 export function rarityRank(r: Rarity): number {
   return RARITY_META[r].rank;
