@@ -122,6 +122,7 @@ export class WorldScene extends Phaser.Scene {
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
+  private selectedQuick = 0; // hotbar quick-use slot under the scroll-wheel cursor (0–3)
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -151,6 +152,7 @@ export class WorldScene extends Phaser.Scene {
     this.firing = false;
     this.reloading = false;
     this.lastStep = 0;
+    this.selectedQuick = 0;
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
     const fromUrl = this.registry.get("seedFromUrl") === true;
@@ -329,10 +331,22 @@ export class WorldScene extends Phaser.Scene {
     // Desktop: hold left mouse to fire the equipped gun toward the cursor.
     this.input.on("pointerdown", this.onPointerDown, this);
     this.input.on("pointerup", this.onPointerUp, this);
+    // Scroll wheel cycles the highlighted quick-use slot (skipping empties).
+    this.input.on("wheel", (_p: unknown, _o: unknown, _dx: number, dy: number) => this.cycleQuick(dy > 0 ? 1 : -1));
+
+    // Stop the page from scrolling / middle-click autoscroll over the canvas so the
+    // wheel drives the hotbar cleanly.
+    const canvas = this.game.canvas;
+    const noScroll = (e: WheelEvent) => e.preventDefault();
+    const noAux = (e: MouseEvent) => { if (e.button === 1) e.preventDefault(); };
+    canvas.addEventListener("wheel", noScroll, { passive: false });
+    canvas.addEventListener("mousedown", noAux);
 
     window.addEventListener("beforeunload", this.saveOnUnload);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       window.removeEventListener("beforeunload", this.saveOnUnload);
+      canvas.removeEventListener("wheel", noScroll);
+      canvas.removeEventListener("mousedown", noAux);
       this.scale.off("resize", this.onResize, this);
       this.modal.destroy();
       this.loot.destroy();
@@ -425,7 +439,11 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.hud.update(this.state, this.debugInfo());
-    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen);
+    if (!quickUseItems(this.state)[this.selectedQuick]) {
+      const first = quickUseItems(this.state).findIndex((q) => q); // keep the cursor on a usable slot
+      if (first >= 0) this.selectedQuick = first;
+    }
+    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen, this.selectedQuick);
   }
 
   private updateObjective(): void {
@@ -1078,6 +1096,8 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-TWO", () => this.useQuickSlot(1));
     kb.on("keydown-THREE", () => this.useQuickSlot(2));
     kb.on("keydown-FOUR", () => this.useQuickSlot(3));
+    // Q = use the slot the scroll-wheel cursor is on (mouse-friendly quick-use).
+    kb.on("keydown-Q", () => this.useQuickSlot(this.selectedQuick));
   }
 
   /** Use the consumable in quick-slot i (number keys 1–4); no-op if empty. */
@@ -1085,11 +1105,27 @@ export class WorldScene extends Phaser.Scene {
     if (this.dead || this.inEncounter || this.enacting || this.lootOpen) return;
     const slot = quickUseItems(this.state)[i];
     if (!slot || !useConsumable(this.state, slot.item)) return;
+    this.selectedQuick = i; // scroll/Q/click all converge on the slot just used
     sfx.pickup();
     pushRecentEvent(this.state, `Used ${slot.item}.`);
     this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Used ${slot.item}`, "#9ef0a0");
     this.hud.update(this.state, this.debugInfo());
     this.persist();
+  }
+
+  /** Move the hotbar scroll-wheel cursor to the next/prev FILLED quick-use slot. */
+  private cycleQuick(dir: number): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen) return;
+    const q = quickUseItems(this.state);
+    const filled = [0, 1, 2, 3].filter((i) => q[i]);
+    if (filled.length === 0) return;
+    const cur = filled.indexOf(this.selectedQuick);
+    if (cur < 0) {
+      this.selectedQuick = dir > 0 ? filled[0] : filled[filled.length - 1];
+    } else {
+      this.selectedQuick = filled[(cur + (dir > 0 ? 1 : -1) + filled.length) % filled.length];
+    }
+    sfx.ui();
   }
 
   private enterDeath(reason?: string): void {
@@ -1297,6 +1333,10 @@ export class WorldScene extends Phaser.Scene {
 
   private onPointerDown(ptr: Phaser.Input.Pointer): void {
     if (ptr.wasTouch) return; // touch uses the FIRE button (Phase 6)
+    if (ptr.middleButtonDown()) {
+      this.useQuickSlot(this.selectedQuick); // wheel-click uses the selected quick item
+      return;
+    }
     if (ptr.leftButtonDown()) {
       this.firing = true;
       this.fire(this.aimAngle());
