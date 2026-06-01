@@ -42,6 +42,20 @@ export interface GameState {
   recentEvents: string[]; // rolling last ~6 events for GM context
   knownLocations: KnownLocation[];
   difficultyModifier: number; // set by the run's scenario
+  goal?: string; // the run's short-term objective (from the AI scenario), shown in-game
+  equippedMelee?: string; // inventory item name of the equipped melee weapon
+  equippedRanged?: string; // inventory item name of the equipped gun
+  loadedAmmo?: number; // rounds in the chambered magazine of the equipped gun
+  background?: string; // chosen background/class id (character creation)
+  perks?: string[]; // active perk ids from the background
+  appearance?: { color?: number }; // survivor sprite tint
+}
+
+/** Choices from the character-creation screen, applied after the AI scenario. */
+export interface CharacterCreation {
+  background?: string; // background id
+  color?: number; // appearance tint
+  difficulty?: number; // multiplier (Easy 0.8 … Nightmare 1.5)
 }
 
 // ---- GM turn I/O (CLAUDE.md §8.2–8.4) ----

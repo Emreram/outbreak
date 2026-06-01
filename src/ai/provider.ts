@@ -12,9 +12,24 @@ export interface LLMProvider {
   generate(systemPrompt: string, payload: object, schema: object): Promise<string>;
 }
 
-export type ProviderName = "ollama" | "claude";
+export type ProviderName = "ollama" | "claude" | "mock" | "auto";
 
-/** Which provider is configured via env (defaults to local Ollama). */
+/**
+ * Which provider the player CONFIGURED. Unset → "auto": the engine probes for a
+ * local Ollama and uses it if present, otherwise the offline procedural GM — so
+ * real AI "just works" in `npm run dev` with zero config, and the static site
+ * still runs anywhere. Force a choice with VITE_AI_PROVIDER=ollama|claude|mock.
+ */
 export function configuredProvider(): ProviderName {
-  return import.meta.env.VITE_AI_PROVIDER === "claude" ? "claude" : "ollama";
+  const v = import.meta.env?.VITE_AI_PROVIDER;
+  if (v === "ollama" || v === "claude" || v === "mock") return v;
+  return "auto";
+}
+
+/** Pure decision: given the configured intent and whether Ollama answered, pick the brain. */
+export function resolveBrain(want: ProviderName, ollamaUp: boolean): "ollama" | "claude" | "offline" {
+  if (want === "mock") return "offline";
+  if (want === "claude") return "claude";
+  if (want === "ollama") return "ollama"; // try it even if the probe missed, so errors surface
+  return ollamaUp ? "ollama" : "offline"; // auto
 }

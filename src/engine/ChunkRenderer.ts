@@ -1,0 +1,110 @@
+import Phaser from "phaser";
+import { SOLID_TILES, type Building, type ChunkData } from "../game/worldgen";
+import { landmarkStyle } from "../game/world/landmarks";
+import { TILESET_KEY } from "./textures";
+import { propKey } from "./propSprites";
+
+// Renders ONE streamed chunk: a Phaser tilemap layer at the chunk's world
+// origin, its wall/water/tree colliders, building labels, and decorative props.
+// Owns those Phaser objects and tears them all down on unload. Story-agnostic.
+
+export interface ColliderSpec {
+  target: Phaser.Types.Physics.Arcade.ArcadeColliderType;
+  callback?: (obj: Phaser.GameObjects.GameObject) => void;
+}
+
+export class ChunkView {
+  readonly layer: Phaser.Tilemaps.TilemapLayer;
+  private readonly map: Phaser.Tilemaps.Tilemap;
+  private readonly extras: Phaser.GameObjects.GameObject[] = [];
+  private readonly colliders: Phaser.Physics.Arcade.Collider[] = [];
+
+  constructor(scene: Phaser.Scene, chunk: ChunkData, specs: ColliderSpec[]) {
+    const px = chunk.cx * chunk.size * chunk.tileSize;
+    const py = chunk.cy * chunk.size * chunk.tileSize;
+
+    this.map = scene.make.tilemap({
+      data: chunk.grid as number[][],
+      tileWidth: chunk.tileSize,
+      tileHeight: chunk.tileSize,
+    });
+    const tileset = this.map.addTilesetImage(TILESET_KEY);
+    if (!tileset) throw new Error(`Failed to add tileset "${TILESET_KEY}".`);
+    const layer = this.map.createLayer(0, tileset, px, py);
+    if (!layer) throw new Error("Failed to create chunk tilemap layer.");
+    this.layer = layer;
+    this.layer.setCollision([...(SOLID_TILES as number[])]);
+    this.layer.setDepth(0);
+
+    for (const s of specs) {
+      this.colliders.push(scene.physics.add.collider(s.target, this.layer, s.callback ? (a) => s.callback!(a as Phaser.GameObjects.GameObject) : undefined));
+    }
+
+    // Decorative props (below the player/enemies, above terrain).
+    for (const p of chunk.props) {
+      const key = propKey(p.kind);
+      if (!scene.textures.exists(key)) continue;
+      this.extras.push(scene.add.image(p.x, p.y, key).setDepth(4));
+    }
+
+    // Landmark set-pieces — a visible anchor prop + a labelled marker so the
+    // curated points of interest read on the map (no minimap by design).
+    for (const lm of chunk.landmarks) {
+      const st = landmarkStyle(lm.kind);
+      if (st.prop) {
+        const k = propKey(st.prop);
+        if (scene.textures.exists(k)) this.extras.push(scene.add.image(lm.x, lm.y, k).setDepth(4).setScale(1.3));
+      }
+      const t = scene.add
+        .text(lm.x, lm.y - 22, `${st.glyph} ${lm.label}`, {
+          fontFamily: "monospace",
+          fontSize: "11px",
+          color: st.color,
+          align: "center",
+          stroke: "#0b0d0e",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(6)
+        .setResolution(2);
+      this.extras.push(t);
+    }
+
+    // Light building "signage" for NOTABLE structures only (skip filler houses/
+    // offices) — keeps the map legible and avoids creating a label texture per
+    // building on every chunk load.
+    for (const b of chunk.buildings) {
+      if (b.tw < 5 || b.th < 4 || FILLER_LABELS.has(b.type)) continue;
+      const t = scene.add
+        .text(b.center.x, b.center.y, labelFor(b), {
+          fontFamily: "monospace",
+          fontSize: "11px",
+          color: "#f4efe2",
+          align: "center",
+          stroke: "#0b0d0e",
+          strokeThickness: 3,
+        })
+        .setOrigin(0.5)
+        .setDepth(5)
+        .setResolution(2)
+        .setAlpha(0.85);
+      this.extras.push(t);
+    }
+  }
+
+  destroy(): void {
+    for (const c of this.colliders) c.destroy();
+    for (const e of this.extras) e.destroy();
+    // map.destroy() also destroys the layer GameObject (via removeAllLayers),
+    // removing it from the scene's display/update lists. Colliders are torn
+    // down first so nothing references the layer afterwards.
+    this.map.destroy();
+  }
+}
+
+// Common filler structures aren't labelled (too many, low information).
+const FILLER_LABELS = new Set<string>(["house", "office", "cabin", "motel"]);
+
+function labelFor(b: Building): string {
+  return b.type.replace(/_/g, " ");
+}

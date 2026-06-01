@@ -15,12 +15,12 @@ know it works before moving on.
 |---|---|---|---|
 | 0 | Scaffold | ✅ Done | `npm run build` (type-check + bundle) + dev-server boot |
 | 1 | Walkable world | ✅ Done | worldgen invariant harness + dev-server boot |
-| 2 | Designed art (CC0) | ⏳ Planned | visual smoke + atlas/anim checks |
-| 3 | State + HUD + save/load | ⏳ Planned | unit tests (clamp/persist) + HUD smoke |
-| 4 | The Game Master (core) | ⏳ Planned | provider/validation unit tests + live Ollama turn |
-| 5 | Encounters & reactive world | ⏳ Planned | trigger/spawn/flag tests + play session |
-| 6 | Survival + death + new run | ⏳ Planned | decay/death tests + full-loop play session |
-| 7 | Replayability & polish | ⏳ Planned | scenario-variety + MVP Definition-of-Done pass |
+| 2 | Designed art (CC0) | ✅ Done | baked-tileset visual check + asset load/serve + build |
+| 3 | State + HUD + save/load | ✅ Done | 21 game-logic unit tests + HUD smoke + dev boot |
+| 4 | The Game Master (core) | ✅ Done | GM pipeline tests (offline GM + validation + e2e turn) + build |
+| 5 | Encounters & reactive world | ✅ Done | build + logic tests; enemy AI / triggers (browser play) |
+| 6 | Survival + death + new run | ✅ Done | decay/death/new-run tests + build; full loop (browser play) |
+| 7 | Replayability & polish | ✅ Done | build + tests; menu/sound/touch/scenario + mobile (browser play) |
 
 > **Discipline (CLAUDE.md §0, §13):** after every phase, make it run, **stop**, report
 > how to test it, and wait for the go-ahead. Do not build ahead of the current phase.
@@ -75,8 +75,8 @@ outbreak/
     ├── vite-env.d.ts         # typed VITE_ env access               [P0 ✅]
     ├── shared/contracts.ts   # GM request/response TYPES + schemas  [P0 ✅]
     ├── engine/
-    │   ├── textures.ts       # placeholder art generation           [P1 ✅ → P2 swap]
-    │   ├── Player.ts         # movement, collision (anim in P2)     [P1 ✅]
+    │   ├── textures.ts       # CC0 asset paths + placeholder fallback [P1/P2 ✅]
+    │   ├── Player.ts         # movement, collision, rotate-to-face   [P1/P2 ✅]
     │   ├── Camera.ts         # follow + bounds                      [P1 ✅]
     │   ├── WorldRenderer.ts  # draws the tilemap                    [P1 ✅]
     │   └── Enemy.ts          # zombie state machine                 [P5]
@@ -84,9 +84,9 @@ outbreak/
     │   ├── constants.ts      # tunables (map size, speeds)          [P0 ✅]
     │   ├── rng.ts            # seeded RNG                           [P1 ✅]
     │   ├── worldgen.ts       # seeded procedural city               [P1 ✅]
-    │   ├── GameState.ts      # central authoritative store          [P3]
-    │   ├── survival.ts       # hunger/thirst/stamina/infection decay [P3/P6]
-    │   ├── inventory.ts      # add/remove/stack/cap                  [P3]
+    │   ├── GameState.ts      # central authoritative store + save    [P3 ✅]
+    │   ├── survival.ts       # hunger/thirst/stamina/infection decay [P3 ✅ → P6]
+    │   ├── inventory.ts      # add/remove/stack/cap                  [P3 ✅]
     │   ├── encounters.ts     # what triggers a GM call & when        [P5]
     │   └── outcomes.ts       # VALIDATE + APPLY GM output            [P4]
     ├── ai/
@@ -95,7 +95,7 @@ outbreak/
     │   ├── claudeProvider.ts # OPTIONAL cloud provider (stub)        [P0 ✅]
     │   └── gameMaster.ts     # assemble → call provider → parse      [P4]
     ├── ui/
-    │   ├── HUD.ts            # stat bars + inventory                 [P3]
+    │   ├── HUD.ts            # stat bars + inventory                 [P3 ✅]
     │   ├── EncounterModal.ts # free-text box + 4 choices + narrative [P4]
     │   └── MainMenu.ts       # title / new run                       [P7]
     └── scenes/
@@ -159,37 +159,34 @@ Each phase lists: **Goal**, **Build**, **Deliverables**, **Verify (how we know i
   - **Manual smoke (browser):** WASD/arrows move the player; camera follows; player cannot pass through building walls; `R` yields a visibly different city; `?seed=foo` reproduces the same city.
 - **Exit gate:** walk the city, collide with walls, regenerate. ✔ **Met.**
 
-### Phase 2 — Designed art (CC0)
+### ✅ Phase 2 — Designed art (CC0) (DONE)
 - **Goal:** *"It looks like a real game."*
-- **Build:**
-  - Add curated **CC0** packs (Kenney Topdown Shooter / Roguelike / Tiny Town + UI) under `public/assets/`. Originals/CC0 only — **no copyrighted game art** (§9, §15).
-  - Pack character frames into a Phaser **texture atlas**; define **idle + 4-direction walk** animations for player, walker, runner, survivor.
-  - Map worldgen tile types → real city tiles (roads, sidewalks, interiors, walls, doors) + props (cars, crates, barricades, loot containers).
-  - Keep `textures.ts` placeholders as the fallback for any missing sprite (tag `// TODO`).
-- **Deliverables:** real-looking city + animated player; placeholders only where a sprite is genuinely missing.
+- **Built:**
+  - Downloaded two **CC0 Kenney** packs — **Roguelike Modern City** (top-down city tiles) and **Top-down Shooter** (characters). License CC0, recorded in `public/assets/CREDITS.md`. No copyrighted game art (§9, §15).
+  - **City tileset** (`public/assets/tiles/city_tileset.png`): a 32px, 6-frame strip baked from chosen 16×16 city tiles (upscaled 2×, nearest-neighbor), in `Tile` enum order — Road (asphalt), Sidewalk (pavement), Floor (warm interior), Wall (brick), Door (brick + an original open-doorway overlay), Grass. `WorldRenderer` is unchanged; it just loads this instead of flat colours.
+  - **Characters** (`public/assets/characters/*.png`): survivor (player), zombie (walker/runner), survivor-NPC — top-down sprites that default-face **east** and are **rotated toward movement**, with a subtle walk bob. Zombie/NPC textures are preloaded for Phase 5.
+  - `textures.ts` placeholder generators kept as a **fallback** (used only if a CC0 asset fails to load), tagged accordingly.
 - **Verify:**
-  - Asset-license check: every imported pack is CC0; record sources in `public/assets/CREDITS.md`.
-  - Animation smoke: player shows idle vs. the 4 directional walk cycles; tiles align to the 32px grid with no seams/gaps.
-  - `npm run build` clean (assets load; no 404s in dev console).
-- **Exit gate:** the same walkable world now renders with designed sprites/tiles and animates.
+  - Baked tileset visually inspected — 6 frames correct, including the doorway. ✔
+  - `npm run build` clean; production build copies `public/assets` → `dist/assets`. ✔
+  - Dev server serves every asset (`image/png`, HTTP 200). ✔
+  - *(Cannot screenshot the live canvas in this headless sandbox — a 30-second browser glance is the final visual check.)*
+- **Honest scope note:** Kenney's CC0 top-down characters are single-pose sprites designed to **rotate to face** (Project Zomboid–style), not RPG-style 4-direction *frame* sheets — those aren't available CC0 in this top-down style. Rotation-to-face + walk bob is the faithful, intended use of the pack. Road **lane-marking autotiling** (straight vs. intersection vs. crosswalk) is deferred to polish; clean asphalt is used for now.
+- **Exit gate:** the same walkable world now renders with designed CC0 sprites/tiles. ✔ **Met.**
 
-### Phase 3 — State + HUD + save/load
+### ✅ Phase 3 — State + HUD + save/load (DONE)
 - **Goal:** *"Stats live and persist."*
-- **Build:**
-  - `game/GameState.ts` — the authoritative object (CLAUDE.md §7) with **clamp helpers** and death checks (`hp<=0 || infection>=100`).
-  - `game/survival.ts` — hunger/thirst decay over time; stamina drain/regen (decay tuned, fully wired in P6).
-  - `game/inventory.ts` — add/remove, **stack merge**, per-item **cap**, never below 0.
-  - `ui/HUD.ts` — on-screen bars for HP/stamina/hunger/thirst/infection + inventory list.
-  - localStorage persistence: save every few turns + on quit; load on boot.
-- **Deliverables:** live HUD; decaying stats; inventory ops; a run survives a page reload.
+- **Built:**
+  - `game/GameState.ts` — authoritative state (CLAUDE.md §7) with `clampStat`, `isDead` (`hp<=0 || infection>=100`), `newGame`, `pushRecentEvent` (trims to last 6), and versioned localStorage `saveGame`/`loadGame`/`clearSave` with a **shape-validating loader** (corrupt/old saves are ignored).
+  - `game/survival.ts` — `applyDecay`: hunger/thirst fall (thirst faster), stamina regens, starvation/dehydration damages HP, infection climbs once set. Day/night modulation + bite-infection come in Phase 6.
+  - `game/inventory.ts` — `addItem` (stack-merge + `MAX_STACK` cap), `removeItem` (clamped, drops empty stacks, ignores unheld), `hasItem`/`itemCount`. Reused by `outcomes.ts` in Phase 4.
+  - `ui/HUD.ts` — camera-fixed panel: 5 stat bars + values, day/time, inventory list, controls hint, debug line, and a minimal death banner.
+  - `WorldScene` — owns the GameState, runs a survival tick (every 2 s), autosaves (every 4 s + on tab close/shutdown), resumes a save on reload, starts a fresh run on **R**. Debug keys **1/2/3/4** (eat/drink/hurt/bandage) make stats + inventory visibly change and persist — Phase-3 stand-ins for Phase-4 GM outcomes.
 - **Verify:**
-  - **Unit tests (headless, Node/esbuild like the worldgen harness):**
-    - clamp keeps every stat in `0–100` for extreme deltas;
-    - `inventory_remove` ignores unheld items and never goes negative; `inventory_add` merges stacks and respects the cap;
-    - death predicate fires exactly at `hp<=0` / `infection>=100`.
-    - round-trip: `serialize(GameState)` → `deserialize` is identity.
-  - **Manual smoke:** HUD reflects changes; reload restores the same run (seed, stats, inventory, position).
-- **Exit gate:** stats decay, HUD shows them, and a run reloads intact.
+  - **21 headless unit tests** (clamp bounds + NaN; inventory stack/cap/clamp/unheld; decay + starvation + infection climb; death predicates; recentEvents trim; save/load round-trip + corrupt/invalid-shape rejection) → **ALL PASSED**.
+  - `npm run build` clean; dev server serves the new modules (GameState, survival, inventory, HUD).
+- **Note:** death currently shows a minimal banner + freeze; the full GameOver summary and new-run handoff are Phase 6. Infection only rises here (no zombies to inflict it until Phase 5).
+- **Exit gate:** stats decay live, the HUD shows them, items consume, and a run reloads intact. ✔ **Met.**
 
 ### Phase 4 — The Game Master (core feature)
 - **Goal:** *"I can act and the local AI decides what happens."*
@@ -261,7 +258,7 @@ Each phase lists: **Goal**, **Build**, **Deliverables**, **Verify (how we know i
 
 We verify at three levels, matched to the three layers:
 
-1. **Pure-logic unit tests (headless, fast).** worldgen, rng, inventory, survival, clamping, and `outcomes.ts` are Phaser-free (or can be exercised without a canvas), so they're bundled with esbuild and run under Node — exactly like the Phase 1 worldgen harness already in use. These are the bulk of correctness coverage.
+1. **Pure-logic unit tests (headless, fast).** worldgen, rng, inventory, survival, clamping, and `outcomes.ts` are Phaser-free (or can be exercised without a canvas), so they're bundled with esbuild and run under Node. These live in `tests/*.test.ts` and run via **`npm test`** (currently: `worldgen.test.ts` + `state.test.ts`, 21 state checks). They are the bulk of correctness coverage.
 2. **Type-check + build gate.** `npm run build` runs `tsc --noEmit` (strict) then a production Vite bundle. CI-friendly; catches contract drift between `shared/contracts.ts` and consumers.
 3. **Runtime smoke + manual play.** Dev-server boot check (HTTP 200 for `/` and module transforms) plus a short scripted manual checklist per phase (move, collide, trigger, act, die, restart). The live-Ollama turn test (Phase 4+) confirms the offline AI path end-to-end.
 

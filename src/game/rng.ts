@@ -57,3 +57,12 @@ export function createRng(seed: string): Rng {
 export function randomSeed(): string {
   return Math.random().toString(36).slice(2, 10);
 }
+
+/** Non-seeded RNG for live, non-reproducible rolls (combat crits, loot drops). */
+export const liveRng: Rng = {
+  next: () => Math.random(),
+  int: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
+  range: (min, max) => Math.random() * (max - min) + min,
+  chance: (p) => Math.random() < p,
+  pick: (arr) => arr[Math.floor(Math.random() * arr.length)],
+};

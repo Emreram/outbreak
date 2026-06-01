@@ -17,17 +17,23 @@ export class Player {
   readonly sprite: Phaser.Physics.Arcade.Sprite;
   private readonly cursors: Phaser.Types.Input.Keyboard.CursorKeys;
   private readonly wasd: WasdKeys;
+  private facing = 0; // radians; Kenney top-down sprites default-face east (+x)
+  private walkT = 0; // walk-bob phase accumulator
+  private _sprinting = false;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
+    this.sprite.setOrigin(0.5, 0.5);
     this.sprite.setCollideWorldBounds(true);
     this.sprite.setDepth(10);
 
-    // Square body slightly smaller than a tile -> clean collision through doors.
-    const bodySize = Math.floor(TILE_SIZE * 0.7);
+    // Compact square body centred in the sprite frame (whatever its size) so the
+    // player passes cleanly through 1-tile doorways. The visual rotation applied
+    // in update() is cosmetic — the arcade body stays an axis-aligned box.
+    const bodySize = 20;
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
     body.setSize(bodySize, bodySize);
-    body.setOffset((TILE_SIZE - bodySize) / 2, (TILE_SIZE - bodySize) / 2);
+    body.setOffset((this.sprite.width - bodySize) / 2, (this.sprite.height - bodySize) / 2);
 
     const keyboard = scene.input.keyboard;
     if (!keyboard) {
@@ -43,7 +49,7 @@ export class Player {
     }) as WasdKeys;
   }
 
-  update(): void {
+  update(canSprint = false, ext?: { x: number; y: number; sprint?: boolean }): void {
     const left = this.cursors.left.isDown || this.wasd.left.isDown;
     const right = this.cursors.right.isDown || this.wasd.right.isDown;
     const up = this.cursors.up.isDown || this.wasd.up.isDown;
@@ -56,13 +62,63 @@ export class Player {
     if (up) vy -= 1;
     if (down) vy += 1;
 
-    // Normalise so diagonals aren't faster.
+    // Combine with external (touch joystick) input, if any.
+    if (ext) {
+      vx += ext.x;
+      vy += ext.y;
+    }
+
     const len = Math.hypot(vx, vy);
+    const sprint = len > 0 && canSprint && (this.cursors.shift.isDown || ext?.sprint === true);
+    this._sprinting = sprint;
+    const speed = sprint ? PLAYER_SPEED * 1.6 : PLAYER_SPEED;
+
+    // Normalise so diagonals aren't faster.
     if (len > 0) {
-      this.sprite.setVelocity((vx / len) * PLAYER_SPEED, (vy / len) * PLAYER_SPEED);
+      this.sprite.setVelocity((vx / len) * speed, (vy / len) * speed);
+      this.facing = Math.atan2(vy, vx); // turn to face the direction of travel
+      this.walkT += sprint ? 2 : 1;
+      // Walk lean/sway via rotation — scale is left free for the hit/lunge tweens.
+      this.sprite.setRotation(this.facing + Math.sin(this.walkT * 0.35) * 0.07);
     } else {
       this.sprite.setVelocity(0, 0);
+      this.sprite.setRotation(this.facing);
     }
+  }
+
+  /** Tint the survivor sprite (character-creation appearance). */
+  setAppearance(color?: number): void {
+    if (color !== undefined) this.sprite.setTint(color);
+    else this.sprite.clearTint();
+  }
+
+  /** Quick squash-stretch punch when swinging a melee hit. */
+  lunge(): void {
+    this.sprite.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: 1.18,
+      scaleY: 0.88,
+      duration: 90,
+      yoyo: true,
+      ease: "Quad.easeOut",
+    });
+  }
+
+  /** Recoil pop when taking a hit. */
+  recoil(): void {
+    this.sprite.scene.tweens.add({
+      targets: this.sprite,
+      scaleX: 1.25,
+      scaleY: 1.25,
+      duration: 100,
+      yoyo: true,
+      ease: "Quad.easeOut",
+    });
+  }
+
+  /** True while sprinting this frame (drains stamina, widens enemy aggro). */
+  get sprinting(): boolean {
+    return this._sprinting;
   }
 
   /** Player tile coordinates, handy for the debug overlay. */
@@ -71,5 +127,11 @@ export class Player {
       tx: Math.floor(this.sprite.x / TILE_SIZE),
       ty: Math.floor(this.sprite.y / TILE_SIZE),
     };
+  }
+
+  /** Whether the player is moving (makes noise that widens zombie aggro). */
+  isMoving(): boolean {
+    const b = this.sprite.body as Phaser.Physics.Arcade.Body;
+    return Math.abs(b.velocity.x) > 1 || Math.abs(b.velocity.y) > 1;
   }
 }
