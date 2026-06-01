@@ -6,7 +6,7 @@
 
 import type { Rng } from "./rng";
 
-export type WorldEventKind = "horde" | "flyover" | "raiders" | "supply_drop" | "trader";
+export type WorldEventKind = "horde" | "flyover" | "raiders" | "supply_drop" | "trader" | "dilemma";
 
 export const WORLD_EVENTS: readonly WorldEventKind[] = [
   "horde",
@@ -14,6 +14,7 @@ export const WORLD_EVENTS: readonly WorldEventKind[] = [
   "raiders",
   "supply_drop",
   "trader",
+  "dilemma",
 ];
 
 interface EventWeight {
@@ -28,6 +29,9 @@ const WEIGHTS: EventWeight[] = [
   { kind: "flyover", minDay: 0, weight: () => 1.2 },
   { kind: "supply_drop", minDay: 0, weight: () => 1.6 },
   { kind: "trader", minDay: 1, weight: (d, n) => (n ? 0.5 : 2) - Math.min(1, d * 0.05) },
+  // A rare narrative dilemma — the only thing that opens the GM choice/chat modal.
+  // Not on day 0 (let the opening stay calm); rare thereafter.
+  { kind: "dilemma", minDay: 1, weight: (d, n) => 0.8 + d * 0.05 + (n ? 0.3 : 0) },
 ];
 
 /** Weighted pick of the next world event, gated + scaled by the effective day. */

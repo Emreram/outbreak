@@ -145,11 +145,6 @@ const SIEGE_MS = 600; // how often zombies gnaw at adjacent barricades / spikes 
 const PHASES = ["dawn", "day", "dusk", "night"] as const;
 const SEG_MS = 45000; // real seconds per time-of-day segment
 
-// The AI text-encounter that E used to open on a building/biome is DORMANT (player
-// request: E does nothing without a physical target). The encounter system stays in
-// the tree (startEncounter / EncounterModal / gameMaster) — flip this to re-enable.
-const ENABLE_TEXT_ENCOUNTERS: boolean = false;
-
 // Open-ground locations (outdoor biomes) vs enclosed buildings — shapes which
 // instant quick-actions an encounter's opening prompt offers.
 const OPEN_LOCS = new Set<string>([
@@ -1278,19 +1273,8 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     if (this.tryFarmAction()) return; // till / plant / water / harvest when applicable
-    // Paths 8 & 9 — the building / biome AI text-encounter — are dormant: with no
-    // physical target above, E now does nothing (no modal, no pause). Re-enable by
-    // flipping ENABLE_TEXT_ENCOUNTERS at the top of this file.
-    if (ENABLE_TEXT_ENCOUNTERS) {
-      const b = this.buildingAt();
-      if (b) {
-        const name = b.type.replace(/_/g, " ");
-        this.startEncounter(b.type, `You take stock of the ${name} around you.`, name);
-      } else {
-        const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
-        this.startEncounter(biome, "You scan the area and the way ahead.", "The area");
-      }
-    }
+    // No physical target → E does nothing. The GM choice/chat modal is NOT opened on
+    // demand; it fires only on a rare "dilemma" world event (see dilemmaEvent).
   }
 
   // --- farming (Feature 5) -----------------------------------------------------
@@ -1926,6 +1910,9 @@ export class WorldScene extends Phaser.Scene {
         this.showToast("A trader has wandered into the area — find them (E to trade).");
         break;
       }
+      case "dilemma":
+        this.dilemmaEvent(); // the rare event that opens the GM choice/chat modal
+        break;
     }
   }
 
@@ -2241,7 +2228,7 @@ export class WorldScene extends Phaser.Scene {
     this.craftUi.open(this.state, this.stationsNear()); // nearby campfire/workbench unlock station recipes
   }
 
-  private startEncounter(loc: string, situation: string, title: string): void {
+  private startEncounter(loc: string, situation: string, title: string, choices?: string[]): void {
     if (this.dead || this.inEncounter || this.enacting) return;
     this.inEncounter = true;
     this.encounterTurns = 0;
@@ -2253,7 +2240,29 @@ export class WorldScene extends Phaser.Scene {
     sfx.ui();
     // Ask FIRST — instant, no GM call until the player answers. A few contextual
     // quick actions PLUS a free-text box; the GM only runs on their choice.
-    this.modal.openPrompt(title, situation, this.openingChoicesFor(loc));
+    this.modal.openPrompt(title, situation, choices ?? this.openingChoicesFor(loc));
+  }
+
+  // Rare scripted dilemmas — the ONLY thing that opens the GM choice/chat modal
+  // (E never does). Fired by the "dilemma" world event; the GM resolves the choice.
+  private static readonly DILEMMAS: ReadonlyArray<{ title: string; situation: string; choices: string[] }> = [
+    { title: "A cry for help", situation: "A voice cracks across the rooftops — someone's pinned nearby, begging for help. It could be real. It could be bait.", choices: ["Rush to help them", "Approach carefully, weapon up", "Call out and wait", "Ignore it and move on"] },
+    { title: "Stranger at the treeline", situation: "A lone figure watches you from cover, hand hovering near their belt. Neither of you has moved.", choices: ["Lower your weapon and talk", "Aim and warn them off", "Offer to trade supplies", "Back away slowly"] },
+    { title: "Distant gunfire", situation: "Gunshots crack a few streets over — a fight. Wherever there's a fight there's loot, and a good way to die.", choices: ["Move toward the gunfire", "Wait and scavenge the aftermath", "Slip away from the noise", "Set up an ambush nearby"] },
+    { title: "A sealed cache", situation: "A chained cargo container, deep scratch-marks raked all around it. Something wanted in. Or out.", choices: ["Force it open", "Listen at the door first", "Mark it and leave", "Rig a trap and wait"] },
+    { title: "The wounded one", situation: "A survivor slumps against the wall, bleeding — a bite half-hidden under a torn sleeve. They lock eyes with you.", choices: ["Help dress the wound", "Keep your distance", "Share water and talk", "End it, mercifully"] },
+    { title: "Smoke on the wind", situation: "A thin column of smoke rises a block away — a campfire, freshly lit. Someone is close, and warm.", choices: ["Investigate the fire", "Watch from cover first", "Announce yourself loudly", "Avoid it entirely"] },
+  ];
+
+  /** Fire a rare narrative dilemma → opens the GM choice modal. Skipped if the player
+   *  is mid-anything (a modal, driving, build mode) so it never interrupts. */
+  private dilemmaEvent(): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.buildMode || this.driving) return;
+    const d = liveRng.pick(WorldScene.DILEMMAS as { title: string; situation: string; choices: string[] }[]);
+    const b = this.buildingAt();
+    const loc = b ? b.type : this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+    this.showToast("Something's happening nearby…");
+    this.startEncounter(loc, d.situation, d.title, d.choices);
   }
 
   /** A few instant, contextual quick-actions for the opening prompt (plus free text). */

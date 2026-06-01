@@ -24,8 +24,10 @@ ok(
 const day0 = new Set([...Array(300)].map(() => rollWorldEvent(rng, 0, false)));
 ok(![...day0].includes("raiders"), "raiders never fire on day 0 (minDay 2)");
 ok([...day0].every((k) => k === "flyover" || k === "supply_drop"), "only flyover/supply_drop are eligible on day 0");
+ok(![...day0].includes("dilemma"), "the narrative dilemma never fires on day 0 (calm start)");
 const day5 = new Set([...Array(300)].map(() => rollWorldEvent(rng, 5, true)));
 ok(day5.has("horde") && day5.has("raiders"), "hordes + raiders become eligible by day 5");
+ok(day5.has("dilemma"), "the rare narrative dilemma becomes eligible from day 1+");
 
 // --- scheduling: positive, bounded, and rarer-early on average ---
 const meanDelay = (day: number, night: boolean) => {
