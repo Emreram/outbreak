@@ -23,6 +23,7 @@ export const RECIPES: Recipe[] = [
   { id: "molotov", out: "Molotov", outQty: 1, inputs: [{ item: "Empty Bottle", qty: 1 }, { item: "Fuel Canister", qty: 1 }, { item: "Cloth", qty: 1 }], desc: "Improvised firebomb." },
   { id: "pipe_bomb", out: "Pipe Bomb", outQty: 1, inputs: [{ item: "Scrap Metal", qty: 1 }, { item: "Gunpowder", qty: 2 }, { item: "Duct Tape", qty: 1 }], station: "workbench", desc: "Explosive trap." },
   { id: "cooked_meal", out: "Cooked Meal", outQty: 1, inputs: [{ item: "Potato", qty: 1 }, { item: "Carrot", qty: 1 }], station: "campfire", desc: "A hot meal (big +hunger, +HP)." },
+  { id: "cooked_meat", out: "Cooked Meat", outQty: 1, inputs: [{ item: "Raw Meat", qty: 1 }], station: "campfire", desc: "Cook raw meat — safe + filling." },
   { id: "leather", out: "Leather", outQty: 1, inputs: [{ item: "Hide", qty: 2 }], desc: "Tan hides into leather." },
   { id: "barricade_kit", out: "Barricade Kit", outQty: 1, inputs: [{ item: "Wood Plank", qty: 2 }, { item: "Duct Tape", qty: 1 }], station: "workbench", desc: "Board up a window or door." },
 ];

@@ -39,6 +39,7 @@ import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
 import type { ColliderSpec } from "../engine/ChunkRenderer";
 import { Player } from "../engine/Player";
 import { Enemy } from "../engine/Enemy";
+import { Animal, ANIMALS, type AnimalKind } from "../engine/Animal";
 import type { ZombieDef } from "../game/enemies/types";
 import { rollAmbientUndead, rollZombie } from "../game/enemies/spawnTable";
 import { getZombie } from "../game/enemies/catalog";
@@ -86,6 +87,11 @@ const OPEN_LOCS = new Set<string>([
   "marsh", "coast", "quarry", "parkland", "construction_site", "ocean",
 ]);
 
+// Natural biomes where wild game roams (Feature 6).
+const ANIMAL_BIOMES = new Set<string>([
+  "forest", "dense_woods", "grassland", "farmland", "parkland", "riverbank", "marsh", "coast",
+]);
+
 export class WorldScene extends Phaser.Scene {
   private player!: Player;
   private chunks!: ChunkManager;
@@ -107,6 +113,10 @@ export class WorldScene extends Phaser.Scene {
   private static readonly MAX_ENCOUNTER_TURNS = 2;
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
+  private animals: Animal[] = [];
+  private animalGroup!: Phaser.Physics.Arcade.Group;
+  private animalAcc = 0;
+  private animalDelay = 24000;
   private ambientAcc = 0;
   private ambientDelay = 30000;
   private aiNoticeShown = false; // show the "AI offline" toast at most once per run
@@ -153,6 +163,8 @@ export class WorldScene extends Phaser.Scene {
     this.decayAcc = 0;
     this.saveAcc = 0;
     this.enemies = [];
+    this.animals = [];
+    this.animalAcc = 0;
     this.ambientAcc = 0;
     this.ambientDelay = 30000; // set properly once state/day is known (below)
     this.aiNoticeShown = false;
@@ -182,6 +194,7 @@ export class WorldScene extends Phaser.Scene {
     // them. The `collide` array is populated below (once the player exists) and
     // read lazily by the manager when it loads a chunk.
     this.enemyGroup = this.physics.add.group();
+    this.animalGroup = this.physics.add.group();
     this.projectileGroup = this.physics.add.group();
     this.enemyProjGroup = this.physics.add.group();
     this.itemGroup = this.physics.add.group();
@@ -232,12 +245,14 @@ export class WorldScene extends Phaser.Scene {
     collide.push(
       { target: this.player.sprite },
       { target: this.enemyGroup },
+      { target: this.animalGroup },
       { target: this.projectileGroup, callback: (o) => this.killProjectile(o as unknown as Phaser.Physics.Arcade.Image) },
       { target: this.enemyProjGroup, callback: (o) => this.killProjectile(o as unknown as Phaser.Physics.Arcade.Image) },
     );
 
     // Projectiles hit enemies; enemy acid + dropped loot overlap the player.
     this.physics.add.overlap(this.projectileGroup, this.enemyGroup, (a, b) => this.onProjectileHit(a, b));
+    this.physics.add.overlap(this.projectileGroup, this.animalGroup, (a, b) => this.onProjAnimal(a, b));
     this.physics.add.overlap(this.player.sprite, this.enemyProjGroup, (_p, pr) => this.onEnemyProjHit(pr));
     this.physics.add.overlap(this.player.sprite, this.itemGroup, (_p, item) =>
       this.pickupDrop(item as unknown as Phaser.Physics.Arcade.Image),
@@ -424,6 +439,7 @@ export class WorldScene extends Phaser.Scene {
       this.chunks.ensureAround(this.player.sprite.x, this.player.sprite.y);
       this.tickClouds(time);
       this.updateEnemies(time);
+      this.updateAnimals(time);
 
       if (this.player.isMoving() && time - this.lastStep > 300) {
         this.lastStep = time;
@@ -451,6 +467,13 @@ export class WorldScene extends Phaser.Scene {
         this.ambientAcc = 0;
         this.ambientDelay = this.scheduleAmbientMs();
         this.ambientEvent();
+      }
+
+      this.animalAcc += delta;
+      if (this.animalAcc >= this.animalDelay) {
+        this.animalAcc = 0;
+        this.animalDelay = 18000 + Math.random() * 22000;
+        this.spawnWildAnimals();
       }
 
       this.saveAcc += delta;
@@ -776,6 +799,82 @@ export class WorldScene extends Phaser.Scene {
         if (tile) this.spawnEnemy(rollZombie(s.type, liveRng, day), tile.x, tile.y);
       }
     }
+  }
+
+  // --- wild animals (Feature 6) ----------------------------------------------
+
+  private updateAnimals(now: number): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    for (const a of this.animals) a.update(px, py, now);
+    for (let i = this.animals.length - 1; i >= 0; i--) {
+      const a = this.animals[i];
+      if (Math.hypot(a.sprite.x - px, a.sprite.y - py) > 2200) {
+        a.destroy(); // wandered off — despawn to stay bounded
+        this.animals.splice(i, 1);
+      }
+    }
+  }
+
+  private spawnWildAnimals(): void {
+    if (this.animals.length >= 8) return;
+    if (!ANIMAL_BIOMES.has(this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y))) return;
+    const { tx, ty } = this.player.tilePos();
+    const n = Phaser.Math.Between(1, 2);
+    for (let i = 0; i < n; i++) {
+      const t = this.chunks.walkableNear(tx, ty, 6, 12);
+      if (t) this.spawnAnimal(liveRng.pick(["rabbit", "deer", "deer", "boar"]) as AnimalKind, t.x, t.y);
+    }
+  }
+
+  private spawnAnimal(kind: AnimalKind, x: number, y: number): void {
+    const a = new Animal(this, x, y, ANIMALS[kind]);
+    this.animalGroup.add(a.sprite);
+    this.animals.push(a);
+    spawnPopIn(this, a.sprite);
+  }
+
+  /** A melee swing also strikes the nearest animal in reach (hunting). */
+  private huntNearbyAnimal(range: number, damage: number): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: Animal | null = null;
+    let bestD = range;
+    for (const a of this.animals) {
+      const d = Math.hypot(a.sprite.x - px, a.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = a;
+      }
+    }
+    if (!best) return;
+    bloodBurst(this, best.sprite.x, best.sprite.y, 8);
+    if (best.takeDamage(damage)) this.killAnimal(best);
+  }
+
+  private killAnimal(a: Animal): void {
+    const i = this.animals.indexOf(a);
+    if (i < 0) return;
+    this.animals.splice(i, 1);
+    sfx.kill();
+    for (const d of a.def.drops) this.spawnDrop(a.sprite.x, a.sprite.y, d.item, d.qty);
+    pushRecentEvent(this.state, `Hunted a ${a.def.name}.`);
+    this.grantXp("combat", 3);
+    const body = a.sprite.body as Phaser.Physics.Arcade.Body | null;
+    if (body) body.enable = false;
+    deathFade(this, a.sprite);
+  }
+
+  /** A bullet/arrow striking an animal (ranged hunting). */
+  private onProjAnimal(projObj: unknown, animalObj: unknown): void {
+    const spr = projObj as Phaser.Physics.Arcade.Image;
+    const data = spr.getData("p") as ProjData | undefined;
+    if (!data) return;
+    const animal = this.animals.find((a) => a.sprite === animalObj);
+    if (!animal) return;
+    bloodBurst(this, animal.sprite.x, animal.sprite.y, 8);
+    if (animal.takeDamage(data.damage)) this.killAnimal(animal);
+    this.killProjectile(spr);
   }
 
   private spawnAmbientWalkers(n: number): void {
@@ -1383,6 +1482,7 @@ export class WorldScene extends Phaser.Scene {
     this.cameras.main.shake(50, 0.003);
     this.player.lunge();
     meleeArc(this, px, py, this.player.sprite.rotation);
+    this.huntNearbyAnimal(hit.range + 16, hit.damage); // a swing also strikes nearby game
 
     const targets = this.enemies
       .map((e) => ({ e, d: Math.hypot(e.sprite.x - px, e.sprite.y - py) }))

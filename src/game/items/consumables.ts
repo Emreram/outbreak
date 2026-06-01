@@ -63,6 +63,9 @@ const FOOD: ConsumableDef[] = [
   con("Tomato", "common", "food", { hunger: 10, thirst: 4 }),
   con("Potato", "common", "food", { hunger: 16 }),
   con("Carrot", "common", "food", { hunger: 12 }),
+  // Hunting (Feature 6): raw meat is risky (small infection), cooking makes it great.
+  con("Raw Meat", "common", "food", { hunger: 18, infection: 3 }),
+  con("Cooked Meat", "uncommon", "food", { hunger: 42, hp: 10 }),
 ];
 
 const DRINK: ConsumableDef[] = [
@@ -103,6 +106,7 @@ const MATERIALS: MaterialDef[] = [
   mat("Hide", "common", 0x8a6a3a),
   mat("Leather", "common", 0x6b4a2a),
   mat("Barricade Kit", "uncommon", 0x9c6b3f),
+  mat("Bone", "common", 0xe8e2d0),
 ];
 
 const ARMOR: ArmorDef[] = [
