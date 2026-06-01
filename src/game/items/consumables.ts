@@ -57,6 +57,12 @@ const FOOD: ConsumableDef[] = [
   con("Canned Food", "common", "food", { hunger: 30 }),
   con("MRE", "uncommon", "food", { hunger: 45, thirst: 10 }),
   con("Cooked Meal", "rare", "food", { hunger: 60, hp: 8 }),
+  // Harvested produce (Feature 5) — raw restores some hunger; cooking enhances later.
+  con("Wheat", "common", "food", { hunger: 8 }),
+  con("Corn", "common", "food", { hunger: 14 }),
+  con("Tomato", "common", "food", { hunger: 10, thirst: 4 }),
+  con("Potato", "common", "food", { hunger: 16 }),
+  con("Carrot", "common", "food", { hunger: 12 }),
 ];
 
 const DRINK: ConsumableDef[] = [
@@ -85,6 +91,14 @@ const MATERIALS: MaterialDef[] = [
   mat("Weapon Parts", "rare", 0x9aa3ad),
   mat("Lockpick", "uncommon", 0xc8d0d8), // opens locked containers (consumed)
   mat("Bolt Cutters", "rare", 0xd1483a), // opens locked containers (reusable)
+  // Farming tools + seeds (Feature 5)
+  mat("Hoe", "common", 0x9c6b3f),
+  mat("Watering Can", "common", 0x4ec3ff),
+  mat("Wheat Seeds", "common", 0xe6c34a),
+  mat("Corn Seeds", "common", 0xf2d43f),
+  mat("Tomato Seeds", "common", 0xe2462f),
+  mat("Potato Seeds", "common", 0xb98a4a),
+  mat("Carrot Seeds", "common", 0xe07a2f),
 ];
 
 const ARMOR: ArmorDef[] = [

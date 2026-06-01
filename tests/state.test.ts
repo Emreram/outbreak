@@ -13,6 +13,7 @@ import {
 } from "../src/game/GameState";
 import { addItem, removeItem, hasItem, itemCount, useConsumable, quickUseItems, MAX_STACK } from "../src/game/inventory";
 import { applyDecay, DEFAULT_DECAY } from "../src/game/survival";
+import { CROPS, SEED_TO_CROP, growPlots, plotAt, plotStage, tillPlot } from "../src/game/farming";
 
 // in-memory localStorage shim so persistence is testable under Node
 const store = new Map<string, string>();
@@ -114,6 +115,25 @@ ok(q[2]?.item === "First-Aid Kit", "quick slot 2 = heal");
 ok(q[3]?.item === "Antibiotics", "quick slot 3 = cure/anti-infection");
 const qFresh = quickUseItems(newGame("t"));
 ok(qFresh.length === 4 && qFresh.every((x) => x === undefined || x.qty > 0), "quick slots length 4, no empty stacks (sparse-safe)");
+
+// --- farming lifecycle (Feature 5) ---
+let fg = newGame("farm");
+const fp = tillPlot(fg, 100, 100);
+ok(plotAt(fg, 100, 100) === fp && !fp.crop && plotStage(fp) === 0, "till creates an empty tilled plot");
+ok(SEED_TO_CROP["Potato Seeds"] === "potato", "seed name maps to its crop");
+fp.crop = "potato";
+fp.growth = 0;
+const segs = CROPS.potato.growthSegments;
+for (let i = 0; i < segs; i++) growPlots(fg); // unwatered → ripe after growthSegments
+ok(plotStage(fp) === 3 && fp.growth >= 1, `crop ripens after ${segs} unwatered segments`);
+const fg2 = newGame("farm2");
+const fp2 = tillPlot(fg2, 5, 5);
+fp2.crop = "potato";
+for (let i = 0; i < Math.ceil(segs / 2); i++) {
+  fp2.watered = true;
+  growPlots(fg2);
+}
+ok(fp2.growth >= 1, "watered crop ripens in about half the time");
 
 console.log(fail === 0 ? "ALL STATE CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);
