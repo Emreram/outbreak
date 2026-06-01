@@ -41,15 +41,35 @@ export type WebLLMState = "idle" | "loading" | "ready" | "error";
 let state: WebLLMState = "idle";
 let engine: MLCEngine | null = null;
 let loadError = "";
+let warmed = false; // a confirmed, time-bounded warm-up succeeded — only then is it usable
 
 export function webllmState(): WebLLMState {
   return state;
 }
+/** Usable by the Game Master only after the model loaded AND a warm-up inference
+ *  actually returned — so we never route turns into a model that hangs/can't run. */
 export function webllmReady(): boolean {
-  return state === "ready" && engine !== null;
+  return state === "ready" && engine !== null && warmed;
 }
 export function webllmError(): string {
   return loadError;
+}
+
+/** Reject `p` after `ms` so a stuck WebGPU call can never hang the game. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("webllm timeout")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
 }
 
 /** Download + initialise the in-browser model. Idempotent; reports progress. */
@@ -62,6 +82,7 @@ export async function loadWebLLM(onProgress?: (r: InitProgressReport) => void): 
   }
   state = "loading";
   loadError = "";
+  warmed = false;
   try {
     const webllm = await import("@mlc-ai/web-llm"); // code-split: only fetched when enabled
     engine = await webllm.CreateMLCEngine(webllmModel(), {
@@ -109,17 +130,25 @@ async function complete(
   return content;
 }
 
-/** Best-effort tiny generation so WebGPU shaders compile now, not on the first turn. */
+/**
+ * Compile WebGPU shaders with a tiny generation, time-bounded. The model is only
+ * marked usable (`warmed`) if this actually returns — so a GPU/model that stalls
+ * here leaves the game on the offline GM instead of hanging on the first turn.
+ */
 export async function warmUpWebLLM(): Promise<void> {
-  if (!engine) return;
+  if (!engine || warmed) return;
   try {
-    await engine.chat.completions.create({
-      messages: [{ role: "user", content: 'Reply with {"ok":true}' }],
-      max_tokens: 8,
-      response_format: { type: "json_object" },
-    });
+    await withTimeout(
+      engine.chat.completions.create({
+        messages: [{ role: "user", content: 'Reply with {"ok":true}' }],
+        max_tokens: 8,
+        response_format: { type: "json_object" },
+      }),
+      30000,
+    );
+    warmed = true; // confirmed working
   } catch {
-    /* best-effort */
+    warmed = false; // stuck/too slow — the GM stays on the offline brain
   }
 }
 

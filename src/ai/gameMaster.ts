@@ -24,6 +24,30 @@ type Brain = "webllm" | "ollama" | "claude" | "offline";
 let activeBrain: Brain = "offline";
 let lastTurnFellBack = false;
 
+// A real LLM call must never hang the game. Bound every provider call; on timeout
+// we fall back to the always-instant offline GM. Generous enough for a slow-but-
+// working model, finite so a stalled one can't freeze a run.
+const TURN_TIMEOUT_MS = 45000;
+const SCENARIO_TIMEOUT_MS = 30000;
+
+class TimeoutError extends Error {}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new TimeoutError("provider timeout")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 /**
  * Pick the brain for THIS call (cheap — Ollama detection is cached internally).
  * The in-browser WebLLM wins when the player has enabled it and the model is
@@ -81,21 +105,26 @@ export async function runTurn(state: GameState, input: TurnInput, locationType: 
   activeBrain = brain;
   const payload = buildTurnPayload(state, input, locationType);
 
+  let firstErr: unknown;
   try {
-    return sanitizeGM(await callJSON(provider, GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA));
-  } catch {
+    return sanitizeGM(await withTimeout(callJSON(provider, GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA), TURN_TIMEOUT_MS));
+  } catch (e) {
+    firstErr = e;
+  }
+  // Retry once for a transient (fast) parse failure — but NOT for a timeout
+  // (the provider is stalled; another wait would just double the freeze).
+  if (!(firstErr instanceof TimeoutError)) {
     try {
-      // retry once (CLAUDE.md §8.4)
-      return sanitizeGM(await callJSON(provider, GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA));
+      return sanitizeGM(await withTimeout(callJSON(provider, GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA), TURN_TIMEOUT_MS));
     } catch {
-      if (brain !== "offline") lastTurnFellBack = true; // real brain failed -> note it
-      try {
-        // configured provider unreachable -> offline GM
-        return sanitizeGM(JSON.parse(await offline.generate(GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA)));
-      } catch {
-        return safeFallback();
-      }
+      /* fall through to offline */
     }
+  }
+  if (brain !== "offline") lastTurnFellBack = true; // real brain failed/stalled -> note it
+  try {
+    return sanitizeGM(JSON.parse(await offline.generate(GM_SYSTEM_PROMPT, payload, GM_OUTPUT_SCHEMA)));
+  } catch {
+    return safeFallback();
   }
 }
 
@@ -107,7 +136,7 @@ export async function generateScenario(theme?: string, background?: string): Pro
   const payload = { kind: "scenario", theme: chosen, background };
 
   try {
-    return sanitizeScenario(await callJSON(provider, SCENARIO_SYSTEM_PROMPT, payload, SCENARIO_OUTPUT_SCHEMA), chosen);
+    return sanitizeScenario(await withTimeout(callJSON(provider, SCENARIO_SYSTEM_PROMPT, payload, SCENARIO_OUTPUT_SCHEMA), SCENARIO_TIMEOUT_MS), chosen);
   } catch {
     if (brain !== "offline") lastTurnFellBack = true;
     try {
