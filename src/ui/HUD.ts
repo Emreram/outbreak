@@ -46,17 +46,23 @@ export class HUD {
   private readonly controlsText: Phaser.GameObjects.Text;
   private readonly debugText: Phaser.GameObjects.Text;
   private deathText?: Phaser.GameObjects.Text;
+  private readonly layer?: Phaser.GameObjects.Layer;
 
-  constructor(scene: Phaser.Scene) {
+  constructor(scene: Phaser.Scene, layer?: Phaser.GameObjects.Layer) {
     this.scene = scene;
+    this.layer = layer;
     this.bg = scene.add.graphics().setScrollFactor(0).setDepth(DEPTH);
     this.bars = scene.add.graphics().setScrollFactor(0).setDepth(DEPTH + 1);
+    layer?.add([this.bg, this.bars]);
 
-    const mk = (x: number, y: number, size: string, color: string) =>
-      scene.add
+    const mk = (x: number, y: number, size: string, color: string) => {
+      const t = scene.add
         .text(x, y, "", { fontFamily: "monospace", fontSize: size, color })
         .setScrollFactor(0)
         .setDepth(DEPTH + 2);
+      layer?.add(t);
+      return t;
+    };
 
     this.dayText = mk(PANEL_X + 8, PANEL_Y + 8, "14px", "#f4efe2");
     BARS.forEach((b, i) => {
@@ -75,6 +81,7 @@ export class HUD {
       })
       .setScrollFactor(0)
       .setDepth(DEPTH + 2);
+    layer?.add(this.logText);
     this.controlsText = mk(PANEL_X + 8, 0, "11px", "#8fa3b8");
     this.debugText = mk(PANEL_X + 8, 0, "11px", "#7f93a8");
   }
@@ -147,5 +154,6 @@ export class HUD {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(DEPTH + 10);
+    this.layer?.add(this.deathText);
   }
 }

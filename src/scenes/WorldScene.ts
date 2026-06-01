@@ -109,6 +109,8 @@ export class WorldScene extends Phaser.Scene {
   private objBanner!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
   private weaponSprite!: Phaser.GameObjects.Image;
+  private uiCam!: Phaser.Cameras.Scene2D.Camera;
+  private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
 
   constructor() {
@@ -167,6 +169,13 @@ export class WorldScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, worldW, worldH);
     setupCamera(this, this.player.sprite, worldW, worldH);
 
+    // The main camera zooms the world 1.25× — but Phaser zoom also scales
+    // scrollFactor(0) UI, which clips the HUD off the top. So all fixed UI goes
+    // into uiLayer, rendered by a dedicated unzoomed UI camera; the main camera
+    // ignores uiLayer. (DOM modals are HTML and unaffected.)
+    this.uiLayer = this.add.layer();
+    this.uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+
     // Equipped weapon shown in-hand (icon swaps on equip).
     this.weaponSprite = this.add.image(startX, startY, iconKey("Fists")).setDepth(11).setScale(0.42).setVisible(false);
 
@@ -194,10 +203,11 @@ export class WorldScene extends Phaser.Scene {
       .setOrigin(0, 0)
       .setScrollFactor(0)
       .setDepth(500);
+    this.uiLayer.add(this.nightOverlay);
 
     // Atmosphere (procedural): drifting motes, a flashlight glow that brightens at
     // night, and a vignette. All camera-fixed except the glow, which follows the player.
-    this.add
+    const dust = this.add
       .particles(0, 0, FX_DUST, {
         x: { min: 0, max: this.scale.width },
         y: { min: 0, max: this.scale.height },
@@ -212,9 +222,11 @@ export class WorldScene extends Phaser.Scene {
       })
       .setScrollFactor(0)
       .setDepth(510);
-    this.glow = makeGlow(this, this.player.sprite.x, this.player.sprite.y);
+    this.uiLayer.add(dust);
+    this.glow = makeGlow(this, this.player.sprite.x, this.player.sprite.y); // world-space (main camera)
     this.vignette = this.add.image(0, 0, FX_VIGNETTE).setOrigin(0, 0).setScrollFactor(0).setDepth(540);
     this.vignette.setDisplaySize(this.scale.width, this.scale.height);
+    this.uiLayer.add(this.vignette);
 
     // Minimal guides: a persistent objective banner + a contextual "Press E" hint.
     this.objBanner = this.add
@@ -241,6 +253,7 @@ export class WorldScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(950)
       .setVisible(false);
+    this.uiLayer.add([this.objBanner, this.hintText]);
     this.updateObjective();
 
     this.scale.on("resize", this.onResize, this);
@@ -252,7 +265,19 @@ export class WorldScene extends Phaser.Scene {
       saveGame(this.state);
     }
 
-    this.hud = new HUD(this);
+    this.hud = new HUD(this, this.uiLayer);
+
+    // Split rendering: the main (zoomed, player-following) camera draws the world
+    // and ignores the fixed UI; the UI camera (zoom 1, parked at origin) draws only
+    // uiLayer. World objects sit far from origin so the UI camera frustum-culls
+    // them; ignore the persistent ones too for safety. floatText/glow stay on main.
+    this.cameras.main.ignore(this.uiLayer);
+    this.uiCam.ignore([this.player.sprite, this.weaponSprite, this.glow]);
+    this.uiCam.ignore(this.enemyGroup);
+    this.uiCam.ignore(this.projectileGroup);
+    this.uiCam.ignore(this.enemyProjGroup);
+    this.uiCam.ignore(this.itemGroup);
+
     this.modal = new EncounterModal();
     this.modal.setHandlers(
       (input) => this.onEncounterAction(input),
@@ -434,6 +459,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private onResize(size: Phaser.Structs.Size): void {
+    this.uiCam?.setSize(size.width, size.height);
     this.nightOverlay?.setSize(size.width, size.height);
     this.vignette?.setDisplaySize(size.width, size.height);
     this.objBanner?.setPosition(size.width / 2, 8);
@@ -679,6 +705,7 @@ export class WorldScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(1500);
+    this.uiLayer.add(t); // screen-space → UI camera (unzoomed)
     this.tweens.add({ targets: t, alpha: 0, y: 54, delay: 900, duration: 900, onComplete: () => t.destroy() });
   }
 
