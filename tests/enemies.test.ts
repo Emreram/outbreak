@@ -3,7 +3,7 @@
 
 import { ZOMBIES } from "../src/game/enemies/zombies";
 import { getZombie, familyPool } from "../src/game/enemies/catalog";
-import { rollZombie } from "../src/game/enemies/spawnTable";
+import { rollZombie, resetSpawnVariety } from "../src/game/enemies/spawnTable";
 import { MOVEMENTS, TRAITS, FAMILIES } from "../src/game/enemies/types";
 import { RARITIES } from "../src/game/items/rarity";
 import { createRng } from "../src/game/rng";
@@ -94,6 +94,46 @@ function main(): void {
   let nasty = 0;
   for (let i = 0; i < 800; i++) if (rollZombie("zombie", r4, 9).minDay >= 3) nasty++;
   ok(nasty > 0, "deep-day spawns include high-minDay specials");
+
+  // variety: the flat spawn curve surfaces non-common types often once eligible.
+  // (Day 6 — rares/epics are unlocked; commons should NOT swamp the streets.)
+  const r5 = createRng("variety");
+  resetSpawnVariety();
+  const seen = new Set<string>();
+  let nonCommon = 0;
+  for (let i = 0; i < 2000; i++) {
+    const z = rollZombie("zombie", r5, 6);
+    seen.add(z.id);
+    if (z.rarity !== "common") nonCommon++;
+  }
+  ok(seen.size >= 30, `mid-game spawns are varied (${seen.size} distinct types in 2000 rolls)`);
+  ok(nonCommon > 600, `non-common types are a real fraction mid-game (${(nonCommon / 2000 * 100).toFixed(0)}%)`);
+
+  // anti-repeat: with a small pool, back-to-back identical spawns are rare (a plain
+  // uniform roll over 3 friendlies would repeat ~33% of the time).
+  const r6 = createRng("repeat");
+  resetSpawnVariety();
+  let repeats = 0;
+  let prev = "";
+  for (let i = 0; i < 1500; i++) {
+    const id = rollZombie("survivor_friendly", r6, 9).id;
+    if (id === prev) repeats++;
+    prev = id;
+  }
+  ok(repeats / 1500 < 0.25, `anti-repeat suppresses back-to-back spawns (${(repeats / 1500 * 100).toFixed(0)}% vs ~33% uniform)`);
+
+  // biome affinity: a plain "zombie" request upgrades to runners in the woods, and
+  // never does so with no biome context — proves the biome bias is wired through.
+  const r7 = createRng("biome");
+  resetSpawnVariety();
+  let forestRunners = 0;
+  let plainRunners = 0;
+  for (let i = 0; i < 1500; i++) {
+    if (rollZombie("zombie", r7, 6, "forest").family === "zombie_runner") forestRunners++;
+    if (rollZombie("zombie", r7, 6).family === "zombie_runner") plainRunners++;
+  }
+  ok(plainRunners === 0, "no-biome 'zombie' rolls never auto-upgrade to runners");
+  ok(forestRunners > 200, `forest biome biases toward feral runners (${forestRunners}/1500)`);
 
   ok(!!getZombie("shambler"), "getZombie resolves a known id");
   ok(familyPool("boss").length >= 8, `boss pool populated (${familyPool("boss").length})`);

@@ -78,6 +78,12 @@ export class Minimap {
       }
     }
 
+    // Under a blood moon the whole map runs red, matching the world overlay.
+    if (state.bloodMoon) {
+      this.g.fillStyle(0xff0000, 0.16).fillRect(ox, oy, w, w);
+      this.g.lineStyle(1.5, 0xff3a3a, 0.9).strokeRoundedRect(ox - PAD, oy - PAD, w + PAD * 2, w + PAD * 2, 6);
+    }
+
     const mark = (px: number, py: number, color: number, size = 3) => {
       const dx = px / CHUNK_PX - pcx;
       const dy = py / CHUNK_PX - pcy;
@@ -92,6 +98,9 @@ export class Minimap {
     if (state.base) mark(state.base.x, state.base.y, 0x5ed66e, 4); // home base
     mark(state.player.x, state.player.y, 0xffffff, 4); // you
 
-    this.title.setPosition(ox - PAD, oy - PAD - 14).setText(`MAP  ·  chunk ${pcx},${pcy}  (M)`);
+    this.title
+      .setPosition(ox - PAD, oy - PAD - 14)
+      .setText(`MAP  ·  chunk ${pcx},${pcy}  (M)`)
+      .setColor(state.bloodMoon ? "#ff6b6b" : "#cfe6ff");
   }
 }

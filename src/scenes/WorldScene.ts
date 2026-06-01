@@ -396,6 +396,9 @@ export class WorldScene extends Phaser.Scene {
     const freshRun = !saved || !!this.registry.get("intro");
     const startX = freshRun ? this.chunks.start.x : this.state.player.x;
     const startY = freshRun ? this.chunks.start.y : this.state.player.y;
+    // Resume mid-segment so the continuous clock/lighting picks up where it left off
+    // instead of snapping back to the phase boundary (fresh runs start each segment at 0).
+    if (!freshRun) this.segAcc = Phaser.Math.Clamp(this.state.clockMs ?? 0, 0, SEG_MS);
     this.player = new Player(this, startX, startY);
     this.player.setAppearance(this.state.appearance?.color); // character-creation tint
 
@@ -834,6 +837,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private updateObjective(): void {
+    if (this.state.bloodMoon) {
+      // The blood moon overrides the run goal with one imperative: live to dawn.
+      this.objBanner.setText("🔴 BLOOD MOON — survive until dawn").setVisible(true);
+      return;
+    }
     const g = this.state.goal ?? "";
     this.objBanner.setText(g ? `Objective: ${g}` : "").setVisible(!!g);
   }
@@ -932,6 +940,7 @@ export class WorldScene extends Phaser.Scene {
     sfx.boom();
     this.cameras.main.flash(700, 140, 0, 0);
     this.cameras.main.shake(420, 0.004);
+    this.updateObjective(); // flip the banner to the survive-till-dawn imperative
     this.showBloodMoonBanner();
     // An immediate surge floods the streets around the player — runner-heavy.
     this.spawnNear([
@@ -944,6 +953,7 @@ export class WorldScene extends Phaser.Scene {
     this.state.bloodMoon = false;
     pushRecentEvent(this.state, "The blood moon faded with the dawn. You survived the night.");
     this.showToast("The blood moon fades. Dawn breaks — you survived the night.");
+    this.updateObjective(); // restore the normal run objective
   }
 
   private showBloodMoonBanner(): void {
@@ -1265,7 +1275,8 @@ export class WorldScene extends Phaser.Scene {
 
   /** Effective danger driver for spawns: the day plus the local distance/biome tier. */
   private effDay(): number {
-    return this.state.day + this.chunks.dangerTier(this.player.sprite.x, this.player.sprite.y);
+    // A blood moon nudges the danger tier up so spawn-table rolls lean nastier/faster.
+    return this.state.day + this.chunks.dangerTier(this.player.sprite.x, this.player.sprite.y) + (this.state.bloodMoon ? 2 : 0);
   }
 
   private spawnNear(spawns: Spawn[]): void {
@@ -3563,6 +3574,7 @@ export class WorldScene extends Phaser.Scene {
         }
       }
     }
+    this.state.clockMs = this.segAcc; // preserve continuous clock progress across reloads
     saveGame(this.state);
   }
 }

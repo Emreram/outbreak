@@ -43,6 +43,8 @@ export interface GameState {
   seed: string; // run seed (map + RNG reproducibility)
   day: number;
   timeOfDay: TimeOfDay;
+  clockMs?: number; // ms elapsed into the current timeOfDay segment — keeps the continuous
+  // clock/lighting from snapping to the phase boundary on reload (optional; old saves → 0)
   player: PlayerState;
   inventory: InventoryItem[];
   worldFlags: string[]; // e.g. "cleared_pharmacy_3", "ally_marcus_alive"

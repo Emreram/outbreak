@@ -49,6 +49,7 @@ export class HUD {
   private readonly bg: Phaser.GameObjects.Graphics;
   private readonly bars: Phaser.GameObjects.Graphics;
   private readonly dayText: Phaser.GameObjects.Text;
+  private lastClock = ""; // last HH:MM seen — reused when a refresh omits it, so the time never flickers
   private readonly valueTexts: Phaser.GameObjects.Text[] = [];
   private readonly armorText: Phaser.GameObjects.Text;
   private readonly debugText: Phaser.GameObjects.Text;
@@ -107,7 +108,8 @@ export class HUD {
   ): void {
     const bgName = s.background ? getBackground(s.background)?.name : undefined;
     const moon = s.bloodMoon ? "  ·  🔴 BLOOD MOON" : "";
-    const time = clock ? `${s.timeOfDay} ${clock}` : s.timeOfDay;
+    if (clock) this.lastClock = clock; // refreshes from modals/actions omit it — keep the last known time
+    const time = this.lastClock ? `${s.timeOfDay} ${this.lastClock}` : s.timeOfDay;
     this.dayText
       .setText(`${s.player.name}${bgName ? ` · ${bgName}` : ""}  ·  Day ${s.day}  ·  ${time}  ·  ${weatherName(s.weather)}${moon}`)
       .setColor(s.bloodMoon ? "#ff6b6b" : "#f4efe2");

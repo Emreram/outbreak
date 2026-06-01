@@ -165,6 +165,50 @@ async function main() {
   ok(pickOllamaModel(["customthing:1b"]) === "customthing:1b", "pickOllamaModel falls back to first installed");
   ok(pickOllamaModel([]) === "llama3.1", "pickOllamaModel defaults when none installed");
 
+  // --- BLOOD MOON: the offline GM swarms harder + runner-heavy (regression) ---
+  // Arrange: identical night "search" turns (the dead can hear you), blood moon
+  // ON vs OFF. The MockProvider RNG is unseeded, so assert robust per-spawn
+  // invariants over many iterations rather than exact counts.
+  const bmPayload = (bloodMoon: boolean) => ({
+    game_state: {
+      location_type: "street",
+      player: { hp: 90 },
+      inventory: [{ item: "Crowbar", qty: 1 }],
+      day: 2,
+      timeOfDay: "night",
+      bloodMoon,
+    },
+    input: { mode: "free_text", value: "I search the wreck" },
+  });
+  let bmSpawnTurns = 0;
+  let bmTotal = 0;
+  let normTotal = 0;
+  let bmAllRunners = true; // every blood-moon spawn should be a runner (undead() forces it)
+  let bmAllPacks = true; // ...and arrive in a pack of >=3 (packCount adds 2-4)
+  let normAllSmall = true; // a normal night packs 1-2 at a time
+  let allValid = true;
+  for (let i = 0; i < 60; i++) {
+    const bm = JSON.parse(await mock.generate("", bmPayload(true), {})) as GMResponse;
+    const nm = JSON.parse(await mock.generate("", bmPayload(false), {})) as GMResponse;
+    if (!validShape(sanitizeGM(bm)) || !validShape(sanitizeGM(nm))) allValid = false;
+    if (bm.spawns.length > 0) bmSpawnTurns++;
+    for (const sp of bm.spawns) {
+      bmTotal += sp.count;
+      if (sp.type !== "zombie_runner") bmAllRunners = false;
+      if (sp.count < 3) bmAllPacks = false;
+    }
+    for (const sp of nm.spawns) {
+      normTotal += sp.count;
+      if (sp.count > 2) normAllSmall = false;
+    }
+  }
+  ok(allValid, "blood moon and normal-night turns both stay schema-valid");
+  ok(bmSpawnTurns > 0, "blood moon search reliably draws the dead");
+  ok(bmAllRunners, "every blood-moon spawn is a runner");
+  ok(bmAllPacks, "every blood-moon spawn arrives in a pack of >=3");
+  ok(normAllSmall, "normal-night spawns stay small (<=2 at a time)");
+  ok(bmTotal > normTotal, "blood moon yields far more undead than a normal night");
+
   console.log(fail === 0 ? "ALL GM CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
   process.exit(fail === 0 ? 0 : 1);
 }

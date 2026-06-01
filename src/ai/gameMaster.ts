@@ -89,6 +89,7 @@ export function buildTurnPayload(state: GameState, input: TurnInput, locationTyp
       recentEvents: state.recentEvents,
       day: state.day,
       timeOfDay: state.timeOfDay,
+      bloodMoon: state.bloodMoon, // red-moon night: the GM should narrate a relentless swarm
       location_type: locationType,
     },
     input,

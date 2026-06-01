@@ -21,6 +21,7 @@ interface GS {
   recentEvents?: string[];
   day?: number;
   timeOfDay?: string;
+  bloodMoon?: boolean;
   location_type?: string;
 }
 interface TurnIn {
@@ -69,13 +70,18 @@ function turn(p: TurnIn, rng: Rng): object {
   const hp = gs.player?.hp ?? 100;
   const day = gs.day ?? 0;
   const night = gs.timeOfDay === "night" || gs.timeOfDay === "dusk";
+  const bloodMoon = gs.bloodMoon === true;
   const hasWeapon = inv.some((i) => WEAPON_ITEMS.has(i.item));
   const intent = classifyIntent(value);
   const careful = /quiet|sneak|careful|slow|cautious|stealth|softly/.test(value);
 
-  // Danger ramps with the outbreak (day 0 is nearly calm) and spikes at night.
-  const danger = Math.min(0.04 + day * 0.05 + (night ? 0.18 : 0), 0.72);
+  // Danger ramps with the outbreak (day 0 is nearly calm), spikes at night, and a
+  // blood moon makes the streets a churning, runner-heavy swarm.
+  const danger = Math.min(0.04 + day * 0.05 + (night ? 0.18 : 0) + (bloodMoon ? 0.35 : 0), 0.92);
   const spawnChance = Math.max(0, danger * (careful ? 0.35 : 1));
+  // On a blood moon, "something showed up" almost always means a small pack, runner-led.
+  const undead = (): string => (bloodMoon || rng.chance(danger) ? "zombie_runner" : "zombie");
+  const packCount = (lo: number, hi: number): number => rng.int(lo, hi) + (bloodMoon ? rng.int(2, 4) : 0);
 
   const o: Outcome = {
     narrative: "",
@@ -107,7 +113,7 @@ function turn(p: TurnIn, rng: Rng): object {
         o.narrative = `You ransack the ${prettyLoc(loc)}, but someone got here first — only broken glass and empty packaging.`;
       }
       if (rng.chance(spawnChance + 0.08)) {
-        o.spawns.push({ type: rng.chance(danger) ? "zombie_runner" : "zombie", count: rng.int(1, 2), reason: "noise drew them" });
+        o.spawns.push({ type: undead(), count: packCount(1, 2), reason: "noise drew them" });
         o.narrative += careful ? " A floorboard creaks — you freeze as a shape shifts nearby." : " The racket carries. Something answers with a wet snarl.";
         o.forceChoices = true;
       }
@@ -117,9 +123,9 @@ function turn(p: TurnIn, rng: Rng): object {
       o.d.stamina += rng.int(30, 45);
       o.d.hunger -= rng.int(5, 9);
       o.d.thirst -= rng.int(6, 11);
-      if (rng.chance(night ? 0.55 : 0.2 + danger)) {
+      if (rng.chance(bloodMoon ? 0.92 : night ? 0.55 : 0.2 + danger)) {
         o.d.hp -= rng.int(8, 18);
-        o.spawns.push({ type: "zombie", count: rng.int(1, 2), reason: "ambush while resting" });
+        o.spawns.push({ type: undead(), count: packCount(1, 2), reason: "ambush while resting" });
         o.narrative = "You let your guard down — and wake to cold hands dragging at you. So much for rest.";
         o.forceChoices = true;
       } else {
@@ -256,13 +262,16 @@ function turn(p: TurnIn, rng: Rng): object {
         "Somewhere close, glass settles. You hold your breath; nothing comes.",
       ]);
       if (rng.chance(spawnChance)) {
-        o.spawns.push({ type: "zombie", count: 1, reason: "drawn by movement" });
+        o.spawns.push({ type: undead(), count: packCount(1, 1), reason: "drawn by movement" });
         o.narrative += " Then a shape peels away from a doorway and starts toward you.";
         o.forceChoices = true;
       }
       break;
     }
   }
+
+  // The blood moon colours every beat of the night.
+  if (bloodMoon) o.narrative += " Overhead, the blood moon burns red.";
 
   const built = buildInteraction(o, rng);
   return {
