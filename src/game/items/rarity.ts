@@ -15,13 +15,16 @@ export interface RarityMeta {
   rank: number; // 0..5
 }
 
+// Weights tuned for SCARCITY: commons dominate hard, and each step up the rarity
+// ladder is much steeper — rare gear is genuinely rare and earned (good loot comes
+// from venturing into danger via distance/biome bias, not from every container).
 export const RARITY_META: Record<Rarity, RarityMeta> = {
   common: { label: "Common", color: 0xb8c0c8, css: "#b8c0c8", glow: 0x6b7480, weight: 1000, rank: 0 },
-  uncommon: { label: "Uncommon", color: 0x5ed66e, css: "#5ed66e", glow: 0x2f8f3c, weight: 420, rank: 1 },
-  rare: { label: "Rare", color: 0x4aa3ff, css: "#4aa3ff", glow: 0x1d62c4, weight: 170, rank: 2 },
-  epic: { label: "Epic", color: 0xb368ff, css: "#b368ff", glow: 0x7a2fcf, weight: 60, rank: 3 },
-  legendary: { label: "Legendary", color: 0xffa23f, css: "#ffa23f", glow: 0xc7641a, weight: 18, rank: 4 },
-  mythic: { label: "Mythic", color: 0xff5a6e, css: "#ff5a6e", glow: 0xc41d3a, weight: 4, rank: 5 },
+  uncommon: { label: "Uncommon", color: 0x5ed66e, css: "#5ed66e", glow: 0x2f8f3c, weight: 300, rank: 1 },
+  rare: { label: "Rare", color: 0x4aa3ff, css: "#4aa3ff", glow: 0x1d62c4, weight: 90, rank: 2 },
+  epic: { label: "Epic", color: 0xb368ff, css: "#b368ff", glow: 0x7a2fcf, weight: 22, rank: 3 },
+  legendary: { label: "Legendary", color: 0xffa23f, css: "#ffa23f", glow: 0xc7641a, weight: 5, rank: 4 },
+  mythic: { label: "Mythic", color: 0xff5a6e, css: "#ff5a6e", glow: 0xc41d3a, weight: 1, rank: 5 },
 };
 
 export function rarityRank(r: Rarity): number {

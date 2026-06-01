@@ -413,3 +413,26 @@ Smaller model misbehaving (ignoring world flags, dumb choices, infinite loot)? F
 - [ ] Runs fully offline on a local Ollama model (no API key, no internet); cloud Claude is a config-flag swap, not a requirement.
 ---
 *End of master prompt. Rename the game, tune the constants, and let the GM surprise you.*
+
+---
+
+## 17. Development workflow — Claude Code Game Studios (lean) + AI assets
+This repo **lean-adopts** the **Claude-Code-Game-Studios** framework for building features. It lives in
+`.claude/` (agents + skills + doc templates + reference rules). **This CLAUDE.md remains the single source of
+truth for the game design**; the studio framework is the *process* layer around it.
+
+- **Pipeline (per feature):** Brainstorm → Design (GDD in `design/`) → Architecture → Development → Review
+  (`/code-review`, `/balance-check`) → Test (`/smoke-check` + our `npm test` + the headless flow harness) → Release.
+- **Specialist agents** (`.claude/agents/`): route work by domain — systems-designer, gameplay-programmer,
+  level-designer, art-director, qa-tester, etc. They present 2–4 options and you decide (collaborative, not autonomous).
+- **Hard gates (always):** `npm run typecheck` + `npm test` + `npm run build` green, plus the puppeteer headless
+  flow check and **save/reload persistence** per feature, before merge → `main` → Vercel.
+- **NOT adopted (kept lean):** the studio's `settings.json`, `hooks/`, and its own `CLAUDE.md` — to avoid changing
+  harness permissions/validation. Opt into specific hooks/rules later if wanted.
+
+### Art assets — `generate-image` skill (primary) + procedural fallback
+- **AI art:** `.claude/skills/generate-image/` → `npm run gen:assets` (Replicate `nano-banana-pro`) generates
+  top-down sprites from `tools/assets.json`, keys the background to transparency, and writes
+  `public/assets/generated/<key>.png`. Requires `REPLICATE_API_TOKEN` + network to `api.replicate.com`.
+- **Fallback:** every art key flows through the AssetManifest; a missing PNG falls back to the procedural
+  generators (`engine/textures.ts`, `propSprites.ts`, `icons.ts`), so the game always runs without a token.

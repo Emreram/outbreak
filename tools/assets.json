@@ -1,0 +1,28 @@
+[
+  { "key": "player", "description": "lone human survivor in a worn jacket holding a weapon", "assetType": "character", "size": 30 },
+  { "key": "zombie", "description": "rotting shambling zombie, torn bloody clothes, grey-green skin", "assetType": "character", "size": 30 },
+  { "key": "survivor_npc", "description": "wary armed survivor NPC in a hood", "assetType": "character", "size": 30 },
+
+  { "key": "prop_car", "description": "abandoned rusty sedan car wreck", "assetType": "vehicle", "size": 30 },
+  { "key": "prop_tree", "description": "leafy green tree", "assetType": "prop", "size": 32 },
+  { "key": "prop_crate", "description": "wooden supply crate", "assetType": "prop", "size": 28 },
+  { "key": "prop_barrel", "description": "rusty oil barrel", "assetType": "prop", "size": 26 },
+  { "key": "prop_corpse", "description": "bloody dead body on the ground", "assetType": "prop", "size": 28 },
+
+  { "key": "vehicle_sedan", "description": "drivable four-door sedan car, faded paint", "assetType": "vehicle", "size": 44 },
+  { "key": "vehicle_pickup", "description": "old pickup truck with an open cargo bed", "assetType": "vehicle", "size": 48 },
+  { "key": "vehicle_van", "description": "battered cargo van", "assetType": "vehicle", "size": 48 },
+
+  { "key": "building_house", "description": "small suburban house rooftop with a chimney", "assetType": "building", "size": 64 },
+  { "key": "building_pharmacy", "description": "pharmacy store rooftop with a green cross sign", "assetType": "building", "size": 64 },
+  { "key": "building_hospital", "description": "hospital rooftop with a red cross and a helipad", "assetType": "building", "size": 64 },
+  { "key": "building_police_station", "description": "police station rooftop, blue accents", "assetType": "building", "size": 64 },
+  { "key": "building_gas_station", "description": "gas station rooftop with fuel pump canopy", "assetType": "building", "size": 64 },
+
+  { "key": "animal_deer", "description": "brown deer", "assetType": "animal", "size": 30 },
+  { "key": "animal_chicken", "description": "white farm chicken", "assetType": "animal", "size": 20 },
+  { "key": "animal_cow", "description": "black and white dairy cow", "assetType": "animal", "size": 34 },
+
+  { "key": "crop_wheat_ripe", "description": "ripe golden wheat plant", "assetType": "prop", "size": 24 },
+  { "key": "crop_tomato_ripe", "description": "tomato plant heavy with red tomatoes", "assetType": "prop", "size": 24 }
+]

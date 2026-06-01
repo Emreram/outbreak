@@ -104,6 +104,16 @@ function main(): void {
   ok((counts.common ?? 0) > (counts.rare ?? 0), "common rolls more than rare");
   ok((counts.mythic ?? 0) < (counts.common ?? 0), "mythic is the rarest");
 
+  // --- scarcity: rare+ tiers are genuinely uncommon at base bias ---
+  const rsc = createRng("scarcity");
+  let rarePlus = 0;
+  const N = 8000;
+  for (let i = 0; i < N; i++) {
+    const r = rollRarity(rsc);
+    if (r === "rare" || r === "epic" || r === "legendary" || r === "mythic") rarePlus++;
+  }
+  ok(rarePlus / N < 0.15, `rare+ loot is scarce at base bias (${((rarePlus / N) * 100).toFixed(1)}% < 15%)`);
+
   // --- rollLoot determinism ---
   const a = rollLoot("police_station", createRng("seed-1"), 5);
   const b = rollLoot("police_station", createRng("seed-1"), 5);
