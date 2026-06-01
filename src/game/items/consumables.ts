@@ -112,6 +112,8 @@ const MATERIALS: MaterialDef[] = [
   mat("Battery", "uncommon", 0x3a7a4a),
   mat("Spark Plug", "common", 0xd1a23a),
   mat("Tire", "common", 0x2b2e33),
+  // Radio (Feature 10): hold one to pick up survivor broadcasts (POI leads on the map).
+  mat("Radio", "uncommon", 0x2a3a4a),
 ];
 
 const ARMOR: ArmorDef[] = [

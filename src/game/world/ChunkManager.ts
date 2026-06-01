@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { generateChunk, chunkStartPx, SOLID_TILES, type Building, type ChunkData, type ContainerKind } from "../worldgen";
+import { generateChunk, chunkStartPx, SOLID_TILES, type Building, type ChunkData, type ContainerKind, type Landmark } from "../worldgen";
 import { biomeAt } from "./biomes";
 import { dangerTierAt, lootBiasAt } from "./scaling";
 import {
@@ -158,6 +158,11 @@ export class ChunkManager {
     const lx = gtx - lc.cx * CHUNK_TILES;
     const ly = gty - lc.cy * CHUNK_TILES;
     return lc.data.grid[ly]?.[lx] ?? null;
+  }
+
+  /** Landmarks of the loaded chunk at (cx, cy) — for minimap discovery (Feature 10). */
+  landmarksAt(cx: number, cy: number): Landmark[] {
+    return this.chunkAt(cx, cy)?.data.landmarks ?? [];
   }
 
   /** The building whose interior contains a global tile, or null. */

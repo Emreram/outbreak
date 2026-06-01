@@ -57,6 +57,7 @@ export interface GameState {
   base?: BaseClaim; // the building claimed as home (Feature 7)
   placeables?: Placeable[]; // player-built barricades/walls/stations/storage (Feature 7)
   baseStorage?: InventoryItem[]; // items stashed in base storage crates (Feature 7)
+  discovered?: string[]; // visited chunk keys "cx,cy" — minimap fog-of-war (Feature 10)
 }
 
 /** The building the player has claimed as their home base (Feature 7). */
