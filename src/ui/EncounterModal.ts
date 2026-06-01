@@ -70,6 +70,7 @@ export class EncounterModal {
   private opened = false;
   private locked = true; // no input accepted until a prompt reveals it (anti double-submit/skip)
   private revealedAt = 0; // when the current prompt's input became live (arm window)
+  private readonly escHandler: (e: KeyboardEvent) => void;
 
   constructor() {
     if (!document.getElementById(STYLE_ID)) {
@@ -106,6 +107,7 @@ export class EncounterModal {
     // Keep keystrokes inside the box: stop them reaching the game's key handlers,
     // ignore IME composition, and ignore an Enter carried over from the last turn.
     this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") return; // let it bubble to the modal-level Escape-to-leave
       e.stopPropagation();
       if (e.isComposing) return;
       if (e.key === "Enter") {
@@ -116,7 +118,7 @@ export class EncounterModal {
     this.rowEl.append(this.inputEl, send);
 
     this.tipEl = el("div", "ob-tip");
-    this.tipEl.textContent = "Pick an action, or type your own — then it plays out.";
+    this.tipEl.textContent = "Pick an action or type your own · Esc or Leave to walk away";
 
     this.leaveEl = document.createElement("button");
     this.leaveEl.className = "ob-leave";
@@ -139,6 +141,16 @@ export class EncounterModal {
     );
     this.root.append(this.panel);
     document.body.appendChild(this.root);
+
+    // Escape always bails out of an encounter while a prompt is actually showing
+    // (not mid-resolve) — so a sequence can never trap you.
+    this.escHandler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && this.opened && !this.locked) {
+        e.preventDefault();
+        this.leave();
+      }
+    };
+    document.addEventListener("keydown", this.escHandler);
   }
 
   isOpen(): boolean {
@@ -256,6 +268,7 @@ export class EncounterModal {
   destroy(): void {
     this.cancelDismiss();
     this.clearTyping();
+    document.removeEventListener("keydown", this.escHandler);
     this.root.remove();
   }
 
