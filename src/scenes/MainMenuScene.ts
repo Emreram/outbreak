@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import { loadGame, saveGame } from "../game/GameState";
 import { newRunState } from "../ai/gameMaster";
-import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmError, webllmModel, loadWebLLM, warmUpWebLLM } from "../ai/webllm";
+import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmModel, loadWebLLM, warmUpWebLLM } from "../ai/webllm";
 import { CharacterCreate, type CreationResult } from "../ui/CharacterCreate";
 import { sfx } from "../engine/audio";
 
@@ -54,6 +54,15 @@ export class MainMenuScene extends Phaser.Scene {
       y += 66;
     }
     this.button(cx, y, "New run", () => this.openCreate());
+
+    this.add
+      .text(cx, h * 0.635, "Playable offline — no GPU needed. The in-browser AI below is an optional upgrade.", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#7f93a8",
+        align: "center",
+      })
+      .setOrigin(0.5);
 
     this.buildAiToggle(cx, h * 0.72);
 
@@ -115,8 +124,10 @@ export class MainMenuScene extends Phaser.Scene {
         this.aiBtn.setText("Loading AI model…").setColor("#ffd98a");
         break;
       case "error":
-        this.aiBtn.setText("In-browser AI: retry").setColor("#ff9d9d");
-        this.aiHint.setText((webllmError() || "load failed").slice(0, 52));
+        this.aiBtn.setText("In-browser AI: unavailable").setColor("#ff9d9d");
+        this.aiHint.setText(
+          "Needs WebGPU — enable hardware acceleration (Chrome/Edge) + update GPU drivers.\nYou can still play now — the game runs on the offline director. (tap to retry)",
+        );
         break;
       default:
         this.aiBtn.setText("Enable in-browser AI").setColor("#7fd3ff");

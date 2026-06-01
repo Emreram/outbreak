@@ -11,7 +11,7 @@ import {
   clearSave,
   pushRecentEvent,
 } from "../src/game/GameState";
-import { addItem, removeItem, hasItem, itemCount, MAX_STACK } from "../src/game/inventory";
+import { addItem, removeItem, hasItem, itemCount, useConsumable, quickUseItems, MAX_STACK } from "../src/game/inventory";
 import { applyDecay, DEFAULT_DECAY } from "../src/game/survival";
 
 // in-memory localStorage shim so persistence is testable under Node
@@ -85,6 +85,35 @@ store.set("outbreak_save_v1", "{not json");
 ok(loadGame() === null, "corrupt JSON -> null");
 store.set("outbreak_save_v1", JSON.stringify({ seed: 123 }));
 ok(loadGame() === null, "invalid shape -> null");
+
+// --- consumables: catalog-driven use + quick-use hotbar slots ---
+s = newGame("t");
+const bandages0 = itemCount(s, "Bandage");
+addItem(s, "Bandage", 1);
+s.player.hp = 50;
+ok(useConsumable(s, "Bandage") === true && s.player.hp === 80 && itemCount(s, "Bandage") === bandages0, "useConsumable applies effects (+30 hp) and removes 1");
+s = newGame("t");
+s.player.infection = 60;
+addItem(s, "Antiviral Serum", 1);
+ok(useConsumable(s, "Antiviral Serum") === true && s.player.infection === 0, "cure consumable zeroes infection");
+s = newGame("t");
+ok(useConsumable(s, "First-Aid Kit") === false, "useConsumable false when item not held");
+addItem(s, "Crowbar", 1);
+ok(useConsumable(s, "Crowbar") === false, "useConsumable false for a non-consumable");
+
+s = newGame("t");
+addItem(s, "Energy Bar", 5); // food (hunger)
+addItem(s, "Canteen", 5); // drink (thirst)
+addItem(s, "First-Aid Kit", 5); // heal (hp)
+addItem(s, "Antibiotics", 5); // cure (infection<0)
+const q = quickUseItems(s);
+ok(q.length === 4, "quickUseItems returns 4 fixed slots");
+ok(q[0]?.item === "Energy Bar", "quick slot 0 = food");
+ok(q[1]?.item === "Canteen", "quick slot 1 = drink");
+ok(q[2]?.item === "First-Aid Kit", "quick slot 2 = heal");
+ok(q[3]?.item === "Antibiotics", "quick slot 3 = cure/anti-infection");
+const qFresh = quickUseItems(newGame("t"));
+ok(qFresh.length === 4 && qFresh.every((x) => x === undefined || x.qty > 0), "quick slots length 4, no empty stacks (sparse-safe)");
 
 console.log(fail === 0 ? "ALL STATE CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

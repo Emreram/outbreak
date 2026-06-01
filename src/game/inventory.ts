@@ -3,10 +3,13 @@
 // equip/reload/ammo helpers for the loot system (Phase 3+).
 
 import type { GameState } from "../shared/contracts";
-import type { WeaponDef } from "./items/types";
-import { allWeapons, ammoItemForType, isWeaponName, weaponDef, FISTS } from "./items/catalog";
+import type { ConsumableDef, StatKey, WeaponDef } from "./items/types";
+import { allWeapons, ammoItemForType, defOf, isWeaponName, weaponDef, FISTS } from "./items/catalog";
 
 export const MAX_STACK = 99;
+const STAT_KEYS: readonly StatKey[] = ["hp", "stamina", "hunger", "thirst", "infection"];
+// 0–100 clamp inlined (importing clampStat from GameState would cycle: GameState imports this module).
+const clamp100 = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 0);
 
 /** Names that count as a weapon — derived from the catalog (used by the mock GM). */
 export const WEAPON_ITEMS: ReadonlySet<string> = new Set(allWeapons().map((w) => w.name));
@@ -46,6 +49,57 @@ export function removeItem(s: GameState, item: string, qty = 1): number {
 export function hasItem(s: GameState, item: string, qty = 1): boolean {
   const stack = s.inventory.find((i) => i.item === item);
   return !!stack && stack.qty >= qty;
+}
+
+// --- consumables (catalog-driven; powers the quick-use hotbar) ----------------
+
+/** Quick-use category for the hotbar: 0 food · 1 drink · 2 heal/other · 3 cure. */
+function consumableCategory(d: ConsumableDef): number {
+  const e = d.effects ?? {};
+  if ((e.hunger ?? 0) > 0) return 0;
+  if ((e.thirst ?? 0) > 0) return 1;
+  if (d.cure || (e.infection ?? 0) < 0) return 3;
+  return 2;
+}
+
+/**
+ * Use one consumable: apply its catalog `effects` (each clamped 0–100), honour
+ * `cure` (infection → 0), and remove one from the stack. Returns whether it was
+ * actually a held consumable. The single source of truth for "using an item".
+ */
+export function useConsumable(s: GameState, name: string | undefined): boolean {
+  if (!name) return false;
+  const def = defOf(name);
+  if (def.kind !== "consumable" || !hasItem(s, name)) return false;
+  removeItem(s, name, 1);
+  const eff = def.effects ?? {};
+  for (const k of STAT_KEYS) {
+    const d = eff[k];
+    if (d) s.player[k] = clamp100(s.player[k] + d);
+  }
+  if (def.cure) s.player.infection = 0;
+  return true;
+}
+
+export interface QuickSlot {
+  item: string;
+  qty: number;
+  def: ConsumableDef;
+}
+
+/** Fixed 4 quick-use slots [food, drink, heal, cure] — the best-stocked held
+ *  consumable per category, or undefined when you hold none. Stable so the number
+ *  keys always map to the same category. */
+export function quickUseItems(s: GameState): (QuickSlot | undefined)[] {
+  const slots: (QuickSlot | undefined)[] = [undefined, undefined, undefined, undefined];
+  for (const it of s.inventory) {
+    const def = defOf(it.item);
+    if (def.kind !== "consumable") continue;
+    const k = consumableCategory(def);
+    const cur = slots[k];
+    if (!cur || it.qty > cur.qty) slots[k] = { item: it.item, qty: it.qty, def };
+  }
+  return slots;
 }
 
 export function itemCount(s: GameState, item: string): number {

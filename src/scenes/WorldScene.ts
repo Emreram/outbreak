@@ -13,13 +13,14 @@ import {
 } from "../game/GameState";
 import { applyDecay, ratesFor } from "../game/survival";
 import { ammoMult, damageTakenMult, lootLuck, sprintDrainMult, type DamageKind } from "../game/perks";
-import { addItem, ammoReserve, autoEquip, equippedRangedDef, reloadEquipped, removeItem } from "../game/inventory";
+import { addItem, ammoReserve, autoEquip, equippedRangedDef, quickUseItems, reloadEquipped, useConsumable } from "../game/inventory";
 import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
 import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
 import { RARITY_META } from "../game/items/rarity";
 import {
   CHEST_OPEN,
+  heldKey,
   iconKey,
   PROJ_ARROW,
   PROJ_BULLET,
@@ -39,6 +40,7 @@ import { rollAmbientUndead, rollZombie } from "../game/enemies/spawnTable";
 import { getZombie } from "../game/enemies/catalog";
 import { setupCamera } from "../engine/Camera";
 import { HUD } from "../ui/HUD";
+import { HotBar } from "../ui/HotBar";
 import { EncounterModal } from "../ui/EncounterModal";
 import { LootModal } from "../ui/LootModal";
 import { TouchControls } from "../ui/TouchControls";
@@ -66,7 +68,6 @@ interface ProjData {
 // authoritative GameState, survival decay, HUD, and localStorage persistence.
 // The scene orchestrates; mechanics live in the game-logic modules.
 
-type StatKey = "hp" | "stamina" | "hunger" | "thirst" | "infection";
 const DECAY_MS = 2000;
 const SAVE_MS = 4000;
 const PHASES = ["dawn", "day", "dusk", "night"] as const;
@@ -120,6 +121,8 @@ export class WorldScene extends Phaser.Scene {
   private objBanner!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
   private weaponSprite!: Phaser.GameObjects.Image;
+  private weaponGlow!: Phaser.GameObjects.Image;
+  private hotbar!: HotBar;
   private uiCam!: Phaser.Cameras.Scene2D.Camera;
   private uiLayer!: Phaser.GameObjects.Layer;
   private readonly saveOnUnload = () => this.persist();
@@ -196,8 +199,17 @@ export class WorldScene extends Phaser.Scene {
     this.uiCam = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     this.uiCam.setScroll(-1_000_000, -1_000_000);
 
-    // Equipped weapon shown in-hand (icon swaps on equip).
-    this.weaponSprite = this.add.image(startX, startY, iconKey("Fists")).setDepth(11).setScale(0.42).setVisible(false);
+    // Equipped weapon shown in-hand: a plateless, outlined silhouette (heldKey) so
+    // it reads clearly as a weapon, with a rarity-tinted glow behind it so it pops
+    // against dark ground / at night and its rarity reads at a glance.
+    this.weaponGlow = this.add
+      .image(startX, startY, FX_GLOW)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(10.6)
+      .setScale(0.3)
+      .setAlpha(0.55)
+      .setVisible(false);
+    this.weaponSprite = this.add.image(startX, startY, heldKey("Fists")).setDepth(11).setScale(0.8).setVisible(false);
 
     // Collider specs applied to every streamed chunk layer (walls/water/trees).
     collide.push(
@@ -264,7 +276,7 @@ export class WorldScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(950);
     this.hintText = this.add
-      .text(this.scale.width / 2, this.scale.height - 96, "", {
+      .text(this.scale.width / 2, this.scale.height - 120, "", {
         fontFamily: "monospace",
         fontSize: "14px",
         color: "#ffe6a8",
@@ -288,6 +300,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.hud = new HUD(this, this.uiLayer);
+    this.hotbar = new HotBar(this, this.uiLayer);
 
     // Split rendering: the main (zoomed, player-following) camera draws the world
     // and ignores the fixed UI; the UI camera draws only the screen-fixed UI (its
@@ -414,6 +427,7 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.hud.update(this.state, this.debugInfo());
+    this.hotbar.update(this.state, !this.inEncounter && !this.enacting && !this.dead && !this.lootOpen);
   }
 
   private updateObjective(): void {
@@ -482,7 +496,7 @@ export class WorldScene extends Phaser.Scene {
     this.nightOverlay?.setSize(size.width, size.height);
     this.vignette?.setDisplaySize(size.width, size.height);
     this.objBanner?.setPosition(size.width / 2, 8);
-    this.hintText?.setPosition(size.width / 2, size.height - 96);
+    this.hintText?.setPosition(size.width / 2, size.height - 120);
   }
 
   private takeHit(e: Enemy): void {
@@ -1073,31 +1087,22 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-SPACE", () => this.meleeAttack());
     kb.on("keydown-F", () => this.meleeAttack());
 
-    // Debug actions (Phase 3) so stats/inventory are visibly alive. Phase 4
-    // replaces these with GM-driven, validated outcomes.
-    kb.on("keydown-ONE", () => this.consume("Canned Food", { hunger: 25, hp: 5 }, "Ate canned food."));
-    kb.on("keydown-TWO", () => this.consume("Water Bottle", { thirst: 30 }, "Drank water."));
-    kb.on("keydown-THREE", () => this.debugHurt());
-    kb.on("keydown-FOUR", () => this.consume("Bandage", { hp: 30 }, "Patched a wound."));
+    // [1-4] quick-use the hotbar slots: food / drink / heal / cure.
+    kb.on("keydown-ONE", () => this.useQuickSlot(0));
+    kb.on("keydown-TWO", () => this.useQuickSlot(1));
+    kb.on("keydown-THREE", () => this.useQuickSlot(2));
+    kb.on("keydown-FOUR", () => this.useQuickSlot(3));
   }
 
-  /** Consume one of an item (if held) and apply clamped stat gains. */
-  private consume(item: string, gains: Partial<Record<StatKey, number>>, msg: string): void {
-    if (this.dead || this.inEncounter) return;
-    if (removeItem(this.state, item, 1) === 0) return;
-    const p = this.state.player;
-    (Object.keys(gains) as StatKey[]).forEach((k) => {
-      p[k] = clampStat(p[k] + (gains[k] ?? 0));
-    });
-    pushRecentEvent(this.state, msg);
-    this.persist();
-  }
-
-  private debugHurt(): void {
-    if (this.dead || this.inEncounter) return;
-    this.state.player.hp = clampStat(this.state.player.hp - 15);
-    pushRecentEvent(this.state, "Took a hit.");
-    if (isDead(this.state)) this.enterDeath();
+  /** Use the consumable in quick-slot i (number keys 1–4); no-op if empty. */
+  private useQuickSlot(i: number): void {
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen) return;
+    const slot = quickUseItems(this.state)[i];
+    if (!slot || !useConsumable(this.state, slot.item)) return;
+    sfx.pickup();
+    pushRecentEvent(this.state, `Used ${slot.item}.`);
+    this.floatText(this.player.sprite.x, this.player.sprite.y - 8, `Used ${slot.item}`, "#9ef0a0");
+    this.hud.update(this.state, this.debugInfo());
     this.persist();
   }
 
@@ -1193,17 +1198,17 @@ export class WorldScene extends Phaser.Scene {
     const name = this.state.equippedRanged ?? this.state.equippedMelee;
     if (!name) {
       this.weaponSprite.setVisible(false);
+      this.weaponGlow.setVisible(false);
       return;
     }
-    const key = iconKey(name);
+    const hk = heldKey(name);
+    const key = this.textures.exists(hk) ? hk : iconKey(name); // plateless in-hand, fallback to icon
     if (this.textures.exists(key) && this.weaponSprite.texture.key !== key) this.weaponSprite.setTexture(key);
     const ang = this.aimAngle();
-    const px = this.player.sprite.x;
-    const py = this.player.sprite.y;
-    this.weaponSprite
-      .setPosition(px + Math.cos(ang) * 15, py + Math.sin(ang) * 15)
-      .setRotation(ang)
-      .setVisible(true);
+    const wx = this.player.sprite.x + Math.cos(ang) * 15;
+    const wy = this.player.sprite.y + Math.sin(ang) * 15;
+    this.weaponSprite.setPosition(wx, wy).setRotation(ang).setVisible(true);
+    this.weaponGlow.setPosition(wx, wy).setTint(RARITY_META[defOf(name).rarity].glow).setVisible(true);
   }
 
   /** Direction the equipped weapon points — toward the mouse on desktop. */
