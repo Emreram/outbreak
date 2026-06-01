@@ -56,8 +56,9 @@ export class HotBar {
     }
   }
 
-  /** Reposition + repaint each frame. `visible=false` hides it (encounter/death/loot). */
-  update(s: GameState, visible: boolean): void {
+  /** Reposition + repaint each frame. `visible=false` hides it (encounter/death/loot).
+   *  `selected` is the quick-use index (0–3) the scroll-wheel cursor is on, or -1. */
+  update(s: GameState, visible: boolean, selected = -1): void {
     if (!visible) {
       this.bg.setVisible(false);
       for (let i = 0; i < N; i++) {
@@ -75,6 +76,7 @@ export class HotBar {
     const x0 = Math.round((w - rowW) / 2);
     const top = h - SLOT - MARGIN_BOTTOM;
     const left = (i: number): number => x0 + i * (SLOT + GAP) + (i >= 2 ? GROUP_GAP : 0);
+    const selSlot = selected >= 0 ? 2 + selected : -1; // quick index -> hotbar slot
 
     const slots = this.slotViews(s);
     this.bg.clear();
@@ -87,6 +89,8 @@ export class HotBar {
       const border = v.filled && v.rarity ? RARITY_META[v.rarity].color : 0x2a3a4a;
       this.bg.lineStyle(v.held ? 2.5 : 2, border, v.filled ? 0.95 : 0.55).strokeRoundedRect(lx, top, SLOT, SLOT, 8);
       if (v.held) this.bg.lineStyle(1, 0x7fd3ff, 0.9).strokeRoundedRect(lx - 2, top - 2, SLOT + 4, SLOT + 4, 9);
+      // Scroll-wheel selection cursor on the chosen quick-use slot.
+      if (i === selSlot && v.filled) this.bg.lineStyle(2.5, 0xffd23f, 1).strokeRoundedRect(lx - 3, top - 3, SLOT + 6, SLOT + 6, 10);
 
       const img = this.icons[i];
       if (v.filled && v.name) {
@@ -97,7 +101,7 @@ export class HotBar {
         img.setVisible(false);
       }
 
-      this.tags[i].setPosition(lx + 4, top + 3).setText(v.tag).setColor(v.filled ? "#cfe6ff" : "#6f8296").setVisible(true);
+      this.tags[i].setPosition(lx + 4, top + 3).setText(v.tag).setColor(i === selSlot && v.filled ? "#ffd23f" : v.filled ? "#cfe6ff" : "#6f8296").setVisible(true);
       this.metas[i].setPosition(lx + SLOT - 4, top + SLOT - 3).setText(v.meta).setVisible(!!v.meta);
     }
   }
