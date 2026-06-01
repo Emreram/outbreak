@@ -70,9 +70,11 @@ export class ChunkView {
       this.extras.push(t);
     }
 
-    // Light building "signage" so the procedural variety reads.
+    // Light building "signage" for NOTABLE structures only (skip filler houses/
+    // offices) — keeps the map legible and avoids creating a label texture per
+    // building on every chunk load.
     for (const b of chunk.buildings) {
-      if (b.tw < 5 || b.th < 4) continue;
+      if (b.tw < 5 || b.th < 4 || FILLER_LABELS.has(b.type)) continue;
       const t = scene.add
         .text(b.center.x, b.center.y, labelFor(b), {
           fontFamily: "monospace",
@@ -99,6 +101,9 @@ export class ChunkView {
     this.map.destroy();
   }
 }
+
+// Common filler structures aren't labelled (too many, low information).
+const FILLER_LABELS = new Set<string>(["house", "office", "cabin", "motel"]);
 
 function labelFor(b: Building): string {
   return b.type.replace(/_/g, " ");
