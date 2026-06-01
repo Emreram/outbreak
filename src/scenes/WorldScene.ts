@@ -197,13 +197,15 @@ export class WorldScene extends Phaser.Scene {
     // Stream the initial ring of chunks (and their chests) around the spawn.
     this.chunks.ensureAround(startX, startY);
 
-    // Day/night tint overlay (screen-space, above the world, below HUD).
+    // Day/night tint: a flat darkening rect kept on the MAIN camera (below the
+    // player glow at depth 520) so the additive flashlight glow still cuts through
+    // the dark. It's a uniform fill, so the 1.25× zoom merely over-covers — fine.
+    // The UI camera ignores it (below) so it isn't double-drawn.
     this.nightOverlay = this.add
       .rectangle(0, 0, this.scale.width, this.scale.height, 0x00040c, 0)
       .setOrigin(0, 0)
       .setScrollFactor(0)
       .setDepth(500);
-    this.uiLayer.add(this.nightOverlay);
 
     // Atmosphere (procedural): drifting motes, a flashlight glow that brightens at
     // night, and a vignette. All camera-fixed except the glow, which follows the player.
@@ -272,7 +274,7 @@ export class WorldScene extends Phaser.Scene {
     // uiLayer. World objects sit far from origin so the UI camera frustum-culls
     // them; ignore the persistent ones too for safety. floatText/glow stay on main.
     this.cameras.main.ignore(this.uiLayer);
-    this.uiCam.ignore([this.player.sprite, this.weaponSprite, this.glow]);
+    this.uiCam.ignore([this.player.sprite, this.weaponSprite, this.glow, this.nightOverlay]);
     this.uiCam.ignore(this.enemyGroup);
     this.uiCam.ignore(this.projectileGroup);
     this.uiCam.ignore(this.enemyProjGroup);
