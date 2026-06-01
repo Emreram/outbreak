@@ -35,15 +35,24 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x5b5f66, 1).fillCircle(15, 16, 12);
     g.fillStyle(0x787d84, 1).fillCircle(11, 12, 5);
   },
+  // top-down parked car (front at +x): 4 tyres, roof + windshield, hood, lights.
   car: (g) => {
-    g.fillStyle(0x9c3f3f, 1).fillRoundedRect(4, 8, 22, 14, 4);
-    g.fillStyle(0x1b2530, 1).fillRoundedRect(8, 10, 14, 6, 2); // windows
-    g.fillStyle(0x121417, 1).fillCircle(9, 23, 2.5).fillCircle(21, 23, 2.5);
+    g.fillStyle(0x121417, 1).fillRect(7, 4, 4, 3).fillRect(7, 23, 4, 3).fillRect(19, 4, 4, 3).fillRect(19, 23, 4, 3); // tyres
+    g.fillStyle(0x2a527d, 1).fillRoundedRect(4, 7, 23, 16, 5); // body
+    g.fillStyle(0x3a6ea5, 1).fillRoundedRect(5, 8, 20, 14, 4); // body top tone
+    g.fillStyle(0x12202e, 1).fillRoundedRect(9, 9, 8, 12, 3); // cabin glass
+    g.fillStyle(0x274a6e, 1).fillRect(18, 10, 5, 10); // hood
+    g.fillStyle(0xffe9a8, 1).fillRect(25, 9, 2, 3).fillRect(25, 18, 2, 3); // headlights
+    g.fillStyle(0xffffff, 0.12).fillRect(6, 9, 2, 12); // sheen
   },
+  // burnt-out wreck: rusted, crumpled, scorched.
   wreck: (g) => {
-    g.fillStyle(0x2f3033, 1).fillRoundedRect(4, 8, 22, 14, 4);
-    g.fillStyle(0x15161a, 1).fillRoundedRect(8, 10, 14, 6, 2);
-    g.fillStyle(0x55585d, 1).fillRect(6, 9, 4, 12);
+    g.fillStyle(0x0e0f12, 1).fillRect(7, 4, 4, 3).fillRect(19, 23, 4, 3); // charred tyres
+    g.fillStyle(0x33352f, 1).fillRoundedRect(4, 7, 23, 16, 5); // rusted shell
+    g.fillStyle(0x24221b, 1).fillRoundedRect(8, 9, 13, 12, 3); // burnt-out cabin
+    g.fillStyle(0x55585d, 1).fillRect(5, 8, 3, 14); // crumpled door
+    g.fillStyle(0x7a3a1a, 1).fillCircle(15, 14, 4); // scorch / rust
+    g.fillStyle(0x121417, 1).fillCircle(15, 14, 1.6);
   },
   crate: (g) => {
     g.fillStyle(0x7a5a30, 1).fillRect(7, 9, 16, 16);
