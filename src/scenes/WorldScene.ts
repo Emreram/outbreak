@@ -26,7 +26,8 @@ import {
   PROJ_PELLET,
   PROJ_ROCKET,
 } from "../engine/icons";
-import { applyOutcome } from "../game/outcomes";
+import { applyOutcome, type ApplyResult } from "../game/outcomes";
+import { classifyIntent, type Intent } from "../game/intent";
 import { buildingEnteredFlag, nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
 import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
@@ -71,6 +72,13 @@ const SAVE_MS = 4000;
 const PHASES = ["dawn", "day", "dusk", "night"] as const;
 const SEG_MS = 45000; // real seconds per time-of-day segment
 
+// Open-ground locations (outdoor biomes) vs enclosed buildings — shapes which
+// instant quick-actions an encounter's opening prompt offers.
+const OPEN_LOCS = new Set<string>([
+  "street", "forest", "dense_woods", "grassland", "farmland", "riverbank", "lake",
+  "marsh", "coast", "quarry", "parkland", "construction_site", "ocean",
+]);
+
 export class WorldScene extends Phaser.Scene {
   private player!: Player;
   private chunks!: ChunkManager;
@@ -85,6 +93,9 @@ export class WorldScene extends Phaser.Scene {
   private dead = false;
   private inEncounter = false;
   private encounterLoc = "street";
+  private enacting = false; // a GM outcome is currently playing out in the visible world
+  private encounterTurns = 0; // resolved GM turns this encounter (hard-capped below)
+  private static readonly MAX_ENCOUNTER_TURNS = 2;
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private ambientAcc = 0;
@@ -120,6 +131,8 @@ export class WorldScene extends Phaser.Scene {
   create(): void {
     this.dead = false;
     this.inEncounter = false;
+    this.enacting = false;
+    this.encounterTurns = 0;
     this.lootOpen = false;
     this.grabbedUntil = 0;
     this.clouds = [];
@@ -332,8 +345,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   override update(time: number, delta: number): void {
-    // The world pauses during an encounter or while the loot screen is open.
-    if (!this.dead && !this.inEncounter && !this.lootOpen) {
+    // The world pauses during an encounter, while an outcome is playing out, or
+    // while the loot screen is open.
+    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
       if (time < this.grabbedUntil) {
@@ -515,7 +529,7 @@ export class WorldScene extends Phaser.Scene {
   // --- enemy special abilities (scene-orchestrated) --------------------------
 
   private enemySpecials(e: Enemy, px: number, py: number, now: number): void {
-    if (this.inEncounter || this.lootOpen || this.dead) return;
+    if (this.inEncounter || this.enacting || this.lootOpen || this.dead) return;
     const dist = Math.hypot(px - e.sprite.x, py - e.sprite.y);
     if (e.hasTrait("spitter") && dist > 40 && dist < 380 && e.trySpecial(now, 2200)) {
       const a = Math.atan2(py - e.sprite.y, px - e.sprite.x);
@@ -736,7 +750,7 @@ export class WorldScene extends Phaser.Scene {
     if (b && !this.state.worldFlags.includes(buildingEnteredFlag(b.gid))) {
       this.state.worldFlags.push(buildingEnteredFlag(b.gid));
       const name = b.type.replace(/_/g, " ");
-      this.startEncounter(b.type, `I step inside the ${name}, staying alert.`, name);
+      this.startEncounter(b.type, `You slip inside the ${name}, staying low — it's dim and still.`, name);
     }
   }
 
@@ -750,10 +764,10 @@ export class WorldScene extends Phaser.Scene {
     const b = this.buildingAt();
     if (b) {
       const name = b.type.replace(/_/g, " ");
-      this.startEncounter(b.type, `I search the ${name}.`, name);
+      this.startEncounter(b.type, `You take stock of the ${name} around you.`, name);
     } else {
       const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
-      this.startEncounter(biome, "I scan the area and the way ahead.", "The area");
+      this.startEncounter(biome, "You scan the area and the way ahead.", "The area");
     }
   }
 
@@ -774,16 +788,26 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  private startEncounter(loc: string, openingValue: string, title: string): void {
-    if (this.dead || this.inEncounter) return;
+  private startEncounter(loc: string, situation: string, title: string): void {
+    if (this.dead || this.inEncounter || this.enacting) return;
     this.inEncounter = true;
+    this.encounterTurns = 0;
     this.setGameKeys(false); // so typing/keys can't move the player or fire actions
+    this.firing = false;
     this.player.sprite.setVelocity(0, 0);
     this.freezeEnemies();
     this.encounterLoc = loc;
     sfx.ui();
-    this.modal.openLoading(title, this.thinkingMsg());
-    void this.resolveTurn({ mode: "free_text", value: openingValue });
+    // Ask FIRST — instant, no GM call until the player answers. A few contextual
+    // quick actions PLUS a free-text box; the GM only runs on their choice.
+    this.modal.openPrompt(title, situation, this.openingChoicesFor(loc));
+  }
+
+  /** A few instant, contextual quick-actions for the opening prompt (plus free text). */
+  private openingChoicesFor(loc: string): string[] {
+    return OPEN_LOCS.has(loc)
+      ? ["Search the area", "Scout ahead", "Move on quietly", "Set up to rest"]
+      : ["Search for supplies", "Look for survivors", "Barricade up", "Slip back out"];
   }
 
   /** Enable/disable the Phaser keyboard so encounter typing never leaks to gameplay. */
@@ -808,16 +832,188 @@ export class WorldScene extends Phaser.Scene {
       this.showToast("AI model offline — using the local director. See README to enable Ollama.");
     }
     const result = applyOutcome(this.state, gm);
+    this.encounterTurns += 1;
     this.spawnNear(result.spawns); // GM-decided spawns appear on the map (§8.5)
     if (gm.inventory_add.length > 0) sfx.pickup();
     this.hud.update(this.state, this.debugInfo());
     this.persist();
+
     if (result.gameOver) {
-      this.modal.close();
+      this.endEncounter();
       this.enterDeath(result.reason || undefined);
       return;
     }
-    this.modal.showResult(result.narrative, result.interaction, this.effectsSummary(gm));
+
+    // Show the narration in the bottom bar AND play it out in the visible world at
+    // the same time — the player watches their character do what was just narrated.
+    this.modal.showBanner(result.narrative, this.effectsSummary(gm));
+    await this.enactOutcome(input, gm, result);
+
+    // Most actions resolve in ONE turn and hand control straight back. Only an
+    // immediate threat earns ONE tense follow-up — and the turn cap closes it regardless.
+    const keepOpen =
+      !result.encounterOver &&
+      result.spawns.length > 0 &&
+      this.encounterTurns < WorldScene.MAX_ENCOUNTER_TURNS;
+
+    if (keepOpen) {
+      this.modal.showChoices(result.narrative, result.interaction, this.effectsSummary(gm));
+    } else {
+      this.endEncounter(); // banner lingers + fades; free roaming resumes immediately
+    }
+  }
+
+  /** Play a resolved GM outcome out in the visible world: animate the character
+   *  doing the action and float the stat/loot changes over them. Resolves after the
+   *  short beat so the caller can then close the encounter or offer the follow-up. */
+  private async enactOutcome(input: TurnInput, gm: GMResponse, result: ApplyResult): Promise<void> {
+    this.enacting = true;
+    const intent = classifyIntent(input.value);
+    const beatMs = this.playIntent(intent, gm, result);
+    this.floatDeltas(gm);
+    await new Promise<void>((resolve) => this.time.delayedCall(beatMs, resolve));
+    this.enacting = false;
+  }
+
+  /** Map the player's intent to an in-world animation using existing FX. Returns
+   *  the beat length (ms) to hold before control returns. */
+  private playIntent(intent: Intent, gm: GMResponse, result: ApplyResult): number {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    const face = this.player.sprite.rotation;
+    switch (intent) {
+      case "fight": {
+        this.player.lunge();
+        meleeArc(this, px, py, face);
+        this.cameras.main.shake(60, 0.004);
+        sfx.swing();
+        const e = this.nearestEnemy(180);
+        if (e) {
+          const ang = Math.atan2(e.sprite.y - py, e.sprite.x - px);
+          bloodBurst(this, e.sprite.x, e.sprite.y, 8);
+          e.knockback(Math.cos(ang), Math.sin(ang), 220, this.time.now);
+          // No NEW threat drawn in and the narrative reads like a win → finish it.
+          if (result.spawns.length === 0 && this.narrativeImpliesKill(gm.narrative)) {
+            e.takeDamage(e.hp);
+            this.onEnemyKilled(e);
+          }
+        }
+        return 1000;
+      }
+      case "flee": {
+        const e = this.nearestEnemy(640);
+        const ang = e ? Math.atan2(py - e.sprite.y, px - e.sprite.x) : face + Math.PI; // straight away
+        this.dashPlayer(ang, 240, 760);
+        sfx.swing();
+        return 820;
+      }
+      case "scout":
+      case "free": {
+        this.dashPlayer(face, 150, 520);
+        return 700;
+      }
+      case "search": {
+        this.rummage();
+        sfx.ui();
+        return 900;
+      }
+      case "heal":
+      case "eat":
+      case "drink": {
+        bloodBurst(this, px, py, 7, 0x6ed16e); // green "restore" puff
+        this.player.recoil();
+        return 880;
+      }
+      case "rest": {
+        this.cameras.main.flash(280, 6, 9, 14);
+        return 1100;
+      }
+      case "hide":
+      case "barricade": {
+        this.crouch();
+        return 720;
+      }
+      case "talk": {
+        this.floatText(px, py - 18, "…", "#cfe6ff");
+        if (result.spawns.some((s) => s.type === "survivor_hostile")) this.player.lunge();
+        return 800;
+      }
+      default: {
+        this.player.lunge();
+        return 700;
+      }
+    }
+  }
+
+  /** Float each non-zero stat delta and every inventory change over the player. */
+  private floatDeltas(gm: GMResponse): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let i = 0;
+    const pop = (text: string, color: string) => {
+      const idx = i++;
+      this.time.delayedCall(idx * 90, () => {
+        if (this.player?.sprite?.active) this.floatText(px, py - 12 - idx * 15, text, color);
+      });
+    };
+    const sc = gm.state_changes;
+    const rows: Array<[string, number, string]> = [
+      ["HP", sc.hp, sc.hp >= 0 ? "#6ed16e" : "#ff5555"],
+      ["STA", sc.stamina, sc.stamina >= 0 ? "#ffd23f" : "#caa83f"],
+      ["FOOD", sc.hunger, sc.hunger >= 0 ? "#ff9f43" : "#c77f33"],
+      ["WATER", sc.thirst, sc.thirst >= 0 ? "#4ec3ff" : "#3f9fcc"],
+      ["INF", sc.infection, sc.infection > 0 ? "#c060ff" : "#6ed16e"],
+    ];
+    for (const [label, v, color] of rows) if (v) pop(`${label} ${v > 0 ? "+" : ""}${v}`, color);
+    for (const a of gm.inventory_add) pop(`+${a.qty > 1 ? a.qty + " " : ""}${a.item}`, RARITY_META[defOf(a.item).rarity].css);
+    for (const r of gm.inventory_remove) pop(`−${r.qty > 1 ? r.qty + " " : ""}${r.item}`, "#9fb0c0");
+  }
+
+  /** Dash the player a short distance via velocity (respects wall colliders), then stop. */
+  private dashPlayer(angle: number, speed: number, ms: number): void {
+    const body = this.player.sprite.body as Phaser.Physics.Arcade.Body;
+    this.player.sprite.setRotation(angle);
+    this.physics.velocityFromRotation(angle, speed, body.velocity);
+    dustPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 3);
+    this.time.delayedCall(Math.round(ms * 0.5), () => {
+      if (this.player?.sprite?.active) dustPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 2);
+    });
+    this.time.delayedCall(ms, () => {
+      if (this.player?.sprite?.active) this.player.sprite.setVelocity(0, 0);
+    });
+  }
+
+  /** A quick "rummaging" wiggle in place when searching. */
+  private rummage(): void {
+    const s = this.player.sprite;
+    const base = s.rotation;
+    this.tweens.add({
+      targets: s,
+      rotation: base + 0.16,
+      duration: 110,
+      yoyo: true,
+      repeat: 2,
+      ease: "Sine.easeInOut",
+      onComplete: () => s.setRotation(base),
+    });
+    dustPuff(this, s.x, s.y + 8, 2);
+  }
+
+  /** A crouch squash for hiding / barricading. */
+  private crouch(): void {
+    const s = this.player.sprite;
+    this.tweens.add({
+      targets: s,
+      scaleX: s.scaleX * 1.12,
+      scaleY: s.scaleY * 0.8,
+      duration: 160,
+      yoyo: true,
+      ease: "Quad.easeOut",
+    });
+  }
+
+  private narrativeImpliesKill(text: string): boolean {
+    return /\b(kill|killed|drop|dropped|put .* down|split|skull|slay|destroy|finish|cut down)/i.test(text);
   }
 
   /** A concise "here's what the GM just did" line so the AI's impact is visible. */
@@ -839,9 +1035,25 @@ export class WorldScene extends Phaser.Scene {
     return parts.join("   ·   ");
   }
 
+  /** Manual bail (the "Leave encounter" link) — routes through the same teardown. */
   private onEncounterLeave(): void {
+    this.endEncounter();
+  }
+
+  /** Centralized encounter teardown: return to free roaming and let the closing
+   *  narration banner linger briefly. Guarded against double-invocation. */
+  private endEncounter(): void {
+    if (!this.inEncounter) {
+      this.modal.dismissSoon();
+      return;
+    }
     this.inEncounter = false;
+    this.enacting = false;
+    this.encounterTurns = 0;
     this.setGameKeys(true);
+    this.firing = false;
+    this.player.sprite.setVelocity(0, 0);
+    this.modal.dismissSoon();
     this.persist();
   }
 
@@ -893,6 +1105,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.dead) return;
     this.dead = true;
     this.inEncounter = false;
+    this.enacting = false;
     this.player.sprite.setVelocity(0, 0);
     this.modal.close();
     sfx.death();
@@ -1285,12 +1498,14 @@ export class WorldScene extends Phaser.Scene {
   /** Open the run with its AI-authored scenario intro; first action goes to the GM. */
   private showIntro(intro: string): void {
     this.inEncounter = true;
+    this.enacting = false;
+    this.encounterTurns = 0;
     this.setGameKeys(false);
     this.player.sprite.setVelocity(0, 0);
     this.freezeEnemies();
     const b = this.buildingAt();
     this.encounterLoc = b ? b.type : this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
-    this.modal.showResult(intro, { type: "free_text", prompt: "What do you do?", options: [] });
+    this.modal.openPrompt(this.state.player.name, intro, this.openingChoicesFor(this.encounterLoc));
   }
 
   private persist(): void {

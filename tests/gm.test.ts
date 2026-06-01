@@ -50,6 +50,12 @@ ok(g3.spawns.length === 1 && g3.spawns[0].type === "zombie" && g3.spawns[0].coun
 ok(g3.state_changes.hp === -100 && g3.state_changes.stamina === 0, "delta clamped to -100, non-number -> 0");
 ok(g3.inventory_add.length === 1 && g3.inventory_add[0].qty === 1, "bad inventory_add entries dropped/fixed");
 
+// --- encounter_over: optional, strict-boolean, defaults false ---
+ok(sanitizeGM({ narrative: "x", encounter_over: true }).encounter_over === true, "encounter_over passes through sanitize");
+ok(sanitizeGM({ narrative: "x" }).encounter_over === false, "encounter_over defaults false when omitted");
+const gDanger = sanitizeGM({ narrative: "threat", encounter_over: false, next_interaction: { type: "choices", prompt: "Decide", options: ["a", "b", "c", "d"] } });
+ok(gDanger.encounter_over === false && gDanger.next_interaction.options.length === 4, "danger keeps encounter open with 4 choices");
+
 // --- applyOutcome ---
 let s = newGame("t");
 applyOutcome(s, sanitizeGM({ narrative: "hit", state_changes: { hp: -200, stamina: 0, hunger: 0, thirst: 0, infection: 0 } }));
@@ -80,6 +86,11 @@ s = newGame("t");
 applyOutcome(s, sanitizeGM({ narrative: "n", discovered: { name: "X", type: "y", x: null, y: null } }));
 ok(s.knownLocations.length === 0, "discovered without coords ignored");
 
+// applyOutcome surfaces encounterOver for the scene's bounded-loop decision
+s = newGame("t");
+ok(applyOutcome(s, sanitizeGM({ narrative: "n", encounter_over: true })).encounterOver === true, "applyOutcome surfaces encounterOver");
+ok(applyOutcome(newGame("t"), sanitizeGM({ narrative: "n" })).encounterOver === false, "applyOutcome encounterOver defaults false");
+
 // --- MockProvider: schema-valid across intents ---
 async function main() {
   const mock = new MockProvider();
@@ -95,6 +106,13 @@ async function main() {
     const payload = { game_state: { location_type: "pharmacy", player: { hp: 80 }, inventory: [{ item: "Crowbar", qty: 1 }] }, input: { mode: "free_text", value } };
     const gm = sanitizeGM(JSON.parse(await mock.generate("", payload, {})));
     ok(validShape(gm), `mock turn valid: "${value}"`);
+  }
+
+  // Calm, exploratory intents resolve in ONE turn and hand control back (no chain).
+  for (const value of ["I scout the area", "I drink some water", "I barricade the door"]) {
+    const payload = { game_state: { location_type: "pharmacy", player: { hp: 80 }, inventory: [{ item: "Water Bottle", qty: 1 }] }, input: { mode: "free_text", value } };
+    const gm = sanitizeGM(JSON.parse(await mock.generate("", payload, {})));
+    ok(gm.encounter_over === true && gm.next_interaction.type === "free_text", `calm intent auto-closes: "${value}"`);
   }
 
   const scen = JSON.parse(await mock.generate("", { kind: "scenario", theme: "overrun hospital" }, {})) as Record<string, unknown>;
