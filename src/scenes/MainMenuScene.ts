@@ -4,6 +4,7 @@ import { newRunState } from "../ai/gameMaster";
 import { hasWebGPU, webllmEnabled, setWebllmEnabled, webllmState, webllmModel, loadWebLLM, warmUpWebLLM } from "../ai/webllm";
 import { CharacterCreate, type CreationResult } from "../ui/CharacterCreate";
 import { sfx } from "../engine/audio";
+import { fxTexFor } from "../engine/fx";
 
 // Title screen. "New run" opens the character creation screen, then generates a
 // new seed + AI scenario with the chosen survivor. "Continue" resumes a save.
@@ -50,16 +51,19 @@ export class MainMenuScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    // Sequential layout: with a save there are TWO buttons — start higher and flow
+    // the caption underneath so nothing ever overlaps.
     const existing = loadGame();
-    let y = h * 0.55;
+    let y = existing ? h * 0.5 : h * 0.55;
     if (existing) {
       this.button(cx, y, "Continue run", () => this.continueRun(existing.seed));
       y += 66;
     }
     this.button(cx, y, "New run", () => this.openCreate());
+    y += 56;
 
     this.add
-      .text(cx, h * 0.635, "Playable offline — no GPU needed. The in-browser AI below is an optional upgrade.", {
+      .text(cx, y, "Playable offline — no GPU needed. The in-browser AI below is an optional upgrade.", {
         fontFamily: "monospace",
         fontSize: "11px",
         color: "#7f93a8",
@@ -122,11 +126,13 @@ export class MainMenuScene extends Phaser.Scene {
       gg.destroy();
     }
 
-    // Distant fires glowing & breathing along the bottom edge.
+    // Distant fires glowing & breathing along the bottom edge. fxTexFor keeps the
+    // fire RED on the Canvas renderer too (canvas ignores tints on generated art).
+    const glowTex = fxTexFor(this, KEY, 0xc23a12);
     const glow = this.add
-      .image(cx, h, KEY)
+      .image(cx, h, glowTex.key)
       .setOrigin(0.5, 1)
-      .setTint(0xc23a12)
+      .setTint(glowTex.tint)
       .setBlendMode(Phaser.BlendModes.ADD)
       .setDepth(-9);
     glow.setScale((w / glow.width) * 1.4, (h * 0.55) / glow.height);
@@ -134,8 +140,10 @@ export class MainMenuScene extends Phaser.Scene {
     this.tweens.add({ targets: glow, alpha: 0.6, duration: 3000, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
 
     // Embers streaming up the full screen — the headline effect.
+    const emberTints = [0xff7b3a, 0xffb056, 0xff5630, 0xffd27a];
+    const emberTex = fxTexFor(this, KEY, 0xff7b3a);
     this.add
-      .particles(0, 0, KEY, {
+      .particles(0, 0, emberTex.key, {
         x: { min: 0, max: w },
         y: { min: h * 0.6, max: h + 12 },
         lifespan: { min: 5000, max: 11000 },
@@ -143,7 +151,7 @@ export class MainMenuScene extends Phaser.Scene {
         speedX: { min: -18, max: 18 },
         scale: { start: 0.7, end: 0.05 },
         alpha: { start: 0.95, end: 0 },
-        tint: [0xff7b3a, 0xffb056, 0xff5630, 0xffd27a],
+        tint: emberTex.tint === 0xffffff ? emberTex.tint : emberTints,
         blendMode: "ADD",
         frequency: 130,
         quantity: 1,
@@ -151,8 +159,9 @@ export class MainMenuScene extends Phaser.Scene {
       .setDepth(-8);
 
     // Ash sifting down for depth and a sense of ruin.
+    const ashTex = fxTexFor(this, KEY, 0x9aa3ab);
     this.add
-      .particles(0, 0, KEY, {
+      .particles(0, 0, ashTex.key, {
         x: { min: 0, max: w },
         y: -12,
         lifespan: { min: 9000, max: 15000 },
@@ -160,7 +169,7 @@ export class MainMenuScene extends Phaser.Scene {
         speedX: { min: -14, max: 14 },
         scale: { start: 0.28, end: 0.12 },
         alpha: { start: 0.35, end: 0 },
-        tint: 0x9aa3ab,
+        tint: ashTex.tint,
         frequency: 420,
         quantity: 1,
       })

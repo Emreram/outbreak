@@ -23,6 +23,44 @@ function scaleColor(c: number, f: number): number {
   const b = Math.min(255, Math.max(0, Math.round((c & 255) * f)));
   return (r << 16) | (g << 8) | b;
 }
+
+// --- Canvas-renderer tint fallback ----------------------------------------------
+// Phaser's CANVAS renderer silently IGNORES tints on canvas-sourced textures (all
+// our generated FX art) — blood would render WHITE for anyone without WebGL. So on
+// canvas we bake a tinted COPY of the texture on demand (multiply + alpha-restore)
+// and draw that untinted; WebGL keeps true runtime tints. Cached per (base, tint).
+let canvasRenderer = false;
+
+/** Resolve a (texture, tint) pair into something the active renderer can draw.
+ *  Exported so scenes drawing tinted FX textures directly stay colour-correct. */
+export function fxTexFor(scene: Phaser.Scene, base: string, tint: number): { key: string; tint: number } {
+  if (!canvasRenderer || tint === 0xffffff) return { key: base, tint };
+  const key = `${base}_t${tint.toString(16)}`;
+  if (!scene.textures.exists(key)) bakeTinted(scene, base, key, tint);
+  return scene.textures.exists(key) ? { key, tint: 0xffffff } : { key: base, tint };
+}
+
+/** Pick a single colour for canvas mode when a particle config wants a tint ARRAY. */
+function midTint(tints: number | number[]): number {
+  return Array.isArray(tints) ? tints[Math.floor(tints.length / 2)] : tints;
+}
+
+function bakeTinted(scene: Phaser.Scene, baseKey: string, outKey: string, tint: number): void {
+  if (!scene.textures.exists(baseKey)) return;
+  const src = scene.textures.get(baseKey).getSourceImage() as HTMLCanvasElement | HTMLImageElement;
+  if (!src || !src.width) return;
+  const cv = scene.textures.createCanvas(outKey, src.width, src.height);
+  const ctx = cv?.getContext();
+  if (!ctx) return;
+  ctx.drawImage(src, 0, 0);
+  ctx.globalCompositeOperation = "multiply";
+  ctx.fillStyle = "#" + (tint & 0xffffff).toString(16).padStart(6, "0");
+  ctx.fillRect(0, 0, src.width, src.height);
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.drawImage(src, 0, 0); // restore the source's alpha
+  ctx.globalCompositeOperation = "source-over";
+  cv?.refresh();
+}
 /** A cone of emission angles (degrees) pointed along `dir`, away from the blow. */
 function coneFrom(dir: { x: number; y: number }, spreadDeg: number): { min: number; max: number } {
   const a = (Math.atan2(dir.y, dir.x) * 180) / Math.PI;
@@ -35,6 +73,7 @@ function quickProfile(color: number): BloodProfile {
 
 /** Generate the small textures the FX below draw with. Idempotent. */
 export function generateFxTextures(scene: Phaser.Scene): void {
+  canvasRenderer = scene.game.renderer.type === Phaser.CANVAS;
   if (!scene.textures.exists(FX_BLOOD)) {
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
     g.fillStyle(0xffffff, 1).fillCircle(4, 4, 4);
@@ -208,7 +247,8 @@ export function splatHit(
   const reach = (dir ? 230 : 170) * (0.85 + power * 0.35);
 
   // heavy arterial droplets — the wet, flung blood
-  const drops = scene.add.particles(x, y, FX_DROP, {
+  const dropTex = fxTexFor(scene, FX_DROP, p.spray);
+  const drops = scene.add.particles(x, y, dropTex.key, {
     speed: { min: 50, max: reach },
     angle,
     lifespan: { min: 260, max: 700 },
@@ -216,20 +256,21 @@ export function splatHit(
     rotate: { min: 0, max: 360 },
     // ash soot drifts up like smoke; ice chips drift; tar is heavy; blood falls
     gravityY: p.fluid === "frozen" ? 120 : p.fluid === "ash" ? -10 : p.fluid === "oil" ? 420 : 340,
-    tint: p.spray,
+    tint: dropTex.tint,
     emitting: false,
   });
   drops.setDepth(9);
   drops.explode(Math.max(3, Math.round(7 * amt)), x, y);
 
   // atomised mist — brighter, expands, hangs a beat
-  const mist = scene.add.particles(x, y, FX_MIST, {
+  const mistTex = fxTexFor(scene, FX_MIST, p.mist);
+  const mist = scene.add.particles(x, y, mistTex.key, {
     speed: { min: 8, max: 60 * power },
     angle,
     lifespan: { min: 200, max: 460 },
     scale: { start: 0.45, end: 1.5 },
     alpha: { start: p.fluid === "ash" ? 0.6 : 0.5, end: 0 },
-    tint: p.mist,
+    tint: mistTex.tint,
     blendMode: p.fluid === "spark" ? Phaser.BlendModes.ADD : Phaser.BlendModes.NORMAL,
     emitting: false,
   });
@@ -242,14 +283,15 @@ export function splatHit(
   if (p.glow !== undefined) {
     const isSpark = p.fluid === "spark";
     const isEmber = p.fluid === "ash";
-    const accent = scene.add.particles(x, y, FX_BLOOD, {
+    const accentTex = fxTexFor(scene, FX_BLOOD, p.glow);
+    const accent = scene.add.particles(x, y, accentTex.key, {
       speed: { min: isSpark ? 120 : 20, max: (isSpark ? 320 : 90) * power },
       angle,
       lifespan: { min: 180, max: isEmber ? 900 : 480 },
       scale: { start: isSpark ? 0.7 : 0.5, end: 0 },
       gravityY: isEmber ? -40 : 0, // embers float up
       alpha: { start: 0.9, end: 0 },
-      tint: p.glow,
+      tint: accentTex.tint,
       blendMode: Phaser.BlendModes.ADD,
       emitting: false,
     });
@@ -315,27 +357,29 @@ function pushDecal(scene: Phaser.Scene, img: Phaser.GameObjects.Image, fadeMs: n
  *  battlefield gets gory without unbounded sprite growth; old splats fade out.
  *  When `dir` is given a spatter streak is flung alongside the pool. */
 export function bloodDecal(scene: Phaser.Scene, x: number, y: number, scale = 1, color = 0x6e0d0d, dir?: { x: number; y: number }): void {
+  const t = fxTexFor(scene, FX_SPLAT, color);
   const img = scene.add
-    .image(x, y, FX_SPLAT)
+    .image(x, y, t.key)
     .setDepth(3)
     .setRotation(Math.random() * Math.PI * 2)
     .setScale(scale * (0.7 + Math.random() * 0.6))
     .setAlpha(0.78)
-    .setTint(color);
+    .setTint(t.tint);
   pushDecal(scene, img, 26000, 9000);
   if (dir) bloodSmear(scene, x + dir.x * 9, y + dir.y * 9, color, dir, scale);
 }
 
 /** A directional spatter streak on the ground, flung along `dir`. */
 export function bloodSmear(scene: Phaser.Scene, x: number, y: number, color: number, dir: { x: number; y: number }, scale = 1): void {
+  const t = fxTexFor(scene, FX_SMEAR, color);
   const img = scene.add
-    .image(x, y, FX_SMEAR)
+    .image(x, y, t.key)
     .setDepth(3)
     .setOrigin(0.2, 0.5)
     .setRotation(Math.atan2(dir.y, dir.x))
     .setScale(scale * (0.7 + Math.random() * 0.5), scale * (0.55 + Math.random() * 0.35))
     .setAlpha(0.62)
-    .setTint(color);
+    .setTint(t.tint);
   pushDecal(scene, img, 18000, 6000);
 }
 
@@ -348,13 +392,14 @@ export function bloodTrail(scene: Phaser.Scene, x: number, y: number, p: BloodPr
     trailPool.set(scene, pool);
   }
   const rot = dir ? Math.atan2(dir.y, dir.x) + Math.PI : Math.random() * Math.PI * 2;
+  const t = fxTexFor(scene, FX_DROP, p.pool);
   const drip = scene.add
-    .image(x + (Math.random() - 0.5) * 6, y + 4 + (Math.random() - 0.5) * 6, FX_DROP)
+    .image(x + (Math.random() - 0.5) * 6, y + 4 + (Math.random() - 0.5) * 6, t.key)
     .setDepth(3)
     .setRotation(rot)
     .setScale(0.4 + Math.random() * 0.45)
     .setAlpha(0.7)
-    .setTint(p.pool);
+    .setTint(t.tint);
   pool.push(drip);
   scene.tweens.add({
     targets: drip,
@@ -382,7 +427,8 @@ export function bloodTrail(scene: Phaser.Scene, x: number, y: number, p: BloodPr
 export function gibs(scene: Phaser.Scene, x: number, y: number, p?: BloodProfile): void {
   const prof = p ?? quickProfile(0x7a1010);
   const count = Math.max(5, Math.round(8 * prof.amount));
-  const e = scene.add.particles(x, y, FX_GIB, {
+  const gibTex = fxTexFor(scene, FX_GIB, prof.gib);
+  const e = scene.add.particles(x, y, gibTex.key, {
     speed: { min: 70, max: 260 },
     angle: { min: 0, max: 360 },
     lifespan: { min: 380, max: 820 },
@@ -390,7 +436,7 @@ export function gibs(scene: Phaser.Scene, x: number, y: number, p?: BloodProfile
     alpha: { start: 1, end: 0 }, // fade out on landing (no hard pop)
     rotate: { start: 0, end: 360 },
     gravityY: prof.fluid === "frozen" ? 220 : 480,
-    tint: prof.gib,
+    tint: gibTex.tint,
     emitting: false,
   });
   e.setDepth(9);
@@ -407,13 +453,14 @@ export function gibs(scene: Phaser.Scene, x: number, y: number, p?: BloodProfile
 
 /** A small footstep / impact dust puff. */
 export function dustPuff(scene: Phaser.Scene, x: number, y: number, count = 4): void {
-  const e = scene.add.particles(x, y, FX_DUST, {
+  const t = fxTexFor(scene, FX_DUST, 0x8a7f6a);
+  const e = scene.add.particles(x, y, t.key, {
     speed: { min: 8, max: 30 },
     angle: { min: 200, max: 340 },
     lifespan: { min: 300, max: 600 },
     scale: { start: 0.9, end: 0 },
     alpha: { start: 0.5, end: 0 },
-    tint: 0x8a7f6a,
+    tint: t.tint,
     emitting: false,
   });
   e.setDepth(7);
@@ -493,12 +540,13 @@ export function makeDropGlow(scene: Phaser.Scene, x: number, y: number, spec: Ra
 
   // Vertical light shaft (best loot only) — rises from the item with a slow shimmer.
   if (spec.beam) {
+    const bt = fxTexFor(scene, FX_BEAM, spec.color);
     const beam = scene.add
-      .image(x, y + 4, FX_BEAM)
+      .image(x, y + 4, bt.key)
       .setOrigin(0.5, 1)
       .setBlendMode(Phaser.BlendModes.ADD)
       .setDepth(5)
-      .setTint(spec.color)
+      .setTint(bt.tint)
       .setAlpha(0)
       .setScale(0.7 + spec.scale, 0.9 + spec.scale * 1.4);
     scene.tweens.add({ targets: beam, alpha: 0.5, scaleY: beam.scaleY * 1.12, duration: spec.pulseMs, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
@@ -506,13 +554,15 @@ export function makeDropGlow(scene: Phaser.Scene, x: number, y: number, spec: Ra
   }
 
   // Outer halo — every rarity gets one, sized + paced by tier.
-  const halo = scene.add.image(x, y, FX_GLOW).setBlendMode(Phaser.BlendModes.ADD).setDepth(6).setTint(spec.color).setScale(spec.scale).setAlpha(0.5);
+  const ht = fxTexFor(scene, FX_GLOW, spec.color);
+  const halo = scene.add.image(x, y, ht.key).setBlendMode(Phaser.BlendModes.ADD).setDepth(6).setTint(ht.tint).setScale(spec.scale).setAlpha(0.5);
   scene.tweens.add({ targets: halo, alpha: 0.28, scaleX: spec.scale * 1.12, scaleY: spec.scale * 1.12, duration: spec.pulseMs, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
   layers.push(halo);
 
   // Hotter inner core for rare+ — a lightened tint so the centre reads white-hot.
   if (spec.scale >= 0.26) {
-    const core = scene.add.image(x, y, FX_GLOW).setBlendMode(Phaser.BlendModes.ADD).setDepth(6).setTint(scaleColor(spec.color, 1.7)).setScale(spec.scale * 0.5).setAlpha(0.6);
+    const ct = fxTexFor(scene, FX_GLOW, scaleColor(spec.color, 1.7));
+    const core = scene.add.image(x, y, ct.key).setBlendMode(Phaser.BlendModes.ADD).setDepth(6).setTint(ct.tint).setScale(spec.scale * 0.5).setAlpha(0.6);
     scene.tweens.add({ targets: core, alpha: 0.35, duration: spec.pulseMs * 0.7, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
     layers.push(core);
   }
@@ -520,14 +570,15 @@ export function makeDropGlow(scene: Phaser.Scene, x: number, y: number, spec: Ra
   // Orbiting twinkles for epic+ — tiny additive sparks drifting up off the loot.
   let emitter: Phaser.GameObjects.Particles.ParticleEmitter | undefined;
   if (spec.sparkle) {
-    emitter = scene.add.particles(x, y, FX_BLOOD, {
+    const st = fxTexFor(scene, FX_BLOOD, scaleColor(spec.color, 1.5));
+    emitter = scene.add.particles(x, y, st.key, {
       speed: { min: 5, max: 22 },
       angle: { min: 0, max: 360 },
       lifespan: { min: 500, max: 1150 },
       scale: { start: 0.5, end: 0 },
       alpha: { start: 0.95, end: 0 },
       gravityY: -14,
-      tint: scaleColor(spec.color, 1.5),
+      tint: st.tint,
       blendMode: Phaser.BlendModes.ADD,
       frequency: 170,
       quantity: 1,
@@ -550,13 +601,15 @@ export function makeDropGlow(scene: Phaser.Scene, x: number, y: number, spec: Ra
 
 /** A looping flame + ember plume that clings to a sprite (an entity on fire). */
 export function startBurning(scene: Phaser.Scene, target: Phaser.GameObjects.Sprite): Phaser.GameObjects.Particles.ParticleEmitter {
-  const e = scene.add.particles(target.x, target.y, FX_MIST, {
+  const flameTints = [0xffe27a, 0xff8a2a, 0xff3a1a];
+  const t = fxTexFor(scene, FX_MIST, midTint(flameTints));
+  const e = scene.add.particles(target.x, target.y, t.key, {
     speed: { min: 12, max: 46 },
     angle: { min: 250, max: 290 }, // up-ish
     lifespan: { min: 280, max: 620 },
     scale: { start: 0.55, end: 0 },
     alpha: { start: 0.85, end: 0 },
-    tint: [0xffe27a, 0xff8a2a, 0xff3a1a],
+    tint: t.tint === 0xffffff ? t.tint : flameTints,
     blendMode: Phaser.BlendModes.ADD,
     frequency: 55,
     quantity: 2,
@@ -574,13 +627,14 @@ export function stopBurning(scene: Phaser.Scene, e: Phaser.GameObjects.Particles
 
 /** A pale steam/smoke puff — used when fire is doused in water, or for vents. */
 export function steamPuff(scene: Phaser.Scene, x: number, y: number, count = 7): void {
-  const e = scene.add.particles(x, y, FX_MIST, {
+  const t = fxTexFor(scene, FX_MIST, 0xdfe6ec);
+  const e = scene.add.particles(x, y, t.key, {
     speed: { min: 10, max: 40 },
     angle: { min: 235, max: 305 },
     lifespan: { min: 400, max: 900 },
     scale: { start: 0.5, end: 1.3 },
     alpha: { start: 0.6, end: 0 },
-    tint: 0xdfe6ec,
+    tint: t.tint,
     blendMode: Phaser.BlendModes.ADD,
     emitting: false,
   });
@@ -591,7 +645,8 @@ export function steamPuff(scene: Phaser.Scene, x: number, y: number, count = 7):
 
 /** A short splash burst (water contact) — bright droplets + a quick ripple. */
 export function splashPuff(scene: Phaser.Scene, x: number, y: number, count = 6): void {
-  const e = scene.add.particles(x, y, FX_DROP, {
+  const t = fxTexFor(scene, FX_DROP, 0xbfe1ff);
+  const e = scene.add.particles(x, y, t.key, {
     speed: { min: 20, max: 80 },
     angle: { min: 200, max: 340 },
     lifespan: { min: 200, max: 460 },
@@ -599,7 +654,7 @@ export function splashPuff(scene: Phaser.Scene, x: number, y: number, count = 6)
     alpha: { start: 0.8, end: 0 },
     rotate: { min: 0, max: 360 },
     gravityY: 220,
-    tint: 0xbfe1ff,
+    tint: t.tint,
     emitting: false,
   });
   e.setDepth(7);
@@ -609,14 +664,16 @@ export function splashPuff(scene: Phaser.Scene, x: number, y: number, count = 6)
 
 /** A few rising embers (lava/ash contact). */
 export function emberPuff(scene: Phaser.Scene, x: number, y: number, count = 5): void {
-  const e = scene.add.particles(x, y, FX_BLOOD, {
+  const emberTints = [0xffd27a, 0xff7a2a];
+  const t = fxTexFor(scene, FX_BLOOD, midTint(emberTints));
+  const e = scene.add.particles(x, y, t.key, {
     speed: { min: 14, max: 60 },
     angle: { min: 250, max: 290 },
     lifespan: { min: 300, max: 760 },
     scale: { start: 0.5, end: 0 },
     alpha: { start: 0.95, end: 0 },
     gravityY: -50,
-    tint: [0xffd27a, 0xff7a2a],
+    tint: t.tint === 0xffffff ? t.tint : emberTints,
     blendMode: Phaser.BlendModes.ADD,
     emitting: false,
   });

@@ -51,6 +51,7 @@ export class TradeModal {
   private onRecruit?: () => void;
   private onClose?: () => void;
   private opened = false;
+  private openedTs = 0; // the keystroke that opened us must not also close us
   private readonly keyHandler: (e: KeyboardEvent) => void;
 
   constructor() {
@@ -89,6 +90,7 @@ export class TradeModal {
 
     this.keyHandler = (e) => {
       if (!this.opened) return;
+      if (e.timeStamp <= this.openedTs) return; // the E that opened us must not also close us
       if (e.key === "Escape" || e.key === "e" || e.key === "E") {
         e.preventDefault();
         e.stopPropagation();
@@ -131,6 +133,7 @@ export class TradeModal {
     this.atCompanionCap = info.atCompanionCap ?? false;
     this.titleEl.textContent = info.name;
     this.opened = true;
+    this.openedTs = performance.now(); // ignore the keystroke that opened us
     this.root.classList.add("ob-on");
     this.render();
   }

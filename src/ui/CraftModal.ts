@@ -37,6 +37,7 @@ export class CraftModal {
   private onCraft?: (r: Recipe) => void;
   private onClose?: () => void;
   private opened = false;
+  private openedTs = 0; // the keystroke that opened us must not also close us
   private state?: GameState;
   private stations: Set<string> = new Set();
   private readonly keyHandler: (e: KeyboardEvent) => void;
@@ -68,6 +69,7 @@ export class CraftModal {
 
     this.keyHandler = (e) => {
       if (!this.opened) return;
+      if (e.timeStamp <= this.openedTs) return; // the C that opened us must not also close us
       if (e.key === "Escape" || e.key === "c" || e.key === "C") {
         e.preventDefault();
         e.stopPropagation();
@@ -89,6 +91,7 @@ export class CraftModal {
     this.state = state;
     this.stations = stations ?? new Set();
     this.opened = true;
+    this.openedTs = performance.now(); // ignore the keystroke that opened us
     this.root.classList.add("ob-on");
     this.render();
   }

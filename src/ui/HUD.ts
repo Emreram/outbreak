@@ -138,11 +138,14 @@ export class HUD {
       .setText(`${debug.fps} fps · ${debug.tx},${debug.ty} · GM:${debug.brain}`);
 
     const bottom = dY + this.debugText.height + 8;
+    // The header line (name · day · clock · weather · blood moon) can outgrow the
+    // fixed width — stretch the panel to fit so text never hangs past the frame.
+    const panelW = Math.max(PANEL_W, Math.ceil(this.dayText.width) + 16);
     this.bg.clear();
-    this.bg.fillStyle(0x07090c, 0.62).fillRoundedRect(PANEL_X, PANEL_Y, PANEL_W, bottom - PANEL_Y, 8);
+    this.bg.fillStyle(0x07090c, 0.62).fillRoundedRect(PANEL_X, PANEL_Y, panelW, bottom - PANEL_Y, 8);
     this.bg
       .lineStyle(1, 0x223040, 0.8)
-      .strokeRoundedRect(PANEL_X, PANEL_Y, PANEL_W, bottom - PANEL_Y, 8);
+      .strokeRoundedRect(PANEL_X, PANEL_Y, panelW, bottom - PANEL_Y, 8);
 
     this.renderActivePanel(activeWeapon);
   }

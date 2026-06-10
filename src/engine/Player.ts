@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { PLAYER_KEY } from "./textures";
+import { fxTexFor } from "./fx";
 import { PLAYER_SPEED, TILE_SIZE } from "../game/constants";
 
 // The player: a physics-bodied placeholder sprite with 8-direction WASD/arrow
@@ -91,10 +92,16 @@ export class Player {
     }
   }
 
-  /** Tint the survivor sprite (character-creation appearance). */
+  /** Tint the survivor sprite (character-creation appearance). fxTexFor bakes the
+   *  colour into a texture copy on the Canvas renderer, which ignores live tints. */
   setAppearance(color?: number): void {
-    if (color !== undefined) this.sprite.setTint(color);
-    else this.sprite.clearTint();
+    if (color !== undefined) {
+      const t = fxTexFor(this.sprite.scene, PLAYER_KEY, color);
+      if (this.sprite.scene.textures.exists(t.key)) this.sprite.setTexture(t.key);
+      this.sprite.setTint(t.tint);
+    } else {
+      this.sprite.setTexture(PLAYER_KEY).clearTint();
+    }
   }
 
   /** Quick squash-stretch punch when swinging a melee hit. */

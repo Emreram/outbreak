@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { SURVIVOR_NPC_KEY, PLAYER_KEY } from "./textures";
+import { fxTexFor } from "./fx";
 
 // Survivor NPC entity (Feature 10b): a lightweight, non-infected actor. Ambient
 // survivors wander; recruited COMPANIONS follow the player and lunge at nearby
@@ -51,14 +52,17 @@ export class Npc {
     this.home = opts.home;
     this.hp = opts.hp;
     this.maxHp = opts.maxHp;
-    const tex = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
-    this.sprite = scene.physics.add.sprite(x, y, tex).setDepth(9);
+    const base = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
+    // fxTexFor bakes the kind/tier colour into a texture copy on the Canvas
+    // renderer (which ignores live tints); WebGL keeps the runtime tint.
+    const t = opts.color !== undefined ? fxTexFor(scene, base, opts.color) : { key: base, tint: 0xffffff };
+    this.sprite = scene.physics.add.sprite(x, y, scene.textures.exists(t.key) ? t.key : base).setDepth(9);
     this.sprite.setCollideWorldBounds(true);
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
     body.setSize(20, 20);
     if (opts.color !== undefined) {
-      this.baseTint = opts.color;
-      this.sprite.setTint(opts.color);
+      this.baseTint = t.tint;
+      this.sprite.setTint(t.tint);
     }
     if (opts.tagPrefix) {
       this.tag = scene.add
@@ -135,8 +139,11 @@ export class Npc {
 
   /** Re-tint (e.g. survivor → companion on recruit) and keep it through hurt flashes. */
   setTint(color: number): void {
-    this.baseTint = color;
-    this.sprite.setTint(color);
+    const base = this.sprite.scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
+    const t = fxTexFor(this.sprite.scene, base, color);
+    if (this.sprite.scene.textures.exists(t.key)) this.sprite.setTexture(t.key);
+    this.baseTint = t.tint;
+    this.sprite.setTint(t.tint);
   }
 
   destroy(): void {

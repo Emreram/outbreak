@@ -36,6 +36,7 @@ export class StorageModal {
   private onChange?: () => void;
   private onClose?: () => void;
   private opened = false;
+  private openedTs = 0; // the keystroke that opened us must not also close us
   private readonly keyHandler: (e: KeyboardEvent) => void;
 
   constructor() {
@@ -77,6 +78,7 @@ export class StorageModal {
 
     this.keyHandler = (e) => {
       if (!this.opened) return;
+      if (e.timeStamp <= this.openedTs) return; // the E that opened us must not also close us
       if (e.key === "Escape" || e.key === "e" || e.key === "E") {
         e.preventDefault();
         e.stopPropagation();
@@ -97,6 +99,7 @@ export class StorageModal {
   open(state: GameState): void {
     this.state = state;
     this.opened = true;
+    this.openedTs = performance.now(); // ignore the keystroke that opened us
     this.root.classList.add("ob-on");
     this.render();
   }
