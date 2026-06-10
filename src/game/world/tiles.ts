@@ -168,6 +168,15 @@ export interface Landmark {
   label: string;
 }
 
+/** A one-time zombie ambush attached to a set-piece scene (session-only — the
+ *  scene tracks triggers in memory; ambient undead regenerating matches the
+ *  "terrain never saved" philosophy). */
+export interface AmbushSpec {
+  x: number; // GLOBAL world pixels
+  y: number;
+  count: number;
+}
+
 /** One generated chunk. Grid is LOCAL (size×size); everything else is global. */
 export interface ChunkData {
   cx: number;
@@ -180,4 +189,5 @@ export interface ChunkData {
   containers: Container[];
   props: Prop[];
   landmarks: Landmark[];
+  ambush?: AmbushSpec[]; // set-piece guard packs (U2)
 }

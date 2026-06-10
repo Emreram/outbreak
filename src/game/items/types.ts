@@ -4,7 +4,7 @@
 
 export type Rarity = "common" | "uncommon" | "rare" | "epic" | "legendary" | "mythic";
 
-export type ItemKind = "weapon" | "consumable" | "ammo" | "material" | "throwable" | "armor";
+export type ItemKind = "weapon" | "consumable" | "ammo" | "material" | "throwable" | "armor" | "readable";
 
 export type Hand = "melee" | "ranged";
 
@@ -118,7 +118,14 @@ export interface ArmorDef extends BaseDef {
   slot?: "head" | "body"; // equip slot (default body); body + head stack
 }
 
-export type ItemDef = WeaponDef | ConsumableDef | AmmoDef | ThrowableDef | MaterialDef | ArmorDef;
+/** Notes / journals / stash maps (Expansion U2) — found while scavenging; read
+ *  via the bag. Maps consume on use and pin a buried cache; notes are flavour. */
+export interface ReadableDef extends BaseDef {
+  kind: "readable";
+  flavor: "note" | "journal" | "map";
+}
+
+export type ItemDef = WeaponDef | ConsumableDef | AmmoDef | ThrowableDef | MaterialDef | ArmorDef | ReadableDef;
 
 export function isWeaponDef(d: ItemDef | undefined): d is WeaponDef {
   return !!d && d.kind === "weapon";

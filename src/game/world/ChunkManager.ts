@@ -225,6 +225,11 @@ export class ChunkManager {
     return this.chunkAt(cx, cy)?.data.landmarks ?? [];
   }
 
+  /** Set-piece guard packs of the loaded chunk at (cx, cy) (Expansion U2). */
+  ambushAt(cx: number, cy: number): readonly { x: number; y: number; count: number }[] {
+    return this.chunkAt(cx, cy)?.data.ambush ?? [];
+  }
+
   /** The building whose interior contains a global tile, or null. */
   buildingAt(gtx: number, gty: number): Building | null {
     const lc = this.chunkAt(Math.floor(gtx / CHUNK_TILES), Math.floor(gty / CHUNK_TILES));

@@ -67,14 +67,18 @@ import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
 import { RARITY_META, rarityGlowSpec } from "../game/items/rarity";
 import {
+  CHEST_CLOSED,
   CHEST_OPEN,
   heldKey,
   iconKey,
+  PADLOCK,
   PROJ_ARROW,
   PROJ_BULLET,
   PROJ_PELLET,
   PROJ_ROCKET,
 } from "../engine/icons";
+import { noteText, parseStashFlag, rollReadable, rollStashSpot, stashCount, stashFlag } from "../game/notes";
+import { ReaderModal } from "../ui/ReaderModal";
 import { applyOutcome, type ApplyResult } from "../game/outcomes";
 import { classifyIntent, type Intent } from "../game/intent";
 import { nextAmbientDelayMs } from "../game/encounters";
@@ -273,6 +277,10 @@ export class WorldScene extends Phaser.Scene {
   private search: { target: SearchTarget; def: SearchableDef; done: number; ring: Phaser.GameObjects.Graphics } | null = null;
   private corpses: CorpseRec[] = [];
   private corpseAcc = 0;
+  // Set-piece ambushes + readable/stash systems (Expansion U2).
+  private reader!: ReaderModal;
+  private readonly ambushDone = new Set<string>(); // session-only — ambient undead regenerate
+  private readonly stashChests = new Map<string, ActiveChest>(); // stash flag → streamed chest
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
@@ -586,6 +594,8 @@ export class WorldScene extends Phaser.Scene {
       this.lootOpen = false;
       this.setGameKeys(true);
     });
+    this.loot.setOnRead((name) => this.readItem(name));
+    this.reader = new ReaderModal();
     this.craftUi = new CraftModal();
     this.craftUi.setHandlers(
       (r) => {
@@ -666,6 +676,7 @@ export class WorldScene extends Phaser.Scene {
       this.scale.off("resize", this.onResize, this);
       this.modal.destroy();
       this.loot.destroy();
+      this.reader.destroy();
       this.craftUi.destroy();
       this.storeUi.destroy();
       this.tradeUi.destroy();
@@ -2137,6 +2148,93 @@ export class WorldScene extends Phaser.Scene {
       }
     }
     for (const lm of this.chunks.landmarksAt(cx, cy)) this.revealLocation(lm.label, lm.kind, lm.x, lm.y);
+    this.triggerAmbushes(cx, cy); // set-piece guard packs wake on first visit (U2)
+    this.reconcileStashes(); // stream buried caches pinned by stash maps (U2)
+  }
+
+  /** Wake a set-piece scene's guard pack the first time its chunk is entered.
+   *  Session-only — like all ambient undead, they regenerate between sessions. */
+  private triggerAmbushes(cx: number, cy: number): void {
+    const specs = this.chunks.ambushAt(cx, cy);
+    for (let i = 0; i < specs.length; i++) {
+      const key = `${cx},${cy}:${i}`;
+      if (this.ambushDone.has(key) || this.enemies.length >= 30) continue;
+      this.ambushDone.add(key);
+      const a = specs[i];
+      for (let k = 0; k < a.count; k++) {
+        const spot = this.chunks.walkableNear(Math.floor(a.x / TILE_SIZE), Math.floor(a.y / TILE_SIZE), 1, 4);
+        if (spot) this.spawnEnemy(rollZombie("zombie", liveRng, this.effDay(), this.chunks.biomeAtPx(spot.x, spot.y)), spot.x, spot.y);
+      }
+    }
+  }
+
+  /** Spawn/despawn the locked tier-3 chests pinned by read stash maps. Wanted =
+   *  un-dug `stash_<tx>_<ty>` flags whose tile sits in a LOADED chunk. */
+  private reconcileStashes(): void {
+    const wanted = new Map<string, { tx: number; ty: number }>();
+    for (const f of this.state.worldFlags) {
+      if (!f.startsWith("stash_")) continue;
+      if (this.state.worldFlags.includes(`chest_${f}`)) continue; // dug up already
+      const t = parseStashFlag(f);
+      if (!t || this.chunks.tileAt(t.tx, t.ty) === null) continue; // not loaded
+      wanted.set(f, t);
+    }
+    for (const [f, chest] of this.stashChests) {
+      if (!wanted.has(f)) {
+        chest.sprite.destroy();
+        chest.badge?.destroy();
+        this.stashChests.delete(f);
+      }
+    }
+    for (const [f, t] of wanted) {
+      if (this.stashChests.has(f)) continue;
+      const x = (t.tx + 0.5) * TILE_SIZE;
+      const y = (t.ty + 0.5) * TILE_SIZE;
+      const spr = this.add.image(x, y, CHEST_CLOSED).setDepth(6).setTint(0x8a6a3a);
+      const chest: ActiveChest = { gid: f, sprite: spr, tier: 3, kind: "crate", locked: true, opened: false };
+      chest.badge = this.add.image(x + 9, y - 8, PADLOCK).setDepth(7);
+      this.stashChests.set(f, chest);
+    }
+  }
+
+  /** Read a note/journal (deterministic flavour, stored on the stack) or use a
+   *  Stash Map (consumed; pins a buried cache as a stash_ flag + map marker). */
+  private readItem(name: string): void {
+    const def = defOf(name);
+    if (def.kind !== "readable") return;
+    if (def.flavor === "map") {
+      const spot = rollStashSpot(this.state.seed, this.player.sprite.x, this.player.sprite.y, stashCount(this.state));
+      removeItem(this.state, name, 1); // consumed either way
+      if (!spot) {
+        this.showToast("The map is water-ruined — unreadable");
+        this.persist();
+        return;
+      }
+      this.state.worldFlags.push(stashFlag(spot.tx, spot.ty));
+      const px = (spot.tx + 0.5) * TILE_SIZE;
+      const py = (spot.ty + 0.5) * TILE_SIZE;
+      this.revealLocation("Buried cache", "stash", px, py);
+      const dir = compassDir(px - this.player.sprite.x, py - this.player.sprite.y);
+      this.reader.open(
+        "Stash map",
+        `A hand-drawn map, creased and bloodstained. An X marks a cache to the ${dir}.\n\nThe spot is pinned on your map (M). Bring something to force the lock.`,
+      );
+      pushRecentEvent(this.state, "Read a stash map — a cache is marked.");
+      sfx.ui();
+      this.reconcileStashes();
+      this.persist();
+      return;
+    }
+    const inv = this.state.inventory.find((i) => i.item === name);
+    if (!inv) return;
+    if (!inv.note) {
+      const n = this.state.notesRead ?? 0;
+      this.state.notesRead = n + 1;
+      inv.note = noteText(this.state.seed, n, def.flavor === "journal" ? "journal" : "note");
+    }
+    this.reader.open(def.name, inv.note);
+    sfx.ui();
+    this.persist();
   }
 
   /** Add a point of interest to the map (deduped by name + position). */
@@ -3313,6 +3411,8 @@ export class WorldScene extends Phaser.Scene {
     for (const s of rollLoot("enemy:" + e.lootFamily, liveRng, n, bias)) {
       this.spawnDrop(e.sprite.x, e.sprite.y, s.item, s.qty);
     }
+    // The dead sometimes carry someone's last words (U2 readables).
+    if (liveRng.chance(0.012)) this.spawnDrop(e.sprite.x, e.sprite.y, rollReadable(liveRng), 1);
   }
 
   private spawnDrop(x: number, y: number, item: string, qty: number): void {
@@ -3361,14 +3461,16 @@ export class WorldScene extends Phaser.Scene {
     const py = this.player.sprite.y;
     let best: ActiveChest | null = null;
     let bestD = maxDist;
-    for (const c of this.chunks.activeChests()) {
-      if (c.opened) continue;
+    const consider = (c: ActiveChest): void => {
+      if (c.opened || !c.sprite.active) return;
       const d = Math.hypot(c.sprite.x - px, c.sprite.y - py);
       if (d < bestD) {
         bestD = d;
         best = c;
       }
-    }
+    };
+    for (const c of this.chunks.activeChests()) consider(c);
+    for (const c of this.stashChests.values()) consider(c); // buried caches (U2)
     return best;
   }
 
@@ -3387,6 +3489,10 @@ export class WorldScene extends Phaser.Scene {
     const bias = lootLuck(this.state) + this.chunks.lootBias(chest.sprite.x, chest.sprite.y) + (chest.locked ? 0.4 : 0);
     for (const s of rollLoot(this.containerLootSource(chest.kind, chest.tier), liveRng, 1 + chest.tier, bias)) {
       this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
+    }
+    // Set-piece containers tell stories: a decent chance of a note/journal/map (U2).
+    if (chest.gid.includes("_sc") && liveRng.chance(0.35)) {
+      this.spawnDrop(chest.sprite.x, chest.sprite.y, rollReadable(liveRng), 1);
     }
     this.persist();
   }
@@ -3523,6 +3629,8 @@ export class WorldScene extends Phaser.Scene {
       this.grantXp("crafting", 1); // resourcefulness
       sfx.pickup();
     }
+    // Drawers and shelves sometimes hold someone's writing (U2 readables).
+    if (s.def.source === "scav_domestic" && liveRng.chance(0.04)) this.spawnDrop(x, y, rollReadable(liveRng), 1);
     this.persist();
   }
 

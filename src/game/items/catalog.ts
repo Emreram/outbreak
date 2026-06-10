@@ -3,11 +3,14 @@ import { isWeaponDef } from "./types";
 import { WEAPONS, FISTS } from "./weapons";
 import { MISC_ITEMS } from "./consumables";
 import { AMMO, AMMO_ITEM_BY_TYPE } from "./ammo";
+import { READABLES } from "./readables";
 
 // The item catalog: the single name -> definition lookup. Inventory stays
 // name-keyed; everything rich (stats, rarity, abilities, icon) is resolved here.
+// READABLES resolve here for icons/tooltips but stay OUT of the loot pools
+// (lootTables builds its pools from WEAPONS/MISC_ITEMS/AMMO directly).
 
-const ALL: readonly ItemDef[] = Object.freeze([...WEAPONS, FISTS, ...MISC_ITEMS, ...AMMO]);
+const ALL: readonly ItemDef[] = Object.freeze([...WEAPONS, FISTS, ...MISC_ITEMS, ...AMMO, ...READABLES]);
 
 const BY_NAME = new Map<string, ItemDef>();
 for (const d of ALL) BY_NAME.set(d.name, d);

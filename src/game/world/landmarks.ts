@@ -34,6 +34,12 @@ const STYLES: Record<string, LandmarkStyle> = {
   mining_rig: { glyph: "⛏", color: "#cdb89a", prop: "boulder" },
   bandstand: { glyph: "♪", color: "#bfe3a8", prop: "bench" },
   lava_vent: { glyph: "▲", color: "#ff7a2a", prop: "boulder" },
+  // Set-piece scenes (U2) — stamps provide the visuals, so no anchor prop.
+  military_checkpoint: { glyph: "⛔", color: "#c9d6a0" },
+  crashed_convoy: { glyph: "⚠", color: "#ffb36b" },
+  police_barricade: { glyph: "⛒", color: "#8fc7e6" },
+  ambushed_camp: { glyph: "⛺", color: "#ff9f7a" },
+  evac_pile: { glyph: "▣", color: "#ffe08a" },
 };
 
 const DEFAULT_STYLE: LandmarkStyle = { glyph: "⚑", color: "#ffe6a8", prop: "crate" };
