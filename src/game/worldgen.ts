@@ -2,6 +2,14 @@
 // enormous, finite, seamless grid of chunks generated on demand from
 // (seed, chunkX, chunkY). "Code generates the geometry; the AI handles what's
 // inside." Same seed + coords -> identical chunk, so terrain never needs saving.
+//
+// DETERMINISM INVARIANTS (worldFlags like `chest_<gid>`/`searched_<gid>` depend
+// on stable ids across versions):
+// 1. New generation passes APPEND ONLY — never insert work into the middle of the
+//    main rng stream; fork a child rng (`createRng(`${seed}:<pass>:${cx}:${cy}`)`)
+//    so every existing chunk stays byte-identical.
+// 2. Prop gids are a per-chunk counter over ALL props in generation order — new
+//    prop-producing steps must run AFTER the existing ones.
 
 import { createRng, type Rng } from "./rng";
 import { CHUNK_TILES, TILE_SIZE } from "./constants";
@@ -193,6 +201,7 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   }
 
   // 2.5) Interior furniture — themed per building type (decorative, non-blocking).
+  let pi = 0; // per-chunk prop counter → stable gids for interactable props
   for (const b of buildings) {
     const pool = FURNITURE_BY_TYPE[b.type];
     if (!pool || pool.length === 0) continue;
@@ -203,7 +212,7 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
       const tile = floorTileIn(grid, b, gx0, gy0, rng, usedF);
       if (!tile) break;
       usedF.add(`${tile.x},${tile.y}`);
-      props.push({ kind: rng.pick(pool), x: (tile.x + 0.5) * tileSize, y: (tile.y + 0.5) * tileSize });
+      props.push({ kind: rng.pick(pool), x: (tile.x + 0.5) * tileSize, y: (tile.y + 0.5) * tileSize, gid: `${cx}_${cy}_p${pi++}` });
     }
   }
 
@@ -222,7 +231,7 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   for (let i = 0; i < biome.propDensity; i++) {
     const t = nonWaterLocal(grid, size, rng);
     if (!t) continue;
-    props.push({ kind: rng.pick(biome.props.length ? biome.props : ["rock"]), x: (gx0 + t.x + 0.5) * tileSize, y: (gy0 + t.y + 0.5) * tileSize });
+    props.push({ kind: rng.pick(biome.props.length ? biome.props : ["rock"]), x: (gx0 + t.x + 0.5) * tileSize, y: (gy0 + t.y + 0.5) * tileSize, gid: `${cx}_${cy}_p${pi++}` });
   }
 
   // 5) Anti-emptiness: guarantee at least one interactable per chunk.

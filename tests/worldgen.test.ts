@@ -84,6 +84,25 @@ console.log(`reproducible=${reproducible}  varied=${varied}`);
 if (!reproducible) failed++;
 if (!varied) failed++;
 
+// Prop gids (U1 searchables): every prop carries a gid, unique per chunk, and the
+// id sequence is reproducible by (seed, cx, cy) — `searched_<gid>` flags depend on it.
+{
+  let propGidErrs = 0;
+  for (let cy = 16; cy <= 24; cy++) {
+    for (let cx = 16; cx <= 24; cx++) {
+      const c = generateChunk("alpha", cx, cy);
+      const gids = c.props.map((p) => p.gid);
+      if (gids.some((g) => !g)) propGidErrs++;
+      if (new Set(gids).size !== gids.length) propGidErrs++;
+    }
+  }
+  const p1 = generateChunk("repro", 20, 20).props.map((p) => `${p.gid}:${p.kind}:${p.x},${p.y}`).join("|");
+  const p2 = generateChunk("repro", 20, 20).props.map((p) => `${p.gid}:${p.kind}:${p.x},${p.y}`).join("|");
+  if (p1 !== p2) propGidErrs++;
+  console.log(`prop gids unique+reproducible=${propGidErrs === 0}`);
+  if (propGidErrs) failed++;
+}
+
 // Spawn point is walkable.
 const start = chunkStartPx(generateChunk("alpha", 20, 20));
 const stx = Math.floor(start.x / 32) - 20 * CHUNK_TILES;

@@ -37,6 +37,7 @@ export class TouchControls {
   private mag = 0;
   private stickId: number | null = null;
   private fireDown = false;
+  private actDown = false;
   private onAct?: () => void;
   private onHit?: () => void;
   private onReload?: () => void;
@@ -99,6 +100,11 @@ export class TouchControls {
     return this.fireDown;
   }
 
+  /** True while the ACT button is held (sustains hold-to-search channels). */
+  get actHeld(): boolean {
+    return this.actDown;
+  }
+
   destroy(): void {
     this.root.remove();
   }
@@ -141,10 +147,23 @@ export class TouchControls {
         e.preventDefault();
         fn();
       });
-    tap(this.actBtn, () => this.onAct?.());
     tap(this.hitBtn, () => this.onHit?.());
     tap(this.reloadBtn, () => this.onReload?.());
     tap(this.bagBtn, () => this.onBag?.());
+
+    // ACT fires on press AND tracks held state (hold-to-search channels).
+    this.actBtn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      this.actDown = true;
+      this.onAct?.();
+    });
+    const stopAct = (e: PointerEvent): void => {
+      e.preventDefault();
+      this.actDown = false;
+    };
+    this.actBtn.addEventListener("pointerup", stopAct);
+    this.actBtn.addEventListener("pointercancel", stopAct);
+    this.actBtn.addEventListener("pointerleave", stopAct);
 
     // FIRE is hold-to-fire (auto-aim handled by the scene).
     this.fireBtn.addEventListener("pointerdown", (e) => {

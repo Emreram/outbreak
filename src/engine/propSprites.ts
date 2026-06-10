@@ -78,6 +78,23 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x5a1414, 0.85).fillEllipse(15, 17, 20, 12);
     g.fillStyle(0x7a2222, 1).fillEllipse(13, 16, 10, 6);
   },
+  // a fallen soldier: fatigues + dropped helmet in a dark pool (military scav)
+  corpse_soldier: (g) => {
+    g.fillStyle(0x3a1010, 0.8).fillEllipse(15, 18, 22, 11); // blood pool
+    g.fillStyle(0x4b553a, 1).fillEllipse(14, 16, 14, 6); // fatigues torso
+    g.fillStyle(0x39422c, 1).fillRect(6, 15, 5, 3).fillRect(20, 16, 5, 3); // arms
+    g.fillStyle(0x2e3524, 1).fillCircle(24, 12, 3.4); // dropped helmet
+    g.fillStyle(0x556044, 1).fillCircle(23, 11, 1.6); // helmet glint
+  },
+  // street dumpster (front at +x): lidded steel bin, grime + shadow
+  dumpster: (g) => {
+    g.fillStyle(0x0c0f12, 0.35).fillEllipse(15, 25, 22, 7); // drop shadow
+    g.fillStyle(0x2c5040, 1).fillRoundedRect(4, 9, 22, 15, 3); // body
+    g.fillStyle(0x3a6a54, 1).fillRect(5, 10, 20, 5); // lid
+    g.fillStyle(0x1d3a2d, 1).fillRect(5, 15, 20, 2); // lid lip shadow
+    g.fillStyle(0x16271f, 1).fillRect(7, 24, 4, 2).fillRect(19, 24, 4, 2); // wheels
+    g.fillStyle(0xffffff, 0.08).fillRect(6, 11, 2, 11); // sheen
+  },
   sign: (g) => {
     g.fillStyle(0x4f4a40, 1).fillRect(13, 8, 3, 18); // post
     g.fillStyle(0xb7a23f, 1).fillRect(6, 6, 18, 8);

@@ -42,7 +42,7 @@ export interface BiomeDef {
   labelColor: number;
 }
 
-const URBAN_PROPS = ["car", "wreck", "crate", "barrel", "corpse", "sign", "streetlight"];
+const URBAN_PROPS = ["car", "wreck", "crate", "barrel", "corpse", "sign", "streetlight", "dumpster"];
 const NATURE_PROPS = ["tree", "pine", "rock", "bush", "corpse"];
 
 function def(d: Partial<BiomeDef> & Pick<BiomeDef, "id" | "name" | "base">): BiomeDef {
@@ -110,7 +110,7 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
   military_base: def({
     id: "military_base", name: "Military checkpoint", base: Tile.Dirt, urban: true,
     buildingPool: ["military_depot", "bunker", "military_depot", "warehouse"],
-    scatter: [{ tile: Tile.Rubble, p: 0.02 }], props: ["wreck", "barrel", "crate", "tent", "corpse"],
+    scatter: [{ tile: Tile.Rubble, p: 0.02 }], props: ["wreck", "barrel", "crate", "tent", "corpse_soldier", "corpse"],
     propDensity: 14, lootSource: "military", lootBias: 0.6, danger: 5,
     landmarks: [{ kind: "crashed_helicopter", label: "Crashed helicopter", p: 0.18 }, { kind: "horde_nest", label: "Horde", p: 0.1 }],
     labelColor: 0xc9d6a0,

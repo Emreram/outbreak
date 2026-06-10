@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { SOLID_TILES, type Building, type ChunkData } from "../game/worldgen";
+import { SOLID_TILES, type Building, type ChunkData, type Prop } from "../game/worldgen";
 import { landmarkStyle } from "../game/world/landmarks";
 import { TILESET_KEY } from "./textures";
 import { propKey } from "./propSprites";
@@ -19,7 +19,7 @@ export class ChunkView {
   private readonly extras: Phaser.GameObjects.GameObject[] = [];
   private readonly colliders: Phaser.Physics.Arcade.Collider[] = [];
 
-  constructor(scene: Phaser.Scene, chunk: ChunkData, specs: ColliderSpec[]) {
+  constructor(scene: Phaser.Scene, chunk: ChunkData, specs: ColliderSpec[], skipProp?: (p: Prop) => boolean) {
     const px = chunk.cx * chunk.size * chunk.tileSize;
     const py = chunk.cy * chunk.size * chunk.tileSize;
 
@@ -40,8 +40,10 @@ export class ChunkView {
       this.colliders.push(scene.physics.add.collider(s.target, this.layer, s.callback ? (a) => s.callback!(a as Phaser.GameObjects.GameObject) : undefined));
     }
 
-    // Decorative props (below the player/enemies, above terrain).
+    // Decorative props (below the player/enemies, above terrain). Searchable props
+    // are skipped here — ChunkManager owns those as interactive sprites.
     for (const p of chunk.props) {
+      if (skipProp?.(p)) continue;
       const key = propKey(p.kind);
       if (!scene.textures.exists(key)) continue;
       this.extras.push(scene.add.image(p.x, p.y, key).setDepth(4));
