@@ -5,7 +5,7 @@
 // Pure logic — the scene owns sprites, follow/fight AI, and the trade modal.
 
 import type { GameState } from "../shared/contracts";
-import type { Rng } from "./rng";
+import { createRng, type Rng } from "./rng";
 import { addItem, hasItem, removeItem } from "./inventory";
 import { rollLoot } from "./items/lootTables";
 import { defOf } from "./items/catalog";
@@ -187,3 +187,35 @@ export function standingLabel(v: number): string {
 export function companionCount(s: GameState): number {
   return (s.npcs ?? []).filter((n) => n.kind === "companion").length;
 }
+
+// --- living camps (Expansion U5) -------------------------------------------------
+
+/** Landmark kinds that host a resident roster of NPCs. */
+export const CAMP_LANDMARKS = new Set(["survivor_camp", "campsite", "quarantine_tents"]);
+
+export interface CampMate {
+  id: string; // stable: camp_<cx>_<cy>_<i> — suppression flags key off it
+  name: string;
+  role: "trader" | "guard";
+  tier: NpcTier;
+}
+
+/** The deterministic resident roster of the camp in chunk (cx, cy): 2–3 people,
+ *  one of them the camp's trader. Stable ids → stable barter stock + clean
+ *  suppression via npc_gone_<id> flags when someone is recruited or dies. */
+export function campRoster(seed: string, cx: number, cy: number, faction: Faction): CampMate[] {
+  const rng = createRng(`${seed}:camp:${cx}:${cy}`);
+  const n = rng.chance(0.5) ? 3 : 2;
+  const out: CampMate[] = [];
+  for (let i = 0; i < n; i++) {
+    out.push({
+      id: `camp_${cx}_${cy}_${i}`,
+      name: npcName(rng),
+      role: i === 0 ? "trader" : "guard",
+      tier: rollTier(rng, 3, faction), // settled camps keep decent people
+    });
+  }
+  return out;
+}
+
+export const npcGoneFlag = (id: string): string => `npc_gone_${id}`;

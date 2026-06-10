@@ -86,6 +86,15 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x2e3524, 1).fillCircle(24, 12, 3.4); // dropped helmet
     g.fillStyle(0x556044, 1).fillCircle(23, 11, 1.6); // helmet glint
   },
+  // nailed-up boards over a doorway (U5 boarded buildings)
+  boards: (g) => {
+    g.fillStyle(0x7a5f33, 1).fillRect(2, 5, 26, 5);
+    g.fillStyle(0x66512c, 1).fillRect(2, 12, 26, 5);
+    g.fillStyle(0x59462a, 1).fillRect(2, 19, 26, 5);
+    g.fillStyle(0x4a3a20, 0.9).fillTriangle(4, 26, 28, 3, 26, 1).fillTriangle(2, 24, 26, 1, 28, 3); // cross plank
+    g.fillStyle(0x2e2517, 1); // nail heads
+    g.fillCircle(4, 7, 1.2).fillCircle(26, 7, 1.2).fillCircle(4, 21, 1.2).fillCircle(26, 21, 1.2);
+  },
   // street dumpster (front at +x): lidded steel bin, grime + shadow
   dumpster: (g) => {
     g.fillStyle(0x0c0f12, 0.35).fillEllipse(15, 25, 22, 7); // drop shadow

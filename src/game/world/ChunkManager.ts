@@ -230,6 +230,16 @@ export class ChunkManager {
     return this.chunkAt(cx, cy)?.data.ambush ?? [];
   }
 
+  /** Buildings of the loaded chunk at (cx, cy) (U5 building overlays / camps). */
+  buildingsAt(cx: number, cy: number): readonly Building[] {
+    return this.chunkAt(cx, cy)?.data.buildings ?? [];
+  }
+
+  /** Biome id of the loaded chunk at (cx, cy) without re-deriving from noise. */
+  chunkBiome(cx: number, cy: number): string | null {
+    return this.chunkAt(cx, cy)?.data.biome ?? null;
+  }
+
   /** The building whose interior contains a global tile, or null. */
   buildingAt(gtx: number, gty: number): Building | null {
     const lc = this.chunkAt(Math.floor(gtx / CHUNK_TILES), Math.floor(gty / CHUNK_TILES));

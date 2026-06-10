@@ -18,6 +18,9 @@ export interface NpcOpts {
   color?: number;
   tier?: string; // survivor quality tier (poor/average/prime) — drives a name tag
   tagPrefix?: string; // name-tag label (e.g. "Prime"); empty = no tag
+  /** Camp tether (U5): wandering stays within r of (x, y); the camp reconcile —
+   *  not the distance despawn — owns this NPC's lifecycle. */
+  home?: { x: number; y: number; r: number };
 }
 
 const SPEED = 150;
@@ -28,6 +31,7 @@ export class Npc {
   readonly name: string;
   readonly faction: string;
   readonly tier?: string;
+  readonly home?: { x: number; y: number; r: number };
   kind: NpcKind;
   hp: number;
   maxHp: number;
@@ -44,6 +48,7 @@ export class Npc {
     this.faction = opts.faction;
     this.kind = opts.kind;
     this.tier = opts.tier;
+    this.home = opts.home;
     this.hp = opts.hp;
     this.maxHp = opts.maxHp;
     const tex = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
@@ -87,10 +92,16 @@ export class Npc {
       else this.idle();
       return;
     }
-    // ambient survivor: gentle wander, stay roughly in place
+    // ambient survivor: gentle wander, stay roughly in place. Camp residents (U5)
+    // drift back toward their tether whenever they stray past its radius.
     if (now > this.wanderUntil) {
       this.wanderUntil = now + 1000 + Math.random() * 1800;
-      if (Math.random() < 0.5) {
+      const hx = this.home ? this.home.x - this.sprite.x : 0;
+      const hy = this.home ? this.home.y - this.sprite.y : 0;
+      if (this.home && Math.hypot(hx, hy) > this.home.r) {
+        const d = Math.hypot(hx, hy) || 1;
+        this.move(hx / d, hy / d, SPEED * 0.5); // head home
+      } else if (Math.random() < 0.5) {
         this.idle();
       } else {
         const a = Math.random() * Math.PI * 2;
