@@ -67,17 +67,26 @@ export function placeableAt(s: GameState, tx: number, ty: number): Placeable | u
   return s.placeables?.find((p) => p.tx === tx && p.ty === ty);
 }
 
+/** A crafted Barricade Kit (workbench) builds a barricade by itself — the prepared
+ *  alternative to raw planks. Without this the kit had no use at all. */
+function kitCovers(s: GameState, def: PlaceableDef): boolean {
+  return def.id === "barricade" && hasItem(s, "Barricade Kit");
+}
+
 export function canAfford(s: GameState, def: PlaceableDef): boolean {
+  if (kitCovers(s, def)) return true;
   return def.cost.every((c) => hasItem(s, c.item, c.qty));
 }
 
-/** Build a placeable at a tile: consume materials, append the record. Returns it, or
- *  null if the tile is taken or the player can't afford it. */
+/** Build a placeable at a tile: consume materials (a Barricade Kit covers a
+ *  barricade outright), append the record. Returns it, or null if the tile is
+ *  taken or the player can't afford it. */
 export function buildPlaceable(s: GameState, kind: string, tx: number, ty: number): Placeable | null {
   const def = placeableDef(kind);
   if (placeableAt(s, tx, ty)) return null; // one structure per tile
   if (!canAfford(s, def)) return null;
-  for (const c of def.cost) removeItem(s, c.item, c.qty);
+  if (kitCovers(s, def)) removeItem(s, "Barricade Kit", 1);
+  else for (const c of def.cost) removeItem(s, c.item, c.qty);
   const p: Placeable = { gid: placeableGid(tx, ty), kind: def.id, tx, ty, hp: def.hp || 1, maxHp: def.hp || 1 };
   s.placeables = s.placeables ?? [];
   s.placeables.push(p);

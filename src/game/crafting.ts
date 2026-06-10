@@ -35,7 +35,9 @@ export const RECIPES: Recipe[] = [
   // --- Medical ---
   { id: "gauze", out: "Gauze", outQty: 1, inputs: [{ item: "Cloth", qty: 1 }], category: "Medical", desc: "Quick wound dressing (+HP)." },
   { id: "bandage", out: "Bandage", outQty: 1, inputs: [{ item: "Cloth", qty: 2 }], category: "Medical", desc: "Bind a wound (+HP)." },
-  { id: "purified", out: "Purified Water", outQty: 1, inputs: [{ item: "Water Bottle", qty: 1 }, { item: "Antiseptic", qty: 1 }], station: "chem", category: "Medical", desc: "Purify water (lowers infection risk)." },
+  // Gate on the campfire (boil + treat) — there is no "chem" station in the build
+  // palette, which silently made this recipe permanently uncraftable.
+  { id: "purified", out: "Purified Water", outQty: 1, inputs: [{ item: "Water Bottle", qty: 1 }, { item: "Antiseptic", qty: 1 }], station: "campfire", category: "Medical", desc: "Boil + treat water (lowers infection risk)." },
   // --- Survival / food ---
   { id: "water", out: "Water Bottle", outQty: 1, inputs: [{ item: "Empty Bottle", qty: 1 }], category: "Survival", desc: "Bottle clean water." },
   { id: "cooked_meal", out: "Cooked Meal", outQty: 1, inputs: [{ item: "Potato", qty: 1 }, { item: "Carrot", qty: 1 }], station: "campfire", category: "Survival", desc: "A hot meal (big +hunger, +HP)." },
