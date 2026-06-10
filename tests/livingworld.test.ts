@@ -21,10 +21,17 @@ ok(
   [...Array(200)].every(() => (WORLD_EVENTS as readonly string[]).includes(rollWorldEvent(rng, 5, false))),
   "rollWorldEvent always returns a known event kind",
 );
-const day0 = new Set([...Array(300)].map(() => rollWorldEvent(rng, 0, false)));
+// Day-0 set DELIBERATELY widened in U4: heartbeat beacons (smoke/gunfight/
+// car_alarm by day, flare at night) are distant + investigable, so they keep the
+// calm start while making the world audibly/visibly alive from minute one.
+const DAY0_DAY = new Set(["flyover", "supply_drop", "smoke", "gunfight", "car_alarm"]);
+const day0 = new Set([...Array(400)].map(() => rollWorldEvent(rng, 0, false)));
 ok(![...day0].includes("raiders"), "raiders never fire on day 0 (minDay 2)");
-ok([...day0].every((k) => k === "flyover" || k === "supply_drop"), "only flyover/supply_drop are eligible on day 0");
+ok([...day0].every((k) => DAY0_DAY.has(k)), "day 0 (daytime) draws only from the calm+beacon set");
 ok(![...day0].includes("dilemma"), "the narrative dilemma never fires on day 0 (calm start)");
+ok(![...day0].includes("flare"), "flares never fire in daylight (night-only weight)");
+const day0n = new Set([...Array(400)].map(() => rollWorldEvent(rng, 0, true)));
+ok(day0n.has("flare"), "flares appear on night 0");
 const day5 = new Set([...Array(300)].map(() => rollWorldEvent(rng, 5, true)));
 ok(day5.has("horde") && day5.has("raiders"), "hordes + raiders become eligible by day 5");
 ok(day5.has("dilemma"), "the rare narrative dilemma becomes eligible from day 1+");

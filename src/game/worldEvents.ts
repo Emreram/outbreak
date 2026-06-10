@@ -6,7 +6,19 @@
 
 import type { Rng } from "./rng";
 
-export type WorldEventKind = "horde" | "flyover" | "raiders" | "supply_drop" | "trader" | "dilemma";
+export type WorldEventKind =
+  | "horde"
+  | "flyover"
+  | "raiders"
+  | "supply_drop"
+  | "trader"
+  | "dilemma"
+  // Heartbeat beacons (U4): visible/audible DISTANT happenings that pin a
+  // temporary map marker and resolve into a small scene when investigated.
+  | "smoke"
+  | "flare"
+  | "gunfight"
+  | "car_alarm";
 
 export const WORLD_EVENTS: readonly WorldEventKind[] = [
   "horde",
@@ -15,7 +27,14 @@ export const WORLD_EVENTS: readonly WorldEventKind[] = [
   "supply_drop",
   "trader",
   "dilemma",
+  "smoke",
+  "flare",
+  "gunfight",
+  "car_alarm",
 ];
+
+/** The kinds that spawn an investigable beacon rather than acting on the player. */
+export const BEACON_EVENTS: readonly WorldEventKind[] = ["smoke", "flare", "gunfight", "car_alarm"];
 
 interface EventWeight {
   kind: WorldEventKind;
@@ -32,6 +51,11 @@ const WEIGHTS: EventWeight[] = [
   // A rare narrative dilemma — the only thing that opens the GM choice/chat modal.
   // Not on day 0 (let the opening stay calm); rare thereafter.
   { kind: "dilemma", minDay: 1, weight: (d, n) => 0.8 + d * 0.05 + (n ? 0.3 : 0) },
+  // Heartbeat beacons (U4): the world visibly/audibly DOES things in the distance.
+  { kind: "smoke", minDay: 0, weight: (_d, n) => (n ? 0.4 : 1.2) }, // smoke reads by day
+  { kind: "flare", minDay: 0, weight: (_d, n) => (n ? 1.4 : 0) }, // flares read by night
+  { kind: "gunfight", minDay: 0, weight: (d) => 0.9 + d * 0.05 },
+  { kind: "car_alarm", minDay: 0, weight: () => 0.8 },
 ];
 
 /** Weighted pick of the next world event, gated + scaled by the effective day. */
