@@ -81,6 +81,7 @@ import { noteText, parseStashFlag, rollReadable, rollStashSpot, stashCount, stas
 import { ReaderModal } from "../ui/ReaderModal";
 import { arcSafehouse, currentStep, notifyObjective, objectiveLabel, type ObjectiveEvent } from "../game/objectives";
 import { rarityRank } from "../game/items/rarity";
+import { BIOMES, type BiomeId } from "../game/world/biomes";
 import { applyOutcome, type ApplyResult } from "../game/outcomes";
 import { classifyIntent, type Intent } from "../game/intent";
 import { nextAmbientDelayMs } from "../game/encounters";
@@ -125,6 +126,18 @@ interface SearchTarget {
   sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
   prop?: ActiveSearchable;
   corpse?: CorpseRec;
+}
+
+/** A live heartbeat beacon (U4): a distant happening you can go investigate. */
+interface Beacon {
+  kind: WorldEventKind;
+  x: number;
+  y: number;
+  until: number;
+  pingId: number;
+  lastSound: number;
+  emitter?: Phaser.GameObjects.Particles.ParticleEmitter; // smoke column
+  glow?: Phaser.GameObjects.Image; // flare light
 }
 
 /** A streamed, parked vehicle sprite + its live persisted condition (Feature 4). */
@@ -289,6 +302,12 @@ export class WorldScene extends Phaser.Scene {
   private pickupAggTimer?: Phaser.Time.TimerEvent;
   private pickupCombo = 0;
   private lastPickupAt = 0;
+  // Sound & heartbeat (Expansion U4).
+  private readonly beacons: Beacon[] = [];
+  private groanAcc = 0;
+  private groanDelay = 4000;
+  private stingReadyAt = 0; // danger-sting cooldown
+  private packWasClose = false; // edge trigger for the sting
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
@@ -700,6 +719,7 @@ export class WorldScene extends Phaser.Scene {
       this.modal.destroy();
       this.loot.destroy();
       this.reader.destroy();
+      sfx.stopAmbience(); // tear the bed/chirp loops down with the scene (U4)
       this.craftUi.destroy();
       this.storeUi.destroy();
       this.tradeUi.destroy();
@@ -755,10 +775,18 @@ export class WorldScene extends Phaser.Scene {
       if (this.buildMode) this.updateBuildGhost();
       if (this.search) this.tickSearch(delta);
       this.magnetDrops(); // nearby loot flies to the bag (U3)
+      this.tickBeacons(); // distant happenings: audio, expiry, arrival (U4)
       this.corpseAcc += delta;
       if (this.corpseAcc >= 2000) {
         this.corpseAcc = 0;
         this.sweepCorpses();
+        this.checkDangerSting();
+      }
+      this.groanAcc += delta;
+      if (this.groanAcc >= this.groanDelay) {
+        this.groanAcc = 0;
+        this.groanDelay = 3000 + Math.random() * 4000;
+        this.proximityGroan();
       }
       this.tickClouds(time);
       this.updateEnemies(time);
@@ -1192,6 +1220,7 @@ export class WorldScene extends Phaser.Scene {
    *  change; the per-frame applyLighting() in update() keeps the transition smooth. */
   private applyPhaseVisual(): void {
     this.applyLighting(this.dayFraction());
+    this.updateAmbience(); // night layer follows the clock (idempotent, U4)
   }
 
   /** Screen-space weather haze (on the UI layer so it tracks the camera). */
@@ -2286,6 +2315,40 @@ export class WorldScene extends Phaser.Scene {
     this.triggerAmbushes(cx, cy); // set-piece guard packs wake on first visit (U2)
     this.reconcileStashes(); // stream buried caches pinned by stash maps (U2)
     this.objectiveEvent({ kind: "chunk_entered", cx, cy }); // safehouse reach (U3)
+    this.updateAmbience(); // the bed follows the biome (U4)
+  }
+
+  /** Drive the ambient audio bed from the biome group + time of day (U4). */
+  private updateAmbience(): void {
+    const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+    const WATERY = new Set(["lake", "riverbank", "coast", "marsh", "ocean", "wetland"]);
+    const urban = BIOMES[biome as BiomeId]?.urban ?? false;
+    const group = WATERY.has(biome) ? "water" : urban ? "city" : "nature";
+    sfx.setAmbience(group, this.isNight());
+  }
+
+  /** The nearest shambler within earshot rasps from its direction (U4). */
+  private proximityGroan(): void {
+    const e = this.nearestEnemy(600);
+    if (!e) return;
+    const dx = e.sprite.x - this.player.sprite.x;
+    sfx.groan(Math.max(-1, Math.min(1, dx / 400)), Math.hypot(dx, e.sprite.y - this.player.sprite.y));
+  }
+
+  /** Edge-triggered dissonant sting when a pack closes in (≥3 within 260px). */
+  private checkDangerSting(): void {
+    let close = 0;
+    for (const e of this.enemies) {
+      const dx = e.sprite.x - this.player.sprite.x;
+      const dy = e.sprite.y - this.player.sprite.y;
+      if (dx * dx + dy * dy < 260 * 260) close++;
+    }
+    const packClose = close >= 3;
+    if (packClose && !this.packWasClose && this.time.now >= this.stingReadyAt) {
+      this.stingReadyAt = this.time.now + 20000;
+      sfx.sting();
+    }
+    this.packWasClose = packClose;
   }
 
   /** Wake a set-piece scene's guard pack the first time its chunk is entered.
@@ -2389,6 +2452,7 @@ export class WorldScene extends Phaser.Scene {
       case "horde": {
         const n = Math.min(5 + Math.floor(day / 2) + (this.state.bloodMoon ? 6 : 0), this.state.bloodMoon ? 18 : 12);
         this.spawnNear([{ type: this.isNight() || this.state.bloodMoon ? "zombie_runner" : "zombie", count: n }]);
+        sfx.sting(); // a horde deserves the dread chord (U4)
         this.showToast("A horde is moving through the area…");
         break;
       }
@@ -2415,7 +2479,141 @@ export class WorldScene extends Phaser.Scene {
       case "dilemma":
         this.dilemmaEvent(); // the rare event that opens the GM choice/chat modal
         break;
+      case "smoke":
+      case "flare":
+      case "gunfight":
+      case "car_alarm":
+        this.spawnBeacon(kind); // a DISTANT happening you can go investigate (U4)
+        break;
     }
+  }
+
+  // --- heartbeat beacons (U4): distant, investigable happenings --------------
+
+  /** Drop an event beacon 1–2 chunks out: pulsing map ping + world FX/audio +
+   *  a compass toast. Investigating (<400px) resolves it; otherwise it expires. */
+  private spawnBeacon(kind: WorldEventKind): void {
+    if (this.beacons.length >= 2) return; // cap live beacons
+    const { tx, ty } = this.player.tilePos();
+    const spot = this.chunks.walkableNear(tx, ty, 40, 90);
+    if (!spot) return;
+    const colors: Partial<Record<WorldEventKind, number>> = {
+      smoke: 0xff9f43,
+      flare: 0xff5577,
+      gunfight: 0xffd23f,
+      car_alarm: 0x4aa3ff,
+    };
+    const ttl = 200000;
+    const b: Beacon = {
+      kind,
+      x: spot.x,
+      y: spot.y,
+      until: this.time.now + ttl,
+      pingId: this.minimap.addPing(spot.x, spot.y, colors[kind] ?? 0xffffff, ttl),
+      lastSound: 0,
+    };
+    const dx = spot.x - this.player.sprite.x;
+    const dy = spot.y - this.player.sprite.y;
+    const dir = compassDir(dx, dy);
+    const pan = Math.max(-1, Math.min(1, dx / 800));
+    const dist = Math.hypot(dx, dy);
+    if (kind === "smoke") {
+      b.emitter = this.add.particles(spot.x, spot.y, FX_DUST, {
+        speedY: { min: -42, max: -22 },
+        speedX: { min: -7, max: 7 },
+        scale: { start: 1.7, end: 3.4 },
+        alpha: { start: 0.5, end: 0 },
+        lifespan: 2600,
+        frequency: 130,
+        tint: 0x1d1f22,
+      });
+      b.emitter.setDepth(8);
+      this.showToast(`Smoke rises to the ${dir} — someone had a fire going (M)`);
+    } else if (kind === "flare") {
+      b.glow = this.add
+        .image(spot.x, spot.y, FX_GLOW)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(9)
+        .setTint(0xff4a66)
+        .setScale(0.5)
+        .setAlpha(0.85);
+      this.tweens.add({ targets: b.glow, alpha: 0.35, duration: 700, yoyo: true, repeat: -1 });
+      sfx.flare();
+      this.showToast(`A flare bursts to the ${dir} — someone's in trouble (M)`);
+    } else if (kind === "gunfight") {
+      sfx.gunshotFar(pan, dist);
+      this.showToast(`Gunfire echoes from the ${dir} (M)`);
+    } else {
+      sfx.alarm(pan, dist);
+      this.showToast(`A car alarm wails to the ${dir} — it'll draw them (M)`);
+    }
+    this.beacons.push(b);
+  }
+
+  /** Per-frame (cheap, ≤2 live): expiry, repeating positional audio, arrival. */
+  private tickBeacons(): void {
+    if (this.beacons.length === 0) return;
+    const now = this.time.now;
+    for (const b of [...this.beacons]) {
+      if (now >= b.until) {
+        this.clearBeacon(b);
+        continue;
+      }
+      const dx = b.x - this.player.sprite.x;
+      const dy = b.y - this.player.sprite.y;
+      const dist = Math.hypot(dx, dy);
+      if ((b.kind === "gunfight" || b.kind === "car_alarm") && now - b.lastSound > (b.kind === "gunfight" ? 1700 : 1300)) {
+        b.lastSound = now;
+        sfx[b.kind === "gunfight" ? "gunshotFar" : "alarm"](Math.max(-1, Math.min(1, dx / 800)), dist);
+      }
+      if (dist < 400) this.resolveBeacon(b);
+    }
+  }
+
+  private clearBeacon(b: Beacon): void {
+    const i = this.beacons.indexOf(b);
+    if (i >= 0) this.beacons.splice(i, 1);
+    this.minimap.removePing(b.pingId);
+    b.emitter?.destroy();
+    if (b.glow) {
+      this.tweens.killTweensOf(b.glow);
+      b.glow.destroy();
+    }
+  }
+
+  /** What you find when you investigate — supplies, people, or trouble. */
+  private resolveBeacon(b: Beacon): void {
+    this.clearBeacon(b);
+    const bias = 0.2 + this.chunks.lootBias(b.x, b.y);
+    switch (b.kind) {
+      case "smoke": {
+        for (const s of rollLoot("street", liveRng, 2, bias)) this.spawnDrop(b.x, b.y, s.item, s.qty);
+        this.spawnNear([{ type: "zombie", count: Phaser.Math.Between(2, 3) }]);
+        this.showToast("The remains of a camp — supplies left behind");
+        break;
+      }
+      case "flare": {
+        this.spawnSurvivor(b.x, b.y);
+        this.spawnNear([{ type: "zombie", count: 2 }]);
+        this.showToast("A survivor signalled from here — find them (E)");
+        break;
+      }
+      case "gunfight": {
+        for (const s of rollLoot("police_station", liveRng, 1, bias)) this.spawnDrop(b.x, b.y, s.item, s.qty);
+        this.spawnNear([{ type: "survivor_hostile", count: Phaser.Math.Between(1, 2) }]);
+        this.showToast("Spent brass everywhere — and someone's still here");
+        break;
+      }
+      case "car_alarm": {
+        for (const s of rollLoot("scav_vehicle", liveRng, 2, bias)) this.spawnDrop(b.x, b.y, s.item, s.qty);
+        this.spawnNear([{ type: "zombie", count: Phaser.Math.Between(3, 4) }]);
+        this.showToast("The alarm drew them — grab what you can and go");
+        break;
+      }
+      default:
+        break;
+    }
+    pushRecentEvent(this.state, "Investigated a disturbance.");
   }
 
   // --- natural disasters (Living World) -------------------------------------
@@ -3652,7 +3850,7 @@ export class WorldScene extends Phaser.Scene {
     }
     if (tool === "Lockpick") removeItem(this.state, "Lockpick", 1);
     this.floatText(chest.sprite.x, chest.sprite.y - 10, tool === "Lockpick" ? "Picked the lock" : `Forced with ${tool}`, "#9ef0a0");
-    sfx.swing();
+    sfx.unlock();
     return true;
   }
 
@@ -3716,7 +3914,7 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     this.search = { target: t, def: this.searchDefFor(t), done: 0, ring: this.add.graphics().setDepth(30) };
-    sfx.ui();
+    sfx.rustle();
   }
 
   /** Channel tick: cancel if the hold broke (released / moved / hurt / target gone),

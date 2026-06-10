@@ -20,6 +20,9 @@ export class Minimap {
   private readonly g: Phaser.GameObjects.Graphics;
   private readonly title: Phaser.GameObjects.Text;
   private open = false;
+  // Temporary event pings (U4 heartbeat): pulse until their TTL runs out.
+  private pings: { id: number; x: number; y: number; color: number; until: number }[] = [];
+  private nextPingId = 1;
 
   constructor(scene: Phaser.Scene, layer: Phaser.GameObjects.Layer) {
     this.g = scene.add.graphics().setScrollFactor(0).setDepth(1200).setVisible(false);
@@ -45,6 +48,17 @@ export class Minimap {
     this.open = v;
     this.g.setVisible(v);
     this.title.setVisible(v);
+  }
+
+  /** Pin a temporary, pulsing event marker (world px). Returns its id. */
+  addPing(x: number, y: number, color: number, ttlMs: number): number {
+    const id = this.nextPingId++;
+    this.pings.push({ id, x, y, color, until: Date.now() + ttlMs });
+    return id;
+  }
+
+  removePing(id: number): void {
+    this.pings = this.pings.filter((p) => p.id !== id);
   }
 
   /** Redraw around the player (call each frame while open). */
@@ -96,6 +110,11 @@ export class Minimap {
     for (const k of state.knownLocations ?? []) mark(k.x, k.y, 0xffd23f, 3); // landmarks
     for (const v of state.vehicles ?? []) mark(v.x, v.y, 0x4aa3ff, 3); // cars
     if (state.base) mark(state.base.x, state.base.y, 0x5ed66e, 4); // home base
+    // Live event pings pulse so they read as "happening NOW" (U4 heartbeat).
+    const now = Date.now();
+    this.pings = this.pings.filter((p) => p.until > now);
+    const pulse = 4 + 1.6 * Math.sin(now / 150);
+    for (const p of this.pings) mark(p.x, p.y, p.color, pulse);
     mark(state.player.x, state.player.y, 0xffffff, 4); // you
 
     this.title
