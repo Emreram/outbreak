@@ -79,6 +79,8 @@ import {
 } from "../engine/icons";
 import { noteText, parseStashFlag, rollReadable, rollStashSpot, stashCount, stashFlag } from "../game/notes";
 import { ReaderModal } from "../ui/ReaderModal";
+import { arcSafehouse, currentStep, notifyObjective, objectiveLabel, type ObjectiveEvent } from "../game/objectives";
+import { rarityRank } from "../game/items/rarity";
 import { applyOutcome, type ApplyResult } from "../game/outcomes";
 import { classifyIntent, type Intent } from "../game/intent";
 import { nextAmbientDelayMs } from "../game/encounters";
@@ -281,6 +283,12 @@ export class WorldScene extends Phaser.Scene {
   private reader!: ReaderModal;
   private readonly ambushDone = new Set<string>(); // session-only — ambient undead regenerate
   private readonly stashChests = new Map<string, ActiveChest>(); // stash flag → streamed chest
+  // Loot feel + opening arc (Expansion U3).
+  private highlightFx?: Phaser.GameObjects.Image; // pulse under the current interact target
+  private readonly pickupAgg = new Map<string, number>(); // burst-aggregated pickup float
+  private pickupAggTimer?: Phaser.Time.TimerEvent;
+  private pickupCombo = 0;
+  private lastPickupAt = 0;
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
@@ -575,6 +583,21 @@ export class WorldScene extends Phaser.Scene {
     this.minimap = new Minimap(this, this.uiLayer);
     this.eventDelay = nextEventDelayMs(this.state.day, this.isNight());
     this.discoverAround(); // reveal the opening surroundings on the map
+
+    // Interact-target highlight (U3): one additive pulse re-positioned each frame.
+    this.highlightFx = this.add
+      .image(0, 0, FX_GLOW)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(3.5)
+      .setTint(0xffe6a8)
+      .setScale(0.2)
+      .setVisible(false);
+
+    // The opening arc's safehouse is pinned from the start (U3).
+    if (currentStep(this.state)) {
+      const t = arcSafehouse(this.state.seed);
+      this.revealLocation("Safehouse", "objective", (t.cx * CHUNK_TILES + CHUNK_TILES / 2) * TILE_SIZE, (t.cy * CHUNK_TILES + CHUNK_TILES / 2) * TILE_SIZE);
+    }
     for (const p of this.state.farmPlots ?? []) this.refreshPlotSprites(p); // restore farm plots
 
     // Split rendering: the main (zoomed, player-following) camera draws the world
@@ -731,6 +754,7 @@ export class WorldScene extends Phaser.Scene {
       if (this.driving) this.driveTick(delta);
       if (this.buildMode) this.updateBuildGhost();
       if (this.search) this.tickSearch(delta);
+      this.magnetDrops(); // nearby loot flies to the bag (U3)
       this.corpseAcc += delta;
       if (this.corpseAcc >= 2000) {
         this.corpseAcc = 0;
@@ -840,8 +864,10 @@ export class WorldScene extends Phaser.Scene {
     // forces one.
     if (!this.dead && this.buildMode) {
       this.hintText.setText(this.buildHint()).setVisible(true);
+      this.setHighlight(null, time);
     } else if (!this.dead && this.driving) {
       this.hintText.setText(`Driving — Fuel ${Math.ceil(this.driving.data.fuel)}%  ·  Press E to park`).setVisible(true);
+      this.setHighlight(null, time);
     } else if (!this.dead && !this.inEncounter) {
       const veh = this.nearestVehicle(52);
       const npc = veh ? null : this.nearestNpc(46);
@@ -858,8 +884,12 @@ export class WorldScene extends Phaser.Scene {
       else if (farm) this.hintText.setText(farm).setVisible(true);
       else if (near) this.hintText.setText(this.buildingHint(near)).setVisible(true);
       else this.hintText.setVisible(false);
+      // The resolved physical target gets a soft ground pulse so it reads at a glance (U3).
+      const targetSprite = veh?.sprite ?? npc?.sprite ?? store?.sprite ?? chest?.sprite ?? scav?.sprite ?? null;
+      this.setHighlight(targetSprite, time);
     } else {
       this.hintText.setVisible(false);
+      this.setHighlight(null, time);
     }
 
     this.hud.update(this.state, this.debugInfo(), this.activeWeaponName(), this.clockLabel());
@@ -883,8 +913,110 @@ export class WorldScene extends Phaser.Scene {
       this.objBanner.setText("🔴 BLOOD MOON — survive until dawn").setVisible(true);
       return;
     }
+    // The guided opening arc owns the banner until it's done (U3), then the run goal.
+    const arc = objectiveLabel(this.state);
+    if (arc) {
+      this.objBanner.setText(arc).setVisible(true);
+      return;
+    }
     const g = this.state.goal ?? "";
     this.objBanner.setText(g ? `Objective: ${g}` : "").setVisible(!!g);
+  }
+
+  /** Feed an event into the opening arc; surface progress/toasts/reward (U3). */
+  private objectiveEvent(ev: ObjectiveEvent): void {
+    const r = notifyObjective(this.state, ev);
+    if (!r.advanced) return;
+    this.updateObjective();
+    if (r.toast) this.showToast(r.toast);
+    if (r.stepDone) sfx.ui();
+    if (r.chainDone) this.grantArcReward();
+    this.persist();
+  }
+
+  /** Fires the arm-objective once a real weapon is in hand (any equip path). */
+  private checkArmed(): void {
+    if (currentStep(this.state)?.kind !== "equip_weapon") return;
+    const armed = !!this.state.equippedRanged || (!!this.state.equippedMelee && this.state.equippedMelee !== "Fists");
+    if (armed) this.objectiveEvent({ kind: "weapon_equipped" });
+  }
+
+  /** Completing the opening arc drops a small supply reward at the player's feet. */
+  private grantArcReward(): void {
+    pushRecentEvent(this.state, "Saw the first day through — supplies secured.");
+    this.showToast("Opening objective complete — supplies dropped at your feet");
+    for (const s of rollLoot("chest:2", liveRng, 3, 0.3)) {
+      this.spawnDrop(this.player.sprite.x + 10, this.player.sprite.y + 10, s.item, s.qty);
+    }
+    this.grantXp("combat", 6);
+    this.grantXp("crafting", 6);
+  }
+
+  /** Soft additive pulse under the current interact target (U3 loot feel). */
+  private setHighlight(target: { x: number; y: number } | null, time: number): void {
+    if (!this.highlightFx) return;
+    if (!target) {
+      this.highlightFx.setVisible(false);
+      return;
+    }
+    this.highlightFx
+      .setVisible(true)
+      .setPosition(target.x, target.y + 6)
+      .setAlpha(0.22 + 0.1 * Math.sin(time / 170))
+      .setScale(0.19 + 0.02 * Math.sin(time / 170));
+  }
+
+  /** Loot within arm's reach flies into the bag (U3): kill the bob, disable the
+   *  body (the tween owns delivery), and run the normal pickup on arrival. */
+  private magnetDrops(): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    for (const obj of this.itemGroup.getChildren() as Phaser.Physics.Arcade.Image[]) {
+      if (!obj.active || obj.getData("magnet")) continue;
+      const dx = obj.x - px;
+      const dy = obj.y - py;
+      if (dx * dx + dy * dy > 44 * 44) continue;
+      obj.setData("magnet", true);
+      const body = obj.body as Phaser.Physics.Arcade.Body | null;
+      if (body) body.enable = false;
+      const glow = obj.getData("glow") as DropGlow | undefined;
+      const targets: Phaser.GameObjects.GameObject[] = [obj, ...(glow?.layers ?? [])];
+      for (const t of targets) this.tweens.killTweensOf(t); // stop the bob
+      this.tweens.add({
+        targets,
+        x: px,
+        y: py,
+        alpha: 0.9,
+        duration: 160,
+        ease: "Quad.easeIn",
+        onComplete: () => this.pickupDrop(obj),
+      });
+    }
+  }
+
+  /** Burst-aggregate pickup floats so vacuuming a loot pile reads as ONE line. */
+  private queuePickupFloat(item: string, qty: number): void {
+    this.pickupAgg.set(item, (this.pickupAgg.get(item) ?? 0) + qty);
+    this.pickupAggTimer?.remove();
+    this.pickupAggTimer = this.time.delayedCall(620, () => this.flushPickupFloat());
+  }
+
+  private flushPickupFloat(): void {
+    if (this.pickupAgg.size === 0) return;
+    const entries = [...this.pickupAgg.entries()];
+    this.pickupAgg.clear();
+    let best = -1;
+    let color = "#ffffff";
+    for (const [name] of entries) {
+      const r = rarityRank(defOf(name).rarity);
+      if (r > best) {
+        best = r;
+        color = RARITY_META[defOf(name).rarity].css;
+      }
+    }
+    const shown = entries.slice(0, 3).map(([n, q]) => `+${q > 1 ? `${q} ` : ""}${n}`).join(" · ");
+    const extra = entries.length > 3 ? ` +${entries.length - 3} more` : "";
+    this.floatText(this.player.sprite.x, this.player.sprite.y - 6, shown + extra, color);
   }
 
   // --- enemies (CLAUDE.md §11) -----------------------------------------------
@@ -937,7 +1069,10 @@ export class WorldScene extends Phaser.Scene {
   private advanceClock(announce = true): void {
     const idx = PHASES.indexOf(this.state.timeOfDay);
     const next = (idx + 1) % PHASES.length;
-    if (next === 0) this.state.day += 1; // wrapped night -> dawn
+    if (next === 0) {
+      this.state.day += 1; // wrapped night -> dawn
+      this.objectiveEvent({ kind: "dawn" }); // opening arc: survived the night (U3)
+    }
     this.state.timeOfDay = PHASES[next];
     const wasBlood = this.state.bloodMoon;
     this.updateBloodMoon(); // roll a new blood moon as night falls; lift it at dawn
@@ -2150,6 +2285,7 @@ export class WorldScene extends Phaser.Scene {
     for (const lm of this.chunks.landmarksAt(cx, cy)) this.revealLocation(lm.label, lm.kind, lm.x, lm.y);
     this.triggerAmbushes(cx, cy); // set-piece guard packs wake on first visit (U2)
     this.reconcileStashes(); // stream buried caches pinned by stash maps (U2)
+    this.objectiveEvent({ kind: "chunk_entered", cx, cy }); // safehouse reach (U3)
   }
 
   /** Wake a set-piece scene's guard pack the first time its chunk is entered.
@@ -2796,6 +2932,7 @@ export class WorldScene extends Phaser.Scene {
     this.firing = false;
     this.player.sprite.setVelocity(0, 0);
     this.loot.open(this.state, () => {
+      this.checkArmed(); // equipping from the bag can complete the arm objective
       this.hud.update(this.state, this.debugInfo());
       this.persist();
     });
@@ -3212,6 +3349,7 @@ export class WorldScene extends Phaser.Scene {
     equipWeapon(this.state, list[i].name);
     sfx.ui();
     this.updateWeaponSprite();
+    this.checkArmed(); // opening arc (U3)
   }
 
   /** Scroll-wheel cycle through the carried-weapon strip (wraps), equipping each. */
@@ -3446,12 +3584,18 @@ export class WorldScene extends Phaser.Scene {
     if (!spr.active) return;
     const item = spr.getData("item") as string;
     const qty = (spr.getData("qty") as number) ?? 1;
-    const meta = RARITY_META[defOf(item).rarity];
     addItem(this.state, item, qty);
     const equipped = autoEquip(this.state, item);
-    sfx.pickup();
-    this.floatText(this.player.sprite.x, this.player.sprite.y - 6, `+${qty > 1 ? qty + " " : ""}${item}`, meta.css);
-    if (equipped) this.showToast(`Equipped ${item}`);
+    // Rapid-loot combo: each pickup in a burst blips a step higher (U3).
+    const now = this.time.now;
+    this.pickupCombo = now - this.lastPickupAt < 1100 ? this.pickupCombo + 1 : 1;
+    this.lastPickupAt = now;
+    sfx.tick(this.pickupCombo);
+    this.queuePickupFloat(item, qty);
+    if (equipped) {
+      this.showToast(`Equipped ${item}`);
+      this.checkArmed();
+    }
     this.destroyDrop(spr);
     this.persist();
   }
@@ -3494,6 +3638,7 @@ export class WorldScene extends Phaser.Scene {
     if (chest.gid.includes("_sc") && liveRng.chance(0.35)) {
       this.spawnDrop(chest.sprite.x, chest.sprite.y, rollReadable(liveRng), 1);
     }
+    this.objectiveEvent({ kind: "container_searched" }); // opening arc (U3)
     this.persist();
   }
 
@@ -3631,6 +3776,7 @@ export class WorldScene extends Phaser.Scene {
     }
     // Drawers and shelves sometimes hold someone's writing (U2 readables).
     if (s.def.source === "scav_domestic" && liveRng.chance(0.04)) this.spawnDrop(x, y, rollReadable(liveRng), 1);
+    this.objectiveEvent({ kind: "container_searched" }); // opening arc (U3)
     this.persist();
   }
 
