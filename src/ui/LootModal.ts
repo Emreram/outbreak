@@ -116,6 +116,7 @@ export class LootModal {
   // "NEW" badges (U3): names seen at the last open; first open seeds the set.
   private readonly seen = new Set<string>();
   private seenInit = false;
+  private openedTs = 0; // the keystroke that opened us must not also close us
   private selected?: string;
   private opened = false;
 
@@ -197,6 +198,7 @@ export class LootModal {
     this.onChange = onChange;
     this.selected = undefined;
     this.opened = true;
+    this.openedTs = performance.now(); // ignore the keystroke that opened us
     if (!this.seenInit) {
       this.seenInit = true;
       for (const it of state.inventory) this.seen.add(it.item); // starting kit isn't "NEW"
@@ -220,6 +222,11 @@ export class LootModal {
 
   private onKey = (e: KeyboardEvent): void => {
     if (!this.opened) return;
+    // Phaser handles the keystroke FIRST (it opened us synchronously); that same
+    // DOM event then reaches this listener — without this guard, pressing I would
+    // open the bag and instantly close it again (and leave the next ESC quitting
+    // to the main menu). e.timeStamp shares performance.now()'s clock.
+    if (e.timeStamp <= this.openedTs) return;
     if (e.key === "Escape" || e.key === "i" || e.key === "I") {
       e.stopPropagation();
       this.close();

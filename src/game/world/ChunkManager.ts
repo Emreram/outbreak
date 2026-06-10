@@ -16,6 +16,7 @@ import {
 } from "../constants";
 import { ChunkView, type ColliderSpec } from "../../engine/ChunkRenderer";
 import { CHEST_CLOSED, PADLOCK } from "../../engine/icons";
+import { fxTexFor } from "../../engine/fx";
 import { propKey } from "../../engine/propSprites";
 import { isSearchableKind } from "../scavenge";
 
@@ -140,7 +141,8 @@ export class ChunkManager {
       if (this.opts.isChestLooted(c.gid)) continue;
       const x = (c.tx + 0.5) * TILE_SIZE;
       const y = (c.ty + 0.5) * TILE_SIZE;
-      const spr = this.scene.add.image(x, y, CHEST_CLOSED).setDepth(6).setTint(KIND_TINT[c.kind] ?? KIND_TINT.crate);
+      const kt = fxTexFor(this.scene, CHEST_CLOSED, KIND_TINT[c.kind] ?? KIND_TINT.crate);
+      const spr = this.scene.add.image(x, y, kt.key).setDepth(6).setTint(kt.tint);
       const chest: ActiveChest = { gid: c.gid, sprite: spr, tier: c.tier, kind: c.kind, locked: c.locked, opened: false };
       if (c.locked) chest.badge = this.scene.add.image(x + 9, y - 8, PADLOCK).setDepth(7);
       chests.push(chest);
@@ -155,7 +157,7 @@ export class ChunkManager {
       if (!this.skipSearchable(p)) continue; // not searchable → ChunkView draws it
       const searched = this.opts.isPropSearched?.(p.gid!) ?? false;
       const spr = this.scene.add.image(p.x, p.y, propKey(p.kind)).setDepth(4);
-      if (searched) spr.setTint(SEARCHED_TINT);
+      if (searched) spr.setTint(SEARCHED_TINT).setAlpha(0.55); // alpha too — canvas ignores tints
       out.push({ gid: p.gid!, kind: p.kind, sprite: spr, searched });
     }
     return out;

@@ -114,7 +114,7 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
 
 /** A fallen zombie left on the ground — searchable once, fades after a while. */
@@ -1924,7 +1924,10 @@ export class WorldScene extends Phaser.Scene {
 
   private styleVehicleSprite(av: ActiveVehicle): void {
     const def = vehicleDef(av.type);
-    av.sprite.setScale(def.scale).setTint(def.tint).setPosition(av.data.x, av.data.y);
+    // fxTexFor keeps the per-type body colour on the Canvas renderer too.
+    const t = fxTexFor(this, propKey(`veh_${av.type}`), def.tint);
+    if (this.textures.exists(t.key)) av.sprite.setTexture(t.key);
+    av.sprite.setScale(def.scale).setTint(t.tint).setPosition(av.data.x, av.data.y);
     av.sprite.setAlpha(isRepaired(av.data) ? 1 : 0.82); // wrecks look duller until fixed
   }
 
@@ -2008,9 +2011,9 @@ export class WorldScene extends Phaser.Scene {
     av.sprite.destroy();
     this.vehicleSprites.delete(av.gid);
     const def = vehicleDef(av.type);
-    const key = propKey(`veh_${av.type}`);
-    if (this.textures.exists(key)) this.player.sprite.setTexture(key);
-    this.player.sprite.setScale(def.scale).clearTint();
+    const t = fxTexFor(this, propKey(`veh_${av.type}`), def.tint);
+    if (this.textures.exists(t.key)) this.player.sprite.setTexture(t.key);
+    this.player.sprite.setScale(def.scale).setTint(t.tint);
     this.player.speedMult = def.speedMult;
     this.weaponSprite.setVisible(false);
     this.weaponGlow.setVisible(false);
@@ -2766,14 +2769,15 @@ export class WorldScene extends Phaser.Scene {
     const pan = Math.max(-1, Math.min(1, dx / 800));
     const dist = Math.hypot(dx, dy);
     if (kind === "smoke") {
-      b.emitter = this.add.particles(spot.x, spot.y, FX_DUST, {
+      const smokeTex = fxTexFor(this, FX_DUST, 0x1d1f22); // colour-true on canvas too
+      b.emitter = this.add.particles(spot.x, spot.y, smokeTex.key, {
         speedY: { min: -42, max: -22 },
         speedX: { min: -7, max: 7 },
         scale: { start: 1.7, end: 3.4 },
         alpha: { start: 0.5, end: 0 },
         lifespan: 2600,
         frequency: 130,
-        tint: 0x1d1f22,
+        tint: smokeTex.tint,
       });
       b.emitter.setDepth(8);
       this.showToast(`Smoke rises to the ${dir} — someone had a fire going (M)`);
@@ -3475,8 +3479,29 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /** Enable/disable the Phaser keyboard so encounter typing never leaks to gameplay. */
+  /** Enable/disable the Phaser keyboard so modal typing never leaks to gameplay.
+   *  DISABLING also forgets held keys (nothing "sticks" through a modal), and
+   *  RE-ENABLING is deferred one tick: Phaser drains its keydown queue before the
+   *  scene updates, so the very keystroke that closed a DOM modal (ESC / I) would
+   *  otherwise still fire game bindings the moment we re-enable — ESC would bounce
+   *  the player to the main menu, I would instantly reopen the bag. */
   private setGameKeys(enabled: boolean): void {
-    if (this.input.keyboard) this.input.keyboard.enabled = enabled;
+    const kb = this.input.keyboard;
+    if (!kb) return;
+    if (!enabled) {
+      kb.enabled = false;
+      kb.resetKeys();
+      return;
+    }
+    this.time.delayedCall(0, () => {
+      if (this.anyModalOpen() || !this.input.keyboard) return; // a chained modal opened meanwhile
+      this.input.keyboard.enabled = true;
+    });
+  }
+
+  /** True while any DOM overlay owns the keyboard. */
+  private anyModalOpen(): boolean {
+    return this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.inEncounter || this.reader.isOpen();
   }
 
   private onEncounterAction(input: TurnInput): void {
@@ -3734,7 +3759,12 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-V", () => this.claimToggle()); // claim/release the building as base
     kb.on("keydown-M", () => { this.minimap.toggle(); sfx.ui(); }); // minimap (Feature 10)
     kb.on("keydown-H", () => this.showControlsHint()); // re-show the controls cheat-sheet
-    kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
+    // ESC → main menu, but ONLY from the open world — never while a modal that
+    // itself closes on ESC is up (its keystroke must not double as "quit").
+    kb.on("keydown-ESC", () => {
+      if (this.anyModalOpen() || this.dead) return;
+      this.scene.start("MainMenuScene");
+    });
 
     // E = interact with the physical target in range; HOLDING E sustains a
     // scavenging channel (the key handle is polled by tickSearch).
@@ -4213,11 +4243,11 @@ export class WorldScene extends Phaser.Scene {
     if (t.prop) {
       markSearched(this.state, t.prop.gid);
       t.prop.searched = true;
-      t.prop.sprite.setTint(SEARCHED_TINT);
+      t.prop.sprite.setTint(SEARCHED_TINT).setAlpha(0.55); // alpha too — canvas ignores tints
     }
     if (t.corpse) {
       t.corpse.searched = true;
-      t.corpse.sprite.setTint(0x4c4c4c);
+      t.corpse.sprite.setTint(0x4c4c4c).setAlpha(0.7);
     }
     // Yields are THIN by design — chests stay the real prize (scavenge.ts).
     if (liveRng.chance(s.def.emptyChance)) {
