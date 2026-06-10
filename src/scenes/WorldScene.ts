@@ -29,12 +29,15 @@ import { compassDir, nextEventDelayMs, rollWorldEvent, type WorldEventKind } fro
 import {
   acceptOffer,
   addStanding,
+  CAMP_LANDMARKS,
+  campRoster,
   canRecruit,
   companionCount,
   factionForBiome,
   generateOffers,
   getStanding,
   MAX_COMPANIONS,
+  npcGoneFlag,
   npcName,
   payRecruit,
   recruitCost,
@@ -43,6 +46,7 @@ import {
   type RecruitCost,
   type TradeOffer,
 } from "../game/npcs";
+import { clearedFlag, effectiveState, priedFlag, priedLootBonus, rescuedFlag, type BuildingMood } from "../game/world/buildingStates";
 import { isWet, rollWeather } from "../game/weather";
 import { addXp, SKILL_NAMES, type SkillId } from "../game/skills";
 import { propKey } from "../engine/propSprites";
@@ -126,6 +130,14 @@ interface SearchTarget {
   sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
   prop?: ActiveSearchable;
   corpse?: CorpseRec;
+}
+
+/** A live overlay on a non-normal building (U5): boards, bangers, or a knocker. */
+interface BuildingFx {
+  mood: BuildingMood;
+  b: Building;
+  sprite?: Phaser.GameObjects.Image; // boards (static body in placeGroup)
+  lastCue: number; // knock/banger cue cooldown
 }
 
 /** A live heartbeat beacon (U4): a distant happening you can go investigate. */
@@ -308,6 +320,12 @@ export class WorldScene extends Phaser.Scene {
   private groanDelay = 4000;
   private stingReadyAt = 0; // danger-sting cooldown
   private packWasClose = false; // edge trigger for the sting
+  // Living camps + interactive buildings + street encounters (Expansion U5).
+  private readonly buildingFx = new Map<string, BuildingFx>(); // gid → overlay
+  private readonly campFires = new Map<string, Phaser.GameObjects.Image | null>(); // camp key → dressing
+  private streetAcc = 0;
+  private streetDelay = 70000;
+  private rescueWatch: { id: string; until: number; faction: string } | null = null;
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
@@ -781,6 +799,14 @@ export class WorldScene extends Phaser.Scene {
         this.corpseAcc = 0;
         this.sweepCorpses();
         this.checkDangerSting();
+        this.tickBuildingMoods(); // bangers burst, knockers get rescued (U5)
+        this.checkRescue();
+      }
+      this.streetAcc += delta;
+      if (this.streetAcc >= this.streetDelay) {
+        this.streetAcc = 0;
+        this.streetDelay = 60000 + Math.random() * 60000;
+        this.streetEncounter(); // the roads are inhabited from day 0 (U5)
       }
       this.groanAcc += delta;
       if (this.groanAcc >= this.groanDelay) {
@@ -902,18 +928,20 @@ export class WorldScene extends Phaser.Scene {
       const store = veh || npc ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
       const chest = veh || npc || store ? null : this.nearestChest(42);
       const scav = veh || npc || store || chest ? null : this.nearestSearchable(40);
-      const farm = veh || npc || store || chest || scav ? null : this.farmHint();
-      const near = veh || npc || store || chest || scav || farm ? null : this.buildingAt();
+      const boards = veh || npc || store || chest || scav ? null : this.nearestBoards(42);
+      const farm = veh || npc || store || chest || scav || boards ? null : this.farmHint();
+      const near = veh || npc || store || chest || scav || boards || farm ? null : this.buildingAt();
       if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
       else if (npc) this.hintText.setText(`Press E to talk to ${npc.name}${npc.kind === "companion" ? " (companion)" : ""}`).setVisible(true);
       else if (store) this.hintText.setText("Press E to open base storage").setVisible(true);
       else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
       else if (scav) this.hintText.setText(`Hold E to search the ${this.searchDefFor(scav).label}`).setVisible(true);
+      else if (boards) this.hintText.setText("Boarded up — press E with a Crowbar to pry").setVisible(true);
       else if (farm) this.hintText.setText(farm).setVisible(true);
       else if (near) this.hintText.setText(this.buildingHint(near)).setVisible(true);
       else this.hintText.setVisible(false);
       // The resolved physical target gets a soft ground pulse so it reads at a glance (U3).
-      const targetSprite = veh?.sprite ?? npc?.sprite ?? store?.sprite ?? chest?.sprite ?? scav?.sprite ?? null;
+      const targetSprite = veh?.sprite ?? npc?.sprite ?? store?.sprite ?? chest?.sprite ?? scav?.sprite ?? boards?.sprite ?? null;
       this.setHighlight(targetSprite, time);
     } else {
       this.hintText.setVisible(false);
@@ -1708,6 +1736,11 @@ export class WorldScene extends Phaser.Scene {
       this.startSearch(search);
       return;
     }
+    const boards = this.nearestBoards(42);
+    if (boards) {
+      this.pryBoards(boards);
+      return;
+    }
     if (this.tryFarmAction()) return; // till / plant / water / harvest when applicable
     // No physical target → E does nothing. The GM choice/chat modal is NOT opened on
     // demand; it fires only on a rare "dilemma" world event (see dilemmaEvent).
@@ -2316,6 +2349,221 @@ export class WorldScene extends Phaser.Scene {
     this.reconcileStashes(); // stream buried caches pinned by stash maps (U2)
     this.objectiveEvent({ kind: "chunk_entered", cx, cy }); // safehouse reach (U3)
     this.updateAmbience(); // the bed follows the biome (U4)
+    this.reconcileBuildingOverlays(); // boarded/infested/trapped buildings (U5)
+    this.reconcileCampNpcs(); // resident camp rosters (U5)
+  }
+
+  // --- interactive buildings (U5): boarded / infested / trapped ---------------
+
+  /** Stream overlays for non-normal buildings in the 3×3 chunk window. */
+  private reconcileBuildingOverlays(): void {
+    const { cx, cy } = this.playerChunk();
+    const wanted = new Map<string, Building>();
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        for (const b of this.chunks.buildingsAt(cx + dx, cy + dy)) {
+          if (effectiveState(this.state.seed, b, this.state) !== "normal") wanted.set(b.gid, b);
+        }
+      }
+    }
+    for (const [gid, fx] of [...this.buildingFx]) {
+      if (!wanted.has(gid)) this.destroyBuildingFx(gid, fx);
+    }
+    for (const [gid, b] of wanted) {
+      if (this.buildingFx.has(gid)) continue;
+      const mood = effectiveState(this.state.seed, b, this.state);
+      const rec: BuildingFx = { mood, b, lastCue: 0 };
+      if (mood === "boarded") {
+        const x = (b.door.x + 0.5) * TILE_SIZE;
+        const y = (b.door.y + 0.5) * TILE_SIZE;
+        rec.sprite = this.placeGroup.create(x, y, propKey("boards")) as Phaser.GameObjects.Image;
+        rec.sprite.setDepth(5); // static body: the doorway is physically blocked
+      }
+      this.buildingFx.set(gid, rec);
+    }
+  }
+
+  private destroyBuildingFx(gid: string, fx: BuildingFx): void {
+    fx.sprite?.destroy();
+    this.buildingFx.delete(gid);
+  }
+
+  /** The nearest pryable boarded doorway. */
+  private nearestBoards(maxDist: number): BuildingFx | null {
+    let best: BuildingFx | null = null;
+    let bestD = maxDist;
+    for (const fx of this.buildingFx.values()) {
+      if (fx.mood !== "boarded" || !fx.sprite?.active) continue;
+      const d = Math.hypot(fx.sprite.x - this.player.sprite.x, fx.sprite.y - this.player.sprite.y);
+      if (d < bestD) {
+        bestD = d;
+        best = fx;
+      }
+    }
+    return best;
+  }
+
+  /** Pry a boarded doorway open with a Crowbar — untouched shelves await (U5). */
+  private pryBoards(fx: BuildingFx): void {
+    if (!hasItem(this.state, "Crowbar")) {
+      this.showToast("Boarded up tight — you need a Crowbar");
+      sfx.ui();
+      return;
+    }
+    this.state.worldFlags.push(priedFlag(fx.b.gid));
+    sfx.pry();
+    dustPuff(this, fx.sprite?.x ?? this.player.sprite.x, fx.sprite?.y ?? this.player.sprite.y, 5);
+    this.floatText(this.player.sprite.x, this.player.sprite.y - 8, "Pried the boards loose", "#9ef0a0");
+    this.grantXp("crafting", 2);
+    pushRecentEvent(this.state, "Pried open a boarded building.");
+    this.destroyBuildingFx(fx.b.gid, fx);
+    this.persist();
+  }
+
+  /** Slow tick (2s): infested doors bang then burst; trapped survivors knock and
+   *  are freed when you step inside. */
+  private tickBuildingMoods(): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    const now = this.time.now;
+    for (const [gid, fx] of [...this.buildingFx]) {
+      const doorX = (fx.b.door.x + 0.5) * TILE_SIZE;
+      const doorY = (fx.b.door.y + 0.5) * TILE_SIZE;
+      const d = Math.hypot(doorX - px, doorY - py);
+      if (fx.mood === "infested") {
+        if (d < 90) {
+          this.state.worldFlags.push(clearedFlag(gid));
+          this.destroyBuildingFx(gid, fx);
+          const n = Phaser.Math.Between(3, 5);
+          for (let i = 0; i < n; i++) {
+            if (this.enemies.length >= 34) break;
+            const spot = this.chunks.walkableNear(fx.b.door.x, fx.b.door.y, 1, 3);
+            if (spot) this.spawnEnemy(rollZombie("zombie", liveRng, this.effDay(), this.chunks.biomeAtPx(spot.x, spot.y)), spot.x, spot.y);
+          }
+          sfx.sting();
+          this.cameras.main.shake(120, 0.006);
+          this.showToast("They were inside the walls!");
+          pushRecentEvent(this.state, "An infested building burst open.");
+          this.persist();
+        } else if (d < 280 && now - fx.lastCue > 1700) {
+          fx.lastCue = now;
+          sfx.knock();
+          dustPuff(this, doorX, doorY, 2);
+        }
+      } else if (fx.mood === "trapped") {
+        if (this.buildingAt()?.gid === gid) {
+          this.state.worldFlags.push(rescuedFlag(gid));
+          this.destroyBuildingFx(gid, fx);
+          const spot = this.chunks.walkableNear(fx.b.door.x, fx.b.door.y, 1, 3) ?? { x: px, y: py };
+          const npc = this.spawnSurvivor(spot.x, spot.y);
+          addStanding(this.state, npc.faction, 6);
+          for (const s of rollLoot("house", liveRng, 1, 0.3)) this.spawnDrop(spot.x, spot.y, s.item, s.qty);
+          this.showToast(`You freed ${npc.name}! (+${npc.faction} standing)`);
+          pushRecentEvent(this.state, "Freed a trapped survivor.");
+          this.persist();
+        } else if (d < 220 && now - fx.lastCue > 2600) {
+          fx.lastCue = now;
+          sfx.knock();
+        }
+      }
+    }
+  }
+
+  // --- living camps (U5): resident rosters around camp landmarks --------------
+
+  /** Stream deterministic camp rosters (guards + a trader) with home tethers;
+   *  recruitment/death suppress via npc_gone flags, so camps remember. */
+  private reconcileCampNpcs(): void {
+    const { cx, cy } = this.playerChunk();
+    const wantedCamps = new Map<string, { x: number; y: number; ccx: number; ccy: number }>();
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const ccx = cx + dx;
+        const ccy = cy + dy;
+        for (const lm of this.chunks.landmarksAt(ccx, ccy)) {
+          if (CAMP_LANDMARKS.has(lm.kind)) {
+            wantedCamps.set(`${ccx},${ccy}`, { x: lm.x, y: lm.y, ccx, ccy });
+            break;
+          }
+        }
+      }
+    }
+    for (const [key, fire] of [...this.campFires]) {
+      if (!wantedCamps.has(key)) {
+        fire?.destroy();
+        this.campFires.delete(key);
+      }
+    }
+    for (let i = this.npcs.length - 1; i >= 0; i--) {
+      const n = this.npcs[i];
+      if (n.kind !== "survivor" || !n.id.startsWith("camp_")) continue;
+      const m = /^camp_(-?\d+)_(-?\d+)_/.exec(n.id);
+      if (m && !wantedCamps.has(`${m[1]},${m[2]}`)) {
+        n.destroy();
+        this.npcs.splice(i, 1);
+      }
+    }
+    for (const [key, c] of wantedCamps) {
+      if (!this.campFires.has(key)) {
+        const fireKey = propKey("base_campfire");
+        this.campFires.set(key, this.textures.exists(fireKey) ? this.add.image(c.x + 16, c.y + 10, fireKey).setDepth(4) : null);
+      }
+      const biome = this.chunks.chunkBiome(c.ccx, c.ccy) ?? this.chunks.biomeAtPx(c.x, c.y);
+      const fac = factionForBiome(biome);
+      for (const mate of campRoster(this.state.seed, c.ccx, c.ccy, fac)) {
+        if (this.state.worldFlags.includes(npcGoneFlag(mate.id))) continue; // recruited away or dead
+        if (this.state.npcs?.some((n) => n.id === mate.id)) continue; // travelling with you
+        if (this.npcs.some((n) => n.id === mate.id)) continue; // already live
+        const spot = this.chunks.walkableNear(Math.floor(c.x / TILE_SIZE), Math.floor(c.y / TILE_SIZE), 1, 3) ?? { x: c.x + 20, y: c.y + 20 };
+        const hp = Math.round(45 * tierMeta(mate.tier).hpMul);
+        const name = mate.role === "trader" ? `${mate.name} (trader)` : mate.name;
+        this.makeNpc(spot.x, spot.y, mate.id, name, fac, "survivor", hp, hp, mate.tier, { x: c.x, y: c.y, r: 90 });
+      }
+    }
+  }
+
+  // --- street encounters (U5): the roads are inhabited from day 0 -------------
+
+  private streetEncounter(): void {
+    if (this.dead || this.enemies.length >= 30 || this.npcs.length >= 6) return;
+    const roll = Math.random();
+    const { tx, ty } = this.player.tilePos();
+    if (roll < 0.45) {
+      // a survivor fleeing a pack — cover their escape for standing
+      const spot = this.chunks.walkableNear(tx, ty, 8, 12);
+      if (!spot) return;
+      const npc = this.spawnSurvivor(spot.x, spot.y);
+      this.spawnNear([{ type: "zombie", count: Phaser.Math.Between(2, 3) }]);
+      this.rescueWatch = { id: npc.id, until: this.time.now + 25000, faction: npc.faction };
+      this.showToast(`${npc.name} is running from a pack — cover them!`);
+    } else if (roll < 0.7 && this.effDay() >= 1) {
+      this.spawnNear([{ type: "survivor_hostile", count: 2 }]);
+      this.showToast("Raiders spring an ambush!");
+    } else {
+      const spot = this.chunks.walkableNear(tx, ty, 6, 10);
+      if (!spot) return;
+      const npc = this.spawnSurvivor(spot.x, spot.y);
+      this.showToast(`${npc.name} is passing through — trade while you can (E)`);
+    }
+  }
+
+  /** Did the fleeing survivor make it? Checked on the slow sweep. */
+  private checkRescue(): void {
+    const w = this.rescueWatch;
+    if (!w) return;
+    const npc = this.npcs.find((n) => n.id === w.id);
+    if (!npc) {
+      this.rescueWatch = null; // they fell — the world moves on
+      return;
+    }
+    if (this.time.now < w.until) return;
+    this.rescueWatch = null;
+    if (!this.nearestEnemyTo(npc.sprite.x, npc.sprite.y, 280)) {
+      addStanding(this.state, w.faction, 6);
+      this.showToast(`${npc.name} made it — the ${w.faction} will remember (+standing)`);
+      pushRecentEvent(this.state, "Covered a fleeing survivor.");
+      this.persist();
+    }
   }
 
   /** Drive the ambient audio bed from the biome group + time of day (U4). */
@@ -2922,11 +3170,11 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private makeNpc(x: number, y: number, id: string, name: string, faction: string, kind: "survivor" | "companion", hp: number, maxHp: number, tier?: string): Npc {
+  private makeNpc(x: number, y: number, id: string, name: string, faction: string, kind: "survivor" | "companion", hp: number, maxHp: number, tier?: string, home?: { x: number; y: number; r: number }): Npc {
     const meta = tierMeta(tier);
     const color = kind === "companion" ? 0x6effa0 : meta.tint; // companions read green; survivors tint by tier
     const tagPrefix = kind === "companion" ? "" : meta.namePrefix; // prime survivors flagged
-    const npc = new Npc(this, x, y, { id, name, faction, kind, hp, maxHp, color, tier, tagPrefix });
+    const npc = new Npc(this, x, y, { id, name, faction, kind, hp, maxHp, color, tier, tagPrefix, home });
     this.npcGroup.add(npc.sprite);
     this.npcs.push(npc);
     return npc;
@@ -2979,8 +3227,8 @@ export class WorldScene extends Phaser.Scene {
             continue;
           }
         }
-      } else if (Math.hypot(npc.sprite.x - px, npc.sprite.y - py) > 2400) {
-        npc.destroy(); // ambient survivor wandered off
+      } else if (!npc.home && Math.hypot(npc.sprite.x - px, npc.sprite.y - py) > 2400) {
+        npc.destroy(); // ambient survivor wandered off (camp residents are reconcile-owned)
         this.npcs.splice(i, 1);
       }
     }
@@ -2990,6 +3238,10 @@ export class WorldScene extends Phaser.Scene {
     const i = this.npcs.indexOf(npc);
     if (i >= 0) this.npcs.splice(i, 1);
     if (this.state.npcs) this.state.npcs = this.state.npcs.filter((n) => n.id !== npc.id);
+    // A camp remembers its dead — the roster never resurrects them (U5).
+    if (npc.id.startsWith("camp_") && !this.state.worldFlags.includes(npcGoneFlag(npc.id))) {
+      this.state.worldFlags.push(npcGoneFlag(npc.id));
+    }
     sfx.death();
     this.showToast(`${npc.name} fell defending you.`);
     pushRecentEvent(this.state, `${npc.name} died.`);
@@ -3828,7 +4080,12 @@ export class WorldScene extends Phaser.Scene {
     this.floatText(chest.sprite.x, chest.sprite.y, `${chest.kind.replace(/_/g, " ")} looted`, "#ffd23f");
     // Scarcer + smaller hauls (1+tier); locked containers reward the effort with a bias bump,
     // and specialised kinds route to themed loot (guns/meds/food/tools).
-    const bias = lootLuck(this.state) + this.chunks.lootBias(chest.sprite.x, chest.sprite.y) + (chest.locked ? 0.4 : 0);
+    const host = this.chunks.buildingAt(Math.floor(chest.sprite.x / TILE_SIZE), Math.floor(chest.sprite.y / TILE_SIZE));
+    const bias =
+      lootLuck(this.state) +
+      this.chunks.lootBias(chest.sprite.x, chest.sprite.y) +
+      (chest.locked ? 0.4 : 0) +
+      priedLootBonus(this.state, host?.gid); // untouched (boarded) stock is richer (U5)
     for (const s of rollLoot(this.containerLootSource(chest.kind, chest.tier), liveRng, 1 + chest.tier, bias)) {
       this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
     }
