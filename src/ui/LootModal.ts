@@ -79,6 +79,8 @@ const CSS = `
 .ob-cell img{width:46px;height:46px;display:block;margin:2px auto}
 .ob-cell.sel{outline:2px solid #e8d6a8;outline-offset:2px}
 .ob-qty{position:absolute;right:4px;bottom:2px;font-size:10px;color:#fff;text-shadow:0 1px 2px #000}
+.ob-newb{position:absolute;left:2px;top:2px;font-size:7px;letter-spacing:.06em;font-weight:700;color:#10130a;
+  background:linear-gradient(180deg,#ffe08a,#d9a441);border-radius:3px;padding:1px 3px;box-shadow:0 1px 2px rgba(0,0,0,.5)}
 
 .ob-detail{display:flex;flex-direction:column;gap:7px;padding:13px;border-radius:10px;overflow:auto;
   background:linear-gradient(160deg,#1a1f15,#10130b);border:1.5px solid #3a2c1c;box-shadow:inset 0 0 0 1px rgba(0,0,0,.4)}
@@ -111,6 +113,9 @@ export class LootModal {
   private onChange?: () => void;
   private onCloseCb?: () => void;
   private onRead?: (name: string) => void;
+  // "NEW" badges (U3): names seen at the last open; first open seeds the set.
+  private readonly seen = new Set<string>();
+  private seenInit = false;
   private selected?: string;
   private opened = false;
 
@@ -192,6 +197,10 @@ export class LootModal {
     this.onChange = onChange;
     this.selected = undefined;
     this.opened = true;
+    if (!this.seenInit) {
+      this.seenInit = true;
+      for (const it of state.inventory) this.seen.add(it.item); // starting kit isn't "NEW"
+    }
     this.root.classList.add("ob-show");
     this.render();
   }
@@ -199,6 +208,7 @@ export class LootModal {
   close(): void {
     if (!this.opened) return;
     this.opened = false;
+    if (this.state) for (const it of this.state.inventory) this.seen.add(it.item); // inspected
     this.root.classList.remove("ob-show");
     this.onCloseCb?.();
   }
@@ -260,6 +270,12 @@ export class LootModal {
         q.className = "ob-qty";
         q.textContent = "x" + it.qty;
         cell.append(q);
+      }
+      if (!this.seen.has(it.item)) {
+        const b = document.createElement("span");
+        b.className = "ob-newb";
+        b.textContent = "NEW";
+        cell.append(b);
       }
       cell.addEventListener("click", () => {
         this.selected = it.item;

@@ -72,6 +72,9 @@ export interface GameState {
   bloodMoon?: boolean; // a blood-moon night: red sky + far more, faster undead (optional → old saves OK)
   disasters?: DisasterZone[]; // lasting natural-disaster scars (Living World); overlaid on regenerated terrain
   notesRead?: number; // notes/journals read this run — seeds deterministic flavour text (U2)
+  // Opening-arc objective cursor (U3). Definitions live in game/objectives.ts;
+  // old saves (no cursor) simply show the plain run goal in the banner.
+  objectives?: { chain: string; step: number; progress: number; done?: boolean };
 }
 
 /** A natural-disaster type. Live VFX/damage are transient (engine-side); the

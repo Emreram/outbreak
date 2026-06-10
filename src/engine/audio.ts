@@ -49,6 +49,11 @@ class Sfx {
   pickup(): void {
     this.tone(620, 0.08, "sine", 0.05, 880);
   }
+  /** Pickup blip that pitches up with a rapid-loot combo (U3 loot feel). */
+  tick(combo = 1): void {
+    const f = 540 * Math.pow(1.12, Math.min(8, combo - 1));
+    this.tone(f, 0.07, "sine", 0.05, f * 1.5);
+  }
   ui(): void {
     this.tone(440, 0.05, "sine", 0.04);
   }

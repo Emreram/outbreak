@@ -8,6 +8,7 @@ import { addItem, autoEquip, equipWeapon, hasItem, removeItem } from "./inventor
 import { getItemDef, weaponDef } from "./items/catalog";
 import { getBackground } from "./backgrounds";
 import { consumableMult } from "./perks";
+import { newObjectives } from "./objectives";
 
 export const STAT_MIN = 0;
 export const STAT_MAX = 100;
@@ -50,6 +51,7 @@ export function newGame(seed: string): GameState {
     knownLocations: [],
     difficultyModifier: 1.0,
     goal: "",
+    objectives: newObjectives(), // the guided opening arc (U3)
   };
 }
 
