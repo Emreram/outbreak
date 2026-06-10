@@ -8,6 +8,12 @@ export function propKey(kind: string): string {
   return `prop:${kind}`;
 }
 
+/** Every prop kind a drawer exists for — lets data-integrity tests verify that
+ *  worldgen/biomes/set-pieces never reference a sprite that can't render. */
+export function propKinds(): string[] {
+  return Object.keys(DRAWERS);
+}
+
 const SIZE = 30;
 
 type Draw = (g: Phaser.GameObjects.Graphics) => void;

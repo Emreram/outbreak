@@ -220,7 +220,9 @@ function turn(p: TurnIn, rng: Rng): object {
       if (rng.chance(0.55)) {
         o.flags.push("met_friendly_survivor");
         if (rng.chance(0.5)) {
-          const gift = rng.pick(["Water Bottle", "Canned Food", "Bandage", "Pistol Ammo"]);
+          // NOTE: must be real catalog items — "Pistol Ammo" used to slip through
+          // as a useless generic material (no such item exists; ammo is "9mm Rounds").
+          const gift = rng.pick(["Water Bottle", "Canned Food", "Bandage", "9mm Rounds"]);
           o.add.push({ item: gift, qty: 1, note: "from a survivor" });
           o.narrative = `A wary survivor lowers their pipe. After a tense beat they share a ${gift} and point you toward a safer block.`;
         } else {
