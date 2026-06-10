@@ -16,6 +16,8 @@ import {
 } from "../constants";
 import { ChunkView, type ColliderSpec } from "../../engine/ChunkRenderer";
 import { CHEST_CLOSED, PADLOCK } from "../../engine/icons";
+import { propKey } from "../../engine/propSprites";
+import { isSearchableKind } from "../scavenge";
 
 // Streams the enormous, finite world: keeps a (2r+1)² ring of generated chunks
 // resident around the player, generating/destroying them on chunk-boundary
@@ -36,6 +38,17 @@ export interface ActiveChest {
   locked: boolean;
   opened: boolean;
 }
+
+/** A streamed searchable world prop (car/dumpster/corpse/shelf…, Expansion U1). */
+export interface ActiveSearchable {
+  gid: string;
+  kind: string;
+  sprite: Phaser.GameObjects.Image;
+  searched: boolean;
+}
+
+/** Tint for ransacked props so a searched street reads at a glance. */
+export const SEARCHED_TINT = 0x5f5f5f;
 
 // Cheap per-kind tint of the chest sprite so container variety reads at a glance
 // (dedicated kind sprites arrive with the AI/procedural art pass).
@@ -58,11 +71,13 @@ interface LoadedChunk {
   data: ChunkData;
   view: ChunkView;
   chests: ActiveChest[];
+  searchables: ActiveSearchable[];
 }
 
 export interface ChunkManagerOpts {
   collide: ColliderSpec[]; // colliders to register against every chunk layer
   isChestLooted: (gid: string) => boolean;
+  isPropSearched?: (gid: string) => boolean; // searchable props already rummaged
   // --- Living World hooks (all optional → back-compat) ---
   disasters?: () => readonly DisasterZone[]; // active scars to overlay on each chunk
   currentDay?: () => number; // game-day, for scar heal lifecycle
@@ -111,10 +126,15 @@ export class ChunkManager {
     }
   }
 
+  /** Searchable props are owned here (interactive), not by the ChunkView. The skip
+   *  predicate must EXACTLY match spawnSearchables' spawn condition. */
+  private readonly skipSearchable = (p: { kind: string; gid?: string }): boolean =>
+    !!p.gid && isSearchableKind(p.kind) && this.scene.textures.exists(propKey(p.kind));
+
   private load(cx: number, cy: number): void {
     const data = generateChunk(this.seed, cx, cy);
     applyScars(data, this.opts.disasters?.(), this.opts.currentDay?.() ?? 0);
-    const view = new ChunkView(this.scene, data, this.opts.collide);
+    const view = new ChunkView(this.scene, data, this.opts.collide, this.skipSearchable);
     const chests: ActiveChest[] = [];
     for (const c of data.containers) {
       if (this.opts.isChestLooted(c.gid)) continue;
@@ -125,8 +145,20 @@ export class ChunkManager {
       if (c.locked) chest.badge = this.scene.add.image(x + 9, y - 8, PADLOCK).setDepth(7);
       chests.push(chest);
     }
-    this.loaded.set(key(cx, cy), { cx, cy, data, view, chests });
+    this.loaded.set(key(cx, cy), { cx, cy, data, view, chests, searchables: this.spawnSearchables(data) });
     this.opts.onChunkLoad?.(data);
+  }
+
+  private spawnSearchables(data: ChunkData): ActiveSearchable[] {
+    const out: ActiveSearchable[] = [];
+    for (const p of data.props) {
+      if (!this.skipSearchable(p)) continue; // not searchable → ChunkView draws it
+      const searched = this.opts.isPropSearched?.(p.gid!) ?? false;
+      const spr = this.scene.add.image(p.x, p.y, propKey(p.kind)).setDepth(4);
+      if (searched) spr.setTint(SEARCHED_TINT);
+      out.push({ gid: p.gid!, kind: p.kind, sprite: spr, searched });
+    }
+    return out;
   }
 
   private unload(k: string): void {
@@ -137,6 +169,7 @@ export class ChunkManager {
       c.sprite.destroy();
       c.badge?.destroy();
     }
+    for (const s of lc.searchables) s.sprite.destroy();
     this.loaded.delete(k);
     this.opts.onChunkUnload?.(lc.cx, lc.cy);
   }
@@ -149,8 +182,10 @@ export class ChunkManager {
       const data = generateChunk(this.seed, lc.cx, lc.cy);
       applyScars(data, this.opts.disasters?.(), this.opts.currentDay?.() ?? 0);
       lc.view.destroy();
-      lc.view = new ChunkView(this.scene, data, this.opts.collide);
+      lc.view = new ChunkView(this.scene, data, this.opts.collide, this.skipSearchable);
       lc.data = data;
+      for (const s of lc.searchables) s.sprite.destroy();
+      lc.searchables = this.spawnSearchables(data); // same gids → searched state restored via flags
       this.opts.onChunkUnload?.(lc.cx, lc.cy);
       this.opts.onChunkLoad?.(data);
     }
@@ -249,6 +284,13 @@ export class ChunkManager {
   activeChests(): ActiveChest[] {
     const out: ActiveChest[] = [];
     for (const lc of this.loaded.values()) for (const c of lc.chests) out.push(c);
+    return out;
+  }
+
+  /** All streamed searchable props in loaded chunks (Expansion U1). */
+  activeSearchables(): ActiveSearchable[] {
+    const out: ActiveSearchable[] = [];
+    for (const lc of this.loaded.values()) for (const s of lc.searchables) out.push(s);
     return out;
   }
 }

@@ -154,6 +154,10 @@ export interface Prop {
   kind: string; // car, tree, rock, crate, corpse, barrel, sign, tent, grave…
   x: number; // GLOBAL world pixels
   y: number;
+  /** Stable per-chunk id (`${cx}_${cy}_p<i>`, generation order) for props that can
+   *  be interacted with (searchables). Assigned by generateChunk; the counter is an
+   *  APPEND-ONLY invariant — new prop-producing passes must come after existing ones. */
+  gid?: string;
 }
 
 /** A landmark set-piece placed in a chunk (curated points of interest). */

@@ -101,6 +101,12 @@ const SOURCES: Record<string, SourceTable> = {
   forest: { weights: { material: 3, bow: 1, melee: 2, food: 1, medical: 1 }, bias: 0.05 },
   farm: { weights: { food: 4, material: 2, melee: 1, drink: 1 }, bias: 0 },
   industrial: { weights: { material: 5, melee: 2, special: 1, ammo: 1, throwable: 1 }, bias: 0.15 },
+  // world-prop scavenging ("search everything", Expansion U1) — deliberately thin
+  scav_vehicle: { weights: { material: 4, ammo: 1, drink: 1, food: 1, melee: 1 }, bias: 0 },
+  scav_street: { weights: { material: 5, food: 1, drink: 1, melee: 1, throwable: 1 }, bias: 0 },
+  scav_domestic: { weights: { food: 3, drink: 2, material: 2, medical: 1, melee: 1 }, bias: 0 },
+  scav_corpse: { weights: { medical: 2, ammo: 2, material: 2, food: 1, drink: 1 }, bias: 0.05 },
+  scav_military: { weights: { ammo: 4, armor: 2, rifle: 1, medical: 1, material: 1 }, bias: 0.3 },
 };
 
 const CHEST_WEIGHTS: Partial<Record<Category, number>> = {

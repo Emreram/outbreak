@@ -79,7 +79,8 @@ import { applyOutcome, type ApplyResult } from "../game/outcomes";
 import { classifyIntent, type Intent } from "../game/intent";
 import { nextAmbientDelayMs } from "../game/encounters";
 import { runTurn, getActiveBrain, consumeFellBack } from "../ai/gameMaster";
-import { ChunkManager, type ActiveChest } from "../game/world/ChunkManager";
+import { ChunkManager, SEARCHED_TINT, type ActiveChest, type ActiveSearchable } from "../game/world/ChunkManager";
+import { SEARCHABLE_PROPS, CORPSE_BODY, SEARCH_NOISE, isPropSearched, markSearched, playsDead, type SearchableDef } from "../game/scavenge";
 import type { ColliderSpec } from "../engine/ChunkRenderer";
 import { AnimatedTerrain } from "../engine/AnimatedTerrain";
 import { Player } from "../engine/Player";
@@ -104,6 +105,21 @@ import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
 import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
+
+/** A fallen zombie left on the ground — searchable once, fades after a while. */
+interface CorpseRec {
+  sprite: Phaser.GameObjects.Sprite;
+  searched: boolean;
+  diesAt: number;
+}
+
+/** What a hold-E search channel is aimed at: a streamed prop or a fallen body. */
+interface SearchTarget {
+  kind: string;
+  sprite: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
+  prop?: ActiveSearchable;
+  corpse?: CorpseRec;
+}
 
 /** A streamed, parked vehicle sprite + its live persisted condition (Feature 4). */
 interface ActiveVehicle {
@@ -252,6 +268,11 @@ export class WorldScene extends Phaser.Scene {
   private objBanner!: Phaser.GameObjects.Text;
   private hintText!: Phaser.GameObjects.Text;
   private controlsHint?: Phaser.GameObjects.Text; // one-time controls cheat-sheet (H re-shows)
+  // Hold-E scavenging channel + fallen-body persistence (Expansion U1).
+  private keyE?: Phaser.Input.Keyboard.Key;
+  private search: { target: SearchTarget; def: SearchableDef; done: number; ring: Phaser.GameObjects.Graphics } | null = null;
+  private corpses: CorpseRec[] = [];
+  private corpseAcc = 0;
   private weaponSprite!: Phaser.GameObjects.Image;
   private weaponGlow!: Phaser.GameObjects.Image;
   private hotbar!: HotBar;
@@ -384,6 +405,7 @@ export class WorldScene extends Phaser.Scene {
     this.chunks = new ChunkManager(this, this.state.seed, {
       collide,
       isChestLooted: (gid) => this.state.worldFlags.includes(`chest_${gid}`),
+      isPropSearched: (gid) => isPropSearched(this.state, gid),
       disasters: () => this.state.disasters ?? [],
       currentDay: () => this.state.day,
       onChunkLoad: (data) => this.terrain.syncChunk(data),
@@ -697,6 +719,12 @@ export class WorldScene extends Phaser.Scene {
       this.reconcilePlaceables();
       if (this.driving) this.driveTick(delta);
       if (this.buildMode) this.updateBuildGhost();
+      if (this.search) this.tickSearch(delta);
+      this.corpseAcc += delta;
+      if (this.corpseAcc >= 2000) {
+        this.corpseAcc = 0;
+        this.sweepCorpses();
+      }
       this.tickClouds(time);
       this.updateEnemies(time);
       this.updateAnimals(time);
@@ -808,12 +836,14 @@ export class WorldScene extends Phaser.Scene {
       const npc = veh ? null : this.nearestNpc(46);
       const store = veh || npc ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
       const chest = veh || npc || store ? null : this.nearestChest(42);
-      const farm = veh || npc || store || chest ? null : this.farmHint();
-      const near = veh || npc || store || chest || farm ? null : this.buildingAt();
+      const scav = veh || npc || store || chest ? null : this.nearestSearchable(40);
+      const farm = veh || npc || store || chest || scav ? null : this.farmHint();
+      const near = veh || npc || store || chest || scav || farm ? null : this.buildingAt();
       if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
       else if (npc) this.hintText.setText(`Press E to talk to ${npc.name}${npc.kind === "companion" ? " (companion)" : ""}`).setVisible(true);
       else if (store) this.hintText.setText("Press E to open base storage").setVisible(true);
       else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
+      else if (scav) this.hintText.setText(`Hold E to search the ${this.searchDefFor(scav).label}`).setVisible(true);
       else if (farm) this.hintText.setText(farm).setVisible(true);
       else if (near) this.hintText.setText(this.buildingHint(near)).setVisible(true);
       else this.hintText.setVisible(false);
@@ -853,7 +883,11 @@ export class WorldScene extends Phaser.Scene {
     const py = this.player.sprite.y;
     const engine = this.driving && this.player.isMoving() ? 240 : 0; // a running car is LOUD
     const noise =
-      (this.player.isMoving() ? 45 : 0) + (this.player.sprinting ? 70 : 0) + this.nightNoise() + engine;
+      (this.player.isMoving() ? 45 : 0) +
+      (this.player.sprinting ? 70 : 0) +
+      (this.search ? SEARCH_NOISE : 0) + // rummaging is loud — searching draws the dead
+      this.nightNoise() +
+      engine;
     for (const e of this.enemies) {
       e.update(px, py, noise, now);
       // The dead don't fear terrain: lava sears + bogs them (kite them into it),
@@ -1105,6 +1139,7 @@ export class WorldScene extends Phaser.Scene {
   /** Apply damage to the player (shared by contact, acid, explosions, clouds). */
   private damagePlayer(rawDmg: number, bite: boolean, msg: string, kind: DamageKind = "physical"): void {
     if (this.dead) return;
+    this.cancelSearch(); // taking a hit interrupts any rummaging
     const p = this.state.player;
     const dmg = Math.max(1, Math.round(rawDmg * (1 - this.playerArmorPct() / 100) * damageTakenMult(this.state, kind)));
     p.hp = clampStat(p.hp - dmg);
@@ -1375,17 +1410,17 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** Starting walker count — near-empty at day 0 (the calm start); ongoing
-   *  threats (ambientEvent/GM spawns) scale with distance as you explore out. */
+  /** Starting walker count — visible from minute one (U1 day-0 retune), still
+   *  light; ongoing threats (ambientEvent/GM spawns) scale as you explore out. */
   private ambientStartCount(): number {
-    return Math.min(1 + this.state.day * 2, 16);
+    return Math.min(3 + this.state.day * 2, 16);
   }
 
   /** Time to the next ambient threat — rare early, more frequent later/at night/far out. */
   private scheduleAmbientMs(): number {
     const base = nextAmbientDelayMs();
     const day = this.effDay();
-    const dayFactor = day === 0 ? 2.6 : 1 / (1 + day * 0.12);
+    const dayFactor = day === 0 ? 1.5 : 1 / (1 + day * 0.12);
     const bloodFactor = this.state.bloodMoon ? 0.35 : 1; // relentless waves under a blood moon
     return base * dayFactor * (this.isNight() ? 0.6 : 1) * (this.state.weather === "storm" ? 0.7 : 1) * bloodFactor;
   }
@@ -1491,6 +1526,11 @@ export class WorldScene extends Phaser.Scene {
     const chest = this.nearestChest(42);
     if (chest) {
       this.openChest(chest);
+      return;
+    }
+    const search = this.nearestSearchable(40);
+    if (search) {
+      this.startSearch(search);
       return;
     }
     if (this.tryFarmAction()) return; // till / plant / water / harvest when applicable
@@ -3011,8 +3051,10 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-H", () => this.showControlsHint()); // re-show the controls cheat-sheet
     kb.on("keydown-ESC", () => this.scene.start("MainMenuScene"));
 
-    // E = act on your surroundings (open an AI Game Master encounter).
+    // E = interact with the physical target in range; HOLDING E sustains a
+    // scavenging channel (the key handle is polled by tickSearch).
     kb.on("keydown-E", () => this.tryInteract());
+    this.keyE = kb.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
     // SPACE / F = melee swing at the nearest threat.
     kb.on("keydown-SPACE", () => this.meleeAttack());
@@ -3179,7 +3221,50 @@ export class WorldScene extends Phaser.Scene {
     pushRecentEvent(this.state, `Put down a ${e.def.name}.`);
     this.onDeathTraits(e); // exploder / splitter / bloated bursts
     this.dropLoot(e);
-    this.removeEnemy(e); // death animation
+    if (this.leavesCorpse(e)) this.convertToCorpse(e); // body stays — searchable once
+    else this.removeEnemy(e); // burst/fade death animation
+  }
+
+  /** Bursting deaths (exploder/splitter/bloated) and friendlies leave no body. */
+  private leavesCorpse(e: Enemy): boolean {
+    if (e.family === "survivor_friendly") return false;
+    return !e.hasTrait("exploder") && !e.hasTrait("splitter") && !e.hasTrait("bloated");
+  }
+
+  /** Convert the dead enemy's OWN sprite into a lingering ground corpse (no new
+   *  sprite): physics off, gore-layer depth, capped ring buffer + TTL (U1). */
+  private convertToCorpse(e: Enemy): void {
+    const i = this.enemies.indexOf(e);
+    if (i >= 0) this.enemies.splice(i, 1);
+    e.cleanupUi();
+    this.enemyGroup.remove(e.sprite);
+    const body = e.sprite.body as Phaser.Physics.Arcade.Body | null;
+    if (body) body.enable = false;
+    this.tweens.killTweensOf(e.sprite);
+    e.sprite
+      .setRotation((Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2 + (Math.random() - 0.5) * 0.5))
+      .setTint(0x767676)
+      .setAlpha(0.92)
+      .setDepth(3); // gore layer: blood decals + bodies sit under props/actors
+    this.corpses.push({ sprite: e.sprite, searched: false, diesAt: this.time.now + 90000 });
+    while (this.corpses.length > 24) this.fadeCorpse(this.corpses.shift()!); // hard cap
+  }
+
+  private fadeCorpse(c: CorpseRec): void {
+    if (this.search?.target.corpse === c) this.cancelSearch();
+    this.tweens.add({ targets: c.sprite, alpha: 0, duration: 900, onComplete: () => c.sprite.destroy() });
+  }
+
+  /** Expire old corpses (every ~2s; cheap). */
+  private sweepCorpses(): void {
+    const now = this.time.now;
+    for (let i = this.corpses.length - 1; i >= 0; i--) {
+      const c = this.corpses[i];
+      if (now >= c.diesAt || !c.sprite.active) {
+        this.corpses.splice(i, 1);
+        if (c.sprite.active) this.fadeCorpse(c);
+      }
+    }
   }
 
   private floatText(x: number, y: number, text: string, color = "#ffffff"): void {
@@ -3329,6 +3414,116 @@ export class WorldScene extends Phaser.Scene {
       case "toolbox": return "hardware_store";
       default: return `chest:${Math.max(0, Math.min(4, tier))}`;
     }
+  }
+
+  // --- scavenging: hold-E searches of world props + fallen bodies (U1) --------
+
+  /** The nearest unsearched searchable: streamed props first, then fallen bodies. */
+  private nearestSearchable(maxDist: number): SearchTarget | null {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    let best: SearchTarget | null = null;
+    let bestD = maxDist;
+    for (const s of this.chunks.activeSearchables()) {
+      if (s.searched || !s.sprite.active) continue;
+      const d = Math.hypot(s.sprite.x - px, s.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = { kind: s.kind, sprite: s.sprite, prop: s };
+      }
+    }
+    for (const c of this.corpses) {
+      if (c.searched || !c.sprite.active) continue;
+      const d = Math.hypot(c.sprite.x - px, c.sprite.y - py);
+      if (d < bestD) {
+        bestD = d;
+        best = { kind: "body", sprite: c.sprite, corpse: c };
+      }
+    }
+    return best;
+  }
+
+  private searchDefFor(t: SearchTarget): SearchableDef {
+    return t.corpse ? CORPSE_BODY : (SEARCHABLE_PROPS[t.kind] ?? CORPSE_BODY);
+  }
+
+  private startSearch(t: SearchTarget): void {
+    if (this.search || this.dead) return;
+    // A "corpse" prop might lunge — deterministic per seed+prop, so no save-scum.
+    if (t.prop && (t.kind === "corpse" || t.kind === "corpse_soldier") && playsDead(this.state.seed, t.prop.gid, this.effDay())) {
+      markSearched(this.state, t.prop.gid);
+      t.prop.searched = true;
+      const x = t.sprite.x;
+      const y = t.sprite.y;
+      t.prop.sprite.destroy();
+      this.spawnEnemy(rollZombie("zombie", liveRng, this.effDay(), this.chunks.biomeAtPx(x, y)), x, y);
+      bloodBurst(this, x, y, 6);
+      this.showToast("It wasn't dead!");
+      sfx.hurt();
+      this.cameras.main.shake(90, 0.005);
+      this.persist();
+      return;
+    }
+    this.search = { target: t, def: this.searchDefFor(t), done: 0, ring: this.add.graphics().setDepth(30) };
+    sfx.ui();
+  }
+
+  /** Channel tick: cancel if the hold broke (released / moved / hurt / target gone),
+   *  else advance + draw the progress ring and finish at 100%. */
+  private tickSearch(delta: number): void {
+    const s = this.search;
+    if (!s) return;
+    const holding = (this.keyE?.isDown ?? false) || this.touch.actHeld;
+    if (!holding || this.player.isMoving() || this.dead || !s.target.sprite.active) {
+      this.cancelSearch();
+      return;
+    }
+    s.done += delta;
+    const frac = Math.min(1, s.done / s.def.ms);
+    const x = s.target.sprite.x;
+    const y = s.target.sprite.y - 24;
+    s.ring.clear();
+    s.ring.lineStyle(4, 0x10151b, 0.8).strokeCircle(x, y, 10);
+    s.ring.lineStyle(3, 0xffe6a8, 0.95);
+    s.ring.beginPath();
+    s.ring.arc(x, y, 10, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2, false);
+    s.ring.strokePath();
+    if (frac >= 1) this.completeSearch();
+  }
+
+  private cancelSearch(): void {
+    if (!this.search) return;
+    this.search.ring.destroy();
+    this.search = null;
+  }
+
+  private completeSearch(): void {
+    const s = this.search;
+    if (!s) return;
+    this.cancelSearch();
+    const t = s.target;
+    const x = t.sprite.x;
+    const y = t.sprite.y;
+    if (t.prop) {
+      markSearched(this.state, t.prop.gid);
+      t.prop.searched = true;
+      t.prop.sprite.setTint(SEARCHED_TINT);
+    }
+    if (t.corpse) {
+      t.corpse.searched = true;
+      t.corpse.sprite.setTint(0x4c4c4c);
+    }
+    // Yields are THIN by design — chests stay the real prize (scavenge.ts).
+    if (liveRng.chance(s.def.emptyChance)) {
+      this.floatText(x, y - 6, "nothing useful", "#9fb3c8");
+      sfx.ui();
+    } else {
+      const bias = lootLuck(this.state) + this.chunks.lootBias(x, y);
+      for (const stack of rollLoot(s.def.source, liveRng, 1, bias)) this.spawnDrop(x, y, stack.item, stack.qty);
+      this.grantXp("crafting", 1); // resourcefulness
+      sfx.pickup();
+    }
+    this.persist();
   }
 
   /** Grant skill XP and surface a level-up (Feature 9). */
