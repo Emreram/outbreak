@@ -71,6 +71,7 @@ export interface GameState {
   factions?: Record<string, number>; // standing per faction, -100..100 (Feature 10)
   bloodMoon?: boolean; // a blood-moon night: red sky + far more, faster undead (optional → old saves OK)
   disasters?: DisasterZone[]; // lasting natural-disaster scars (Living World); overlaid on regenerated terrain
+  notesRead?: number; // notes/journals read this run — seeds deterministic flavour text (U2)
 }
 
 /** A natural-disaster type. Live VFX/damage are transient (engine-side); the

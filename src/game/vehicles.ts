@@ -8,7 +8,7 @@
 import { createRng } from "./rng";
 import { CHUNK_TILES, TILE_SIZE } from "./constants";
 import { biomeAt } from "./world/biomes";
-import { isRoadCol, isRoadRow } from "./worldgen";
+import { roadTileInChunk } from "./world/roads";
 import type { GameState, Vehicle } from "../shared/contracts";
 
 export interface VehicleTypeDef {
@@ -65,36 +65,7 @@ export function chunkVehicles(seed: string, cx: number, cy: number): VehicleSpaw
   return out;
 }
 
-/** A road tile inside the chunk. Road rows/cols fill an entire row/col, so any tile
- *  on a road band is a Road (walkable) regardless of the other axis. */
-function roadTileInChunk(
-  seed: string,
-  cx: number,
-  cy: number,
-  rng: { chance(p: number): boolean; int(a: number, b: number): number; pick<T>(a: readonly T[]): T },
-  used: Set<string>,
-): { tx: number; ty: number } | null {
-  const g0x = cx * CHUNK_TILES;
-  const g0y = cy * CHUNK_TILES;
-  const cols: number[] = [];
-  const rows: number[] = [];
-  for (let g = g0x + 1; g < g0x + CHUNK_TILES - 1; g++) if (isRoadCol(seed, g)) cols.push(g);
-  for (let g = g0y + 1; g < g0y + CHUNK_TILES - 1; g++) if (isRoadRow(seed, g)) rows.push(g);
-  if (cols.length === 0 && rows.length === 0) return null;
-  for (let tries = 0; tries < 12; tries++) {
-    let tx: number;
-    let ty: number;
-    if (cols.length && (rows.length === 0 || rng.chance(0.5))) {
-      tx = rng.pick(cols);
-      ty = rng.int(g0y + 1, g0y + CHUNK_TILES - 2);
-    } else {
-      ty = rng.pick(rows);
-      tx = rng.int(g0x + 1, g0x + CHUNK_TILES - 2);
-    }
-    if (!used.has(`${tx},${ty}`)) return { tx, ty };
-  }
-  return null;
-}
+// (roadTileInChunk moved verbatim to ./world/roads — shared with set-pieces, U2.)
 
 /** Which components this specific wreck is missing (deterministic per gid). */
 function partNeeds(seed: string, gid: string, type: string): string[] {

@@ -27,6 +27,8 @@ import {
 } from "./world/tiles";
 import { biomeAt, type BiomeDef } from "./world/biomes";
 import { field } from "./world/noise";
+import { isRoad, isRoadCol, isRoadRow } from "./world/roads";
+import { applySetpieces } from "./world/setpieces";
 
 // Re-export the tile/data shapes so existing imports `from "../game/worldgen"`
 // keep working (WorldScene, tests, etc.).
@@ -117,24 +119,9 @@ const FURNITURE_BY_TYPE: Partial<Record<BuildingType, string[]>> = {
 const SOLID = new Set<number>(SOLID_TILES as number[]);
 const isSolid = (t: Tile): boolean => SOLID.has(t);
 
-// --- global road grid (seamless across chunk borders) ----------------------
-// Roads live in GLOBAL tile space so adjacent urban chunks always line up.
-// Each ROAD_PERIOD-wide band holds one 2-wide road at a seed-jittered offset.
-const ROAD_PERIOD = 17;
-
-function roadStart(seed: string, axis: string, band: number): number {
-  const r = createRng(`${seed}:road:${axis}:${band}`);
-  return band * ROAD_PERIOD + 2 + r.int(0, ROAD_PERIOD - 5);
-}
-function isRoad(seed: string, axis: string, g: number): boolean {
-  const band = Math.floor(g / ROAD_PERIOD);
-  const s = roadStart(seed, axis, band);
-  return g === s || g === s + 1;
-}
-// Exported so other deterministic systems (e.g. vehicle placement, Feature 4) can
-// land entities on guaranteed-walkable road tiles without touching the tile grid.
-export const isRoadCol = (seed: string, gx: number): boolean => isRoad(seed, "x", gx);
-export const isRoadRow = (seed: string, gy: number): boolean => isRoad(seed, "y", gy);
+// Global road grid moved to ./world/roads (leaf) so vehicles + set-pieces can
+// share it without import cycles. Re-exported for back-compat.
+export { isRoadCol, isRoadRow } from "./world/roads";
 
 // ---------------------------------------------------------------------------
 
@@ -234,6 +221,12 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
     props.push({ kind: rng.pick(biome.props.length ? biome.props : ["rock"]), x: (gx0 + t.x + 0.5) * tileSize, y: (gy0 + t.y + 0.5) * tileSize, gid: `${cx}_${cy}_p${pi++}` });
   }
 
+  const chunk: ChunkData = { cx, cy, size, tileSize, biome: biome.id, grid, buildings, containers, props, landmarks };
+
+  // 4.5) Roadside set-piece scenes (Expansion U2) — APPEND-ONLY on a FORKED rng
+  //      (`:scene:`), so the main stream above stays byte-identical (invariant #1).
+  applySetpieces(seed, chunk);
+
   // 5) Anti-emptiness: guarantee at least one interactable per chunk.
   if (buildings.length === 0 && containers.length === 0) {
     const t = walkableLocal(grid, size, rng);
@@ -245,7 +238,7 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
     }
   }
 
-  return { cx, cy, size, tileSize, biome: biome.id, grid, buildings, containers, props, landmarks };
+  return chunk;
 }
 
 /** A walkable world-pixel spawn point for a freshly-generated chunk: the nearest

@@ -110,6 +110,7 @@ export class LootModal {
   private state?: GameState;
   private onChange?: () => void;
   private onCloseCb?: () => void;
+  private onRead?: (name: string) => void;
   private selected?: string;
   private opened = false;
 
@@ -180,6 +181,10 @@ export class LootModal {
   }
   setOnClose(fn: () => void): void {
     this.onCloseCb = fn;
+  }
+  /** Reading is scene-owned (flavour vs stash-map pinning) — see WorldScene.readItem. */
+  setOnRead(fn: (name: string) => void): void {
+    this.onRead = fn;
   }
 
   open(state: GameState, onChange: () => void): void {
@@ -368,6 +373,10 @@ export class LootModal {
       const stat = div("ob-dstat");
       stat.textContent = `Defense ${def.defense}%${def.slot ? ` · ${def.slot}` : ""}`;
       this.detailEl.append(stat);
+    } else if (def.kind === "readable") {
+      const stat = div("ob-dstat");
+      stat.textContent = def.flavor === "map" ? "Reading it pins a buried cache on your map" : "Found writing — read it";
+      this.detailEl.append(stat);
     }
     if (def.desc) {
       const d = div("ob-dmeta");
@@ -379,6 +388,7 @@ export class LootModal {
     if (isWeaponDef(def)) actions.append(this.actBtn("Equip", () => this.doEquip(def.name)));
     if (def.kind === "armor") actions.append(this.actBtn("Equip", () => this.doEquipArmor(def.name)));
     if (def.kind === "consumable") actions.append(this.actBtn("Use", () => this.doUse(def.name)));
+    if (def.kind === "readable") actions.append(this.actBtn("Read", () => this.doRead(def.name)));
     actions.append(this.actBtn("Drop", () => this.doDrop(def.name), true));
     this.detailEl.append(actions);
   }
@@ -405,6 +415,12 @@ export class LootModal {
     if (!this.state) return;
     useConsumable(this.state, name);
     if (!this.state.inventory.some((i) => i.item === name)) this.selected = undefined;
+    this.changed();
+  }
+  private doRead(name: string): void {
+    if (!this.state) return;
+    this.onRead?.(name);
+    if (!this.state.inventory.some((i) => i.item === name)) this.selected = undefined; // maps consume
     this.changed();
   }
   private doDrop(name: string): void {

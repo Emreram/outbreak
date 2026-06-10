@@ -40,6 +40,8 @@ function baseColor(def: ItemDef): number {
     case "ammo": return 0xd9b54a;
     case "armor": return 0x5b616a;
     case "grenade": return 0x3a5236;
+    case "note": return 0xe8dfc8;
+    case "map": return 0xd8c89a;
     default: return 0x9aa3ad;
   }
 }
@@ -118,6 +120,27 @@ function silhouette(ctx: P2D, def: ItemDef): void {
     case "ammo": ctx.fillStyle = fill; for (const dx of [-7, 0, 7]) { rrect(ctx, dx - 3, -8, 6, 14, 2); ctx.fill(); ctx.stroke(); ctx.fillStyle = "#a8772a"; ctx.fillRect(dx - 3, 2, 6, 4); ctx.fillStyle = fill; } break;
     case "armor": ctx.fillStyle = fill; poly(ctx, [[-12, -10], [-4, -12], [4, -12], [12, -10], [10, 12], [-10, 12]]); ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.fillRect(-1, -10, 2, 22); break;
     case "grenade": ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(0, 3, 10, 0, 7); ctx.fill(); ctx.stroke(); ctx.fillStyle = "#9aa3ad"; ctx.fillRect(-3, -12, 6, 6); break;
+    case "note": { // a creased paper scrap with faded writing
+      ctx.fillStyle = fill;
+      poly(ctx, [[-10, -13], [9, -11], [11, 12], [-12, 11]]);
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 1.5;
+      for (let i = -7; i <= 7; i += 4) { ctx.beginPath(); ctx.moveTo(-8, i); ctx.lineTo(7, i + 0.5); ctx.stroke(); }
+      break;
+    }
+    case "map": { // a folded map with a route + an X
+      ctx.fillStyle = fill;
+      poly(ctx, [[-13, -10], [13, -12], [12, 11], [-12, 12]]);
+      ctx.strokeStyle = "rgba(0,0,0,0.4)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(-4, -12); ctx.lineTo(-4, 12); ctx.stroke(); // fold
+      ctx.strokeStyle = "#7a3a2a";
+      ctx.beginPath(); ctx.moveTo(-10, 7); ctx.bezierCurveTo(-4, 2, 2, 8, 7, -3); ctx.stroke(); // route
+      ctx.strokeStyle = "#b03030";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(5, -6); ctx.lineTo(10, -1); ctx.moveTo(10, -6); ctx.lineTo(5, -1); ctx.stroke(); // X
+      break;
+    }
     default: ctx.fillStyle = fill; poly(ctx, [[-10, -6], [2, -12], [12, -2], [6, 10], [-8, 8]]); break; // scrap / material
   }
 }
