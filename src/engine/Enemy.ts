@@ -290,7 +290,9 @@ export class Enemy {
   private flash(color: number, ms = 80): void {
     this.sprite.setTint(color);
     this.sprite.scene.time.delayedCall(ms, () => {
-      if (this.sprite.active) this.sprite.clearTint();
+      // A DoT kill can convert this sprite into a tinted ground corpse before the
+      // flash ends — don't wipe that tint (the scene marks converted bodies).
+      if (this.sprite.active && !this.sprite.getData("corpse")) this.sprite.clearTint();
     });
   }
 

@@ -434,6 +434,26 @@ export class WorldScene extends Phaser.Scene {
     this.activeNpc = null;
     this.npcOffers.clear();
     this.weatherRect = undefined; // re-created on the fresh uiLayer below
+    // Expansion-state resets — the maps survive a scene restart (ESC → menu →
+    // Continue) while their sprites do NOT; stale entries would silently block
+    // stash chests / boards / campfires from ever re-spawning.
+    this.search = null;
+    this.corpses = [];
+    this.corpseAcc = 0;
+    this.stashChests.clear();
+    this.buildingFx.clear();
+    this.campFires.clear();
+    this.beacons.length = 0;
+    this.ambushDone.clear();
+    this.pickupAgg.clear();
+    this.pickupAggTimer = undefined;
+    this.pickupCombo = 0;
+    this.lastPickupAt = 0;
+    this.groanAcc = 0;
+    this.stingReadyAt = 0;
+    this.packWasClose = false;
+    this.streetAcc = 0;
+    this.rescueWatch = null;
 
     // Resume a saved run unless a seed was pinned via ?seed= (a fresh debug run).
     const fromUrl = this.registry.get("seedFromUrl") === true;
@@ -1404,8 +1424,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private spawnAcid(x: number, y: number, angle: number, dmg: number, poison: boolean): void {
-    const spr = this.enemyProjGroup.create(x + Math.cos(angle) * 16, y + Math.sin(angle) * 16, PROJ_PELLET) as Phaser.Physics.Arcade.Image;
-    spr.setTint(0x8fd14a).setScale(1.5).setDepth(9);
+    const at = fxTexFor(this, PROJ_PELLET, 0x8fd14a);
+    const spr = this.enemyProjGroup.create(x + Math.cos(angle) * 16, y + Math.sin(angle) * 16, at.key) as Phaser.Physics.Arcade.Image;
+    spr.setTint(at.tint).setScale(1.5).setDepth(9);
     this.physics.velocityFromRotation(angle, 320, (spr.body as Phaser.Physics.Arcade.Body).velocity);
     spr.setData("dmg", dmg);
     spr.setData("poison", poison);
@@ -2640,7 +2661,8 @@ export class WorldScene extends Phaser.Scene {
       if (this.stashChests.has(f)) continue;
       const x = (t.tx + 0.5) * TILE_SIZE;
       const y = (t.ty + 0.5) * TILE_SIZE;
-      const spr = this.add.image(x, y, CHEST_CLOSED).setDepth(6).setTint(0x8a6a3a);
+      const ct = fxTexFor(this, CHEST_CLOSED, 0x8a6a3a);
+      const spr = this.add.image(x, y, ct.key).setDepth(6).setTint(ct.tint);
       const chest: ActiveChest = { gid: f, sprite: spr, tier: 3, kind: "crate", locked: true, opened: false };
       chest.badge = this.add.image(x + 9, y - 8, PADLOCK).setDepth(7);
       this.stashChests.set(f, chest);
@@ -2782,11 +2804,12 @@ export class WorldScene extends Phaser.Scene {
       b.emitter.setDepth(8);
       this.showToast(`Smoke rises to the ${dir} — someone had a fire going (M)`);
     } else if (kind === "flare") {
+      const ft = fxTexFor(this, FX_GLOW, 0xff4a66);
       b.glow = this.add
-        .image(spot.x, spot.y, FX_GLOW)
+        .image(spot.x, spot.y, ft.key)
         .setBlendMode(Phaser.BlendModes.ADD)
         .setDepth(9)
-        .setTint(0xff4a66)
+        .setTint(ft.tint)
         .setScale(0.5)
         .setAlpha(0.85);
       this.tweens.add({ targets: b.glow, alpha: 0.35, duration: 700, yoyo: true, repeat: -1 });
@@ -3478,7 +3501,6 @@ export class WorldScene extends Phaser.Scene {
       : ["Search for supplies", "Look for survivors", "Barricade up", "Slip back out"];
   }
 
-  /** Enable/disable the Phaser keyboard so encounter typing never leaks to gameplay. */
   /** Enable/disable the Phaser keyboard so modal typing never leaks to gameplay.
    *  DISABLING also forgets held keys (nothing "sticks" through a modal), and
    *  RE-ENABLING is deferred one tick: Phaser drains its keydown queue before the
@@ -3957,6 +3979,7 @@ export class WorldScene extends Phaser.Scene {
     const body = e.sprite.body as Phaser.Physics.Arcade.Body | null;
     if (body) body.enable = false;
     this.tweens.killTweensOf(e.sprite);
+    e.sprite.setData("corpse", true); // pending hit-flash callbacks must not clear the tint
     e.sprite
       .setRotation((Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2 + (Math.random() - 0.5) * 0.5))
       .setTint(0x767676)
