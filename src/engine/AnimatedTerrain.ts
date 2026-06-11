@@ -25,8 +25,10 @@ interface ChunkOverlay {
   lavaEdges: { x: number; y: number }[];
 }
 
-const EDGE_CAP = 16; // shoreline sample points kept per body (for ambient particles)
+const EDGE_CAP = 16; // shoreline sample points kept per chunk (for ambient particles)
 const AMBIENT_MS = 200; // min interval between ambient particle puffs (global)
+const MIN_BODY_TILES = 6; // puddles smaller than this get no shader (static tiles only)
+const MAX_BODIES_PER_CHUNK = 4; // quad cap — bounds shader count at any load radius
 
 const isWater = (t: number): boolean => t === Tile.Water || t === Tile.ShallowWater || t === Tile.DeepWater;
 const isLava = (t: number): boolean => t === Tile.Lava;
@@ -58,8 +60,8 @@ export class AnimatedTerrain {
   syncChunk(data: ChunkData): void {
     this.dropChunk(data.cx, data.cy); // idempotent — clears any prior overlay
     const ov: ChunkOverlay = { shaders: [], maskKeys: [], waterEdges: [], lavaEdges: [] };
-    this.buildBody(data, ov, "water");
-    this.buildBody(data, ov, "lava");
+    this.buildBodies(data, ov, "water");
+    this.buildBodies(data, ov, "lava");
     if (ov.shaders.length || ov.waterEdges.length || ov.lavaEdges.length) this.overlays.set(ckey(data.cx, data.cy), ov);
   }
 
@@ -102,81 +104,88 @@ export class AnimatedTerrain {
 
   // --- internals ------------------------------------------------------------
 
-  private buildBody(data: ChunkData, ov: ChunkOverlay, kind: "water" | "lava"): void {
+  /** Build per-BODY shader quads: flood-fill the member tiles into connected
+   *  components and give each its own tight-bbox quad + mask. The old version
+   *  used ONE quad over the bounding box of ALL water in the chunk — scattered
+   *  water (old marsh) made that quad span the whole chunk and the translucent
+   *  caustic wash covered the entire screen (the screenshot-reported "ocean over
+   *  the forest"). Tiny puddles (< MIN_BODY_TILES) keep their static tiles +
+   *  ambient particles but get no shader; quads are capped per chunk. */
+  private buildBodies(data: ChunkData, ov: ChunkOverlay, kind: "water" | "lava"): void {
     const size = data.size;
     const grid = data.grid;
     const member = kind === "water" ? isWater : isLava;
-    let minX = size;
-    let minY = size;
-    let maxX = -1;
-    let maxY = -1;
-    for (let ly = 0; ly < size; ly++) {
-      for (let lx = 0; lx < size; lx++) {
-        if (!member(grid[ly][lx])) continue;
-        if (lx < minX) minX = lx;
-        if (lx > maxX) maxX = lx;
-        if (ly < minY) minY = ly;
-        if (ly > maxY) maxY = ly;
-      }
-    }
-    if (maxX < 0) return; // none of this kind here
-    const w = maxX - minX + 1;
-    const h = maxY - minY + 1;
+    const { labels, bodies } = labelComponents(grid, size, member);
+    if (bodies.length === 0) return;
+    bodies.sort((a, b) => b.tiles - a.tiles); // biggest bodies get FX + quads first
 
     // Shoreline edge points (a member tile touching a non-member) → ambient FX.
     const edges = kind === "water" ? ov.waterEdges : ov.lavaEdges;
-    for (let ly = minY; ly <= maxY && edges.length < EDGE_CAP; ly++) {
-      for (let lx = minX; lx <= maxX && edges.length < EDGE_CAP; lx++) {
-        if (!member(grid[ly][lx])) continue;
-        const border =
-          !member(grid[ly]?.[lx - 1] ?? -1) || !member(grid[ly]?.[lx + 1] ?? -1) ||
-          !member(grid[ly - 1]?.[lx] ?? -1) || !member(grid[ly + 1]?.[lx] ?? -1);
-        if (border && Math.random() < 0.5) {
-          edges.push({ x: (data.cx * size + lx + 0.5) * TILE_SIZE, y: (data.cy * size + ly + 0.5) * TILE_SIZE });
+    for (const b of bodies) {
+      for (let ly = b.minY; ly <= b.maxY && edges.length < EDGE_CAP; ly++) {
+        for (let lx = b.minX; lx <= b.maxX && edges.length < EDGE_CAP; lx++) {
+          if (labels[ly * size + lx] !== b.id) continue;
+          const border =
+            !member(grid[ly]?.[lx - 1] ?? -1) || !member(grid[ly]?.[lx + 1] ?? -1) ||
+            !member(grid[ly - 1]?.[lx] ?? -1) || !member(grid[ly + 1]?.[lx] ?? -1);
+          if (border && Math.random() < 0.5) {
+            edges.push({ x: (data.cx * size + lx + 0.5) * TILE_SIZE, y: (data.cy * size + ly + 0.5) * TILE_SIZE });
+          }
         }
       }
     }
 
-    // WebGL shader overlay (clipped to the real shape via a per-tile mask).
+    // WebGL shader overlays (each clipped to ITS body via a labels-only mask).
     const base = kind === "water" ? this.waterBase : this.lavaBase;
     if (!this.webgl || !base) return;
-    const maskKey = `lwmask_${kind}_${data.cx}_${data.cy}`;
-    if (!this.writeMask(maskKey, grid, minX, minY, w, h, member, kind)) return;
-    ov.maskKeys.push(maskKey);
-    try {
-      const px = (data.cx * size + minX) * TILE_SIZE;
-      const py = (data.cy * size + minY) * TILE_SIZE;
-      const sh = this.scene.add.shader(base, px + (w * TILE_SIZE) / 2, py + (h * TILE_SIZE) / 2, w * TILE_SIZE, h * TILE_SIZE, [maskKey]);
-      sh.setDepth(kind === "water" ? 0.6 : 0.7);
-      ov.shaders.push(sh);
-    } catch {
-      // Shader unsupported on this device — keep the static tile + particles.
-      if (this.scene.textures.exists(maskKey)) this.scene.textures.remove(maskKey);
-      ov.maskKeys = ov.maskKeys.filter((k) => k !== maskKey);
+    let made = 0;
+    for (const b of bodies) {
+      if (b.tiles < MIN_BODY_TILES || made >= MAX_BODIES_PER_CHUNK) break; // sorted desc
+      const maskKey = `lwmask_${kind}_${data.cx}_${data.cy}_${b.id}`;
+      if (!this.writeMask(maskKey, grid, labels, b, size, kind)) continue;
+      ov.maskKeys.push(maskKey);
+      const w = b.maxX - b.minX + 1;
+      const h = b.maxY - b.minY + 1;
+      try {
+        const px = (data.cx * size + b.minX) * TILE_SIZE;
+        const py = (data.cy * size + b.minY) * TILE_SIZE;
+        const sh = this.scene.add.shader(base, px + (w * TILE_SIZE) / 2, py + (h * TILE_SIZE) / 2, w * TILE_SIZE, h * TILE_SIZE, [maskKey]);
+        sh.setDepth(kind === "water" ? 0.6 : 0.7);
+        ov.shaders.push(sh);
+        made++;
+      } catch {
+        // Shader unsupported on this device — keep the static tile + particles.
+        if (this.scene.textures.exists(maskKey)) this.scene.textures.remove(maskKey);
+        ov.maskKeys = ov.maskKeys.filter((k) => k !== maskKey);
+      }
     }
   }
 
-  /** Draw the membership/depth mask for a body's bounding box. Returns false on failure. */
+  /** Draw the membership/depth mask for ONE body's bounding box: alpha marks only
+   *  tiles carrying this body's label, so two bodies with overlapping bboxes can
+   *  never double-tint a texel. Returns false on failure. */
   private writeMask(
     key: string,
     grid: Tile[][],
-    minX: number,
-    minY: number,
-    w: number,
-    h: number,
-    member: (t: number) => boolean,
+    labels: Int32Array,
+    body: Body,
+    size: number,
     kind: "water" | "lava",
   ): boolean {
     if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
+    const w = body.maxX - body.minX + 1;
+    const h = body.maxY - body.minY + 1;
     const tex = this.scene.textures.createCanvas(key, w, h);
     const ctx = tex?.getContext();
     if (!tex || !ctx) return false;
     const img = ctx.createImageData(w, h);
     for (let iy = 0; iy < h; iy++) {
       for (let ix = 0; ix < w; ix++) {
-        const t = grid[minY + iy][minX + ix];
+        const lx = body.minX + ix;
+        const ly = body.minY + iy;
         const o = (iy * w + ix) * 4;
-        if (member(t)) {
+        if (labels[ly * size + lx] === body.id) {
+          const t = grid[ly][lx];
           img.data[o] = 255;
           img.data[o + 1] = kind === "water" ? (t === Tile.DeepWater ? 255 : t === Tile.Water ? 200 : 90) : 0; // depth
           img.data[o + 2] = 0;
@@ -190,4 +199,53 @@ export class AnimatedTerrain {
     tex.refresh();
     return true;
   }
+}
+
+/** One 4-connected component of member tiles. */
+interface Body {
+  id: number;
+  tiles: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Label the grid's member tiles into 4-connected components (iterative flood
+ *  fill on a preallocated stack — no recursion, no per-tile allocations). */
+function labelComponents(
+  grid: Tile[][],
+  size: number,
+  member: (t: number) => boolean,
+): { labels: Int32Array; bodies: Body[] } {
+  const labels = new Int32Array(size * size); // 0 = not a member / unvisited
+  const stack = new Int32Array(size * size);
+  const bodies: Body[] = [];
+  let next = 1;
+  for (let sy = 0; sy < size; sy++) {
+    for (let sx = 0; sx < size; sx++) {
+      const si = sy * size + sx;
+      if (labels[si] !== 0 || !member(grid[sy][sx])) continue;
+      const body: Body = { id: next++, tiles: 0, minX: sx, minY: sy, maxX: sx, maxY: sy };
+      let top = 0;
+      stack[top++] = si;
+      labels[si] = body.id;
+      while (top > 0) {
+        const i = stack[--top];
+        const x = i % size;
+        const y = (i / size) | 0;
+        body.tiles++;
+        if (x < body.minX) body.minX = x;
+        if (x > body.maxX) body.maxX = x;
+        if (y < body.minY) body.minY = y;
+        if (y > body.maxY) body.maxY = y;
+        if (x > 0 && labels[i - 1] === 0 && member(grid[y][x - 1])) { labels[i - 1] = body.id; stack[top++] = i - 1; }
+        if (x < size - 1 && labels[i + 1] === 0 && member(grid[y][x + 1])) { labels[i + 1] = body.id; stack[top++] = i + 1; }
+        if (y > 0 && labels[i - size] === 0 && member(grid[y - 1][x])) { labels[i - size] = body.id; stack[top++] = i - size; }
+        if (y < size - 1 && labels[i + size] === 0 && member(grid[y + 1][x])) { labels[i + size] = body.id; stack[top++] = i + size; }
+      }
+      bodies.push(body);
+    }
+  }
+  return { labels, bodies };
 }
