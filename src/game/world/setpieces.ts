@@ -197,5 +197,8 @@ function placeable(chunk: ChunkData, tx: number, ty: number): { tx: number; ty: 
 function placeableTile(t: Tile | undefined): boolean {
   if (t === undefined) return false;
   if (SOLID.has(t)) return false;
-  return t !== Tile.Floor && t !== Tile.Door && t !== Tile.ShallowWater && t !== Tile.Lava;
+  return (
+    t !== Tile.Floor && t !== Tile.Door &&
+    t !== Tile.ShallowWater && t !== Tile.Mud && t !== Tile.Foam && t !== Tile.Lava
+  );
 }

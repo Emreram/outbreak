@@ -4,8 +4,8 @@
 
 import { OPENING_CHAIN, newObjectives, currentStep, objectiveLabel, notifyObjective, arcSafehouse } from "../src/game/objectives";
 import { biomeAt } from "../src/game/world/biomes";
+import { findSpawnChunk } from "../src/game/world/spawn";
 import { newGame } from "../src/game/GameState";
-import { SPAWN_CHUNK } from "../src/game/constants";
 
 const store = new Map<string, string>();
 (globalThis as { localStorage?: unknown }).localStorage = {
@@ -66,7 +66,8 @@ function ok(cond: boolean, msg: string): void {
   const a = arcSafehouse("safeh-1");
   const b = arcSafehouse("safeh-1");
   ok(a.cx === b.cx && a.cy === b.cy, "safehouse deterministic per seed");
-  const d = Math.hypot(a.cx - SPAWN_CHUNK.x, a.cy - SPAWN_CHUNK.y);
+  const spawn = findSpawnChunk("safeh-1");
+  const d = Math.hypot(a.cx - spawn.x, a.cy - spawn.y);
   ok(d >= 1 && d <= 4, `safehouse a short expedition out (${d.toFixed(1)} chunks)`);
   const biome = biomeAt("safeh-1", a.cx, a.cy);
   ok(biome.id !== "ocean" && biome.id !== "lake", "safehouse lands on dry ground");

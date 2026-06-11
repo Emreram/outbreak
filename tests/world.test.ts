@@ -7,6 +7,7 @@ import { Tile, TILE_ORDER, TILE_COUNT, SOLID_TILES, generateChunk } from "../src
 import { biomeAt, getBiome, BIOMES } from "../src/game/world/biomes";
 import { field } from "../src/game/world/noise";
 import { dangerTierAt, lootBiasAt, chunkDistToSpawn } from "../src/game/world/scaling";
+import { findSpawnChunk } from "../src/game/world/spawn";
 import { hasLandmarkStyle } from "../src/game/world/landmarks";
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y, SPAWN_CHUNK } from "../src/game/constants";
 
@@ -99,13 +100,15 @@ for (const b of Object.values(BIOMES)) for (const lm of b.landmarks) lmKinds.add
 const unstyled = [...lmKinds].filter((k) => !hasLandmarkStyle(k));
 ok(unstyled.length === 0, `every biome landmark has a style (${unstyled.join(",") || "ok"})`);
 
-// --- distance-scaled danger & loot -----------------------------------------
-ok(chunkDistToSpawn(SPAWN_CHUNK.x, SPAWN_CHUNK.y) === 0, "spawn chunk is distance 0");
-const nearD = dangerTierAt("alpha", SPAWN_CHUNK.x, SPAWN_CHUNK.y);
-const farD = dangerTierAt("alpha", SPAWN_CHUNK.x + 18, SPAWN_CHUNK.y);
+// --- distance-scaled danger & loot (relative to the seed's REAL spawn) -------
+const sp = findSpawnChunk("alpha");
+ok(chunkDistToSpawn("alpha", sp.x, sp.y) === 0, "spawn chunk is distance 0");
+ok(Math.max(Math.abs(sp.x - SPAWN_CHUNK.x), Math.abs(sp.y - SPAWN_CHUNK.y)) <= 8, "spawn search stays near the world centre");
+const nearD = dangerTierAt("alpha", sp.x, sp.y);
+const farD = dangerTierAt("alpha", sp.x + 18, sp.y);
 ok(farD > nearD, `danger rises with distance (near ${nearD} → far ${farD})`);
-const nearL = lootBiasAt("alpha", SPAWN_CHUNK.x, SPAWN_CHUNK.y);
-const farL = lootBiasAt("alpha", SPAWN_CHUNK.x + 18, SPAWN_CHUNK.y);
+const nearL = lootBiasAt("alpha", sp.x, sp.y);
+const farL = lootBiasAt("alpha", sp.x + 18, sp.y);
 ok(farL > nearL, `loot bias rises with distance (near ${nearL.toFixed(2)} → far ${farL.toFixed(2)})`);
 
 if (fail === 0) console.log("\nALL WORLD CHECKS PASSED");

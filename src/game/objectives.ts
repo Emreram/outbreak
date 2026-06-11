@@ -1,7 +1,8 @@
 import { createRng } from "./rng";
 import type { GameState } from "../shared/contracts";
 import { biomeAt } from "./world/biomes";
-import { SPAWN_CHUNK, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "./constants";
+import { findSpawnChunk } from "./world/spawn";
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "./constants";
 
 // Opening arc (Expansion U3): the first COMPLETABLE objective chain — a short,
 // guided first day (arm yourself → scavenge → reach a marked safehouse → survive
@@ -94,16 +95,17 @@ export function notifyObjective(state: GameState, ev: ObjectiveEvent): Objective
 /** The deterministic safehouse chunk for this run: 2–3 chunks from spawn, on a
  *  land biome (re-rolled deterministically if the dice land in water). */
 export function arcSafehouse(seed: string): { cx: number; cy: number } {
+  const spawn = findSpawnChunk(seed); // measure from the run's REAL spawn chunk
   const rng = createRng(`${seed}:arc`);
   for (let tries = 0; tries < 16; tries++) {
     const ang = rng.next() * Math.PI * 2;
     const dist = 2 + rng.next();
-    const cx = Math.round(SPAWN_CHUNK.x + Math.cos(ang) * dist);
-    const cy = Math.round(SPAWN_CHUNK.y + Math.sin(ang) * dist);
+    const cx = Math.round(spawn.x + Math.cos(ang) * dist);
+    const cy = Math.round(spawn.y + Math.sin(ang) * dist);
     if (cx < 1 || cy < 1 || cx >= WORLD_CHUNKS_X - 1 || cy >= WORLD_CHUNKS_Y - 1) continue;
     const b = biomeAt(seed, cx, cy);
     if (b.id === "ocean" || b.id === "lake") continue;
     return { cx, cy };
   }
-  return { cx: SPAWN_CHUNK.x + 2, cy: SPAWN_CHUNK.y };
+  return { cx: spawn.x + 2, cy: spawn.y };
 }

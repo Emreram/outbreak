@@ -13,6 +13,8 @@ export const CHUNK_TILES = 48; // tiles per chunk edge
 export const WORLD_CHUNKS_X = 40; // world is this many chunks wide …
 export const WORLD_CHUNKS_Y = 40; // … and tall
 export const CHUNK_LOAD_RADIUS = 2; // keep a (2r+1)² ring of chunks resident
+// The WORLD CENTRE — the origin (and last-resort fallback) of the seed-aware
+// spawn search in world/spawn.ts; the actual start chunk is findSpawnChunk(seed).
 export const SPAWN_CHUNK = { x: Math.floor(WORLD_CHUNKS_X / 2), y: Math.floor(WORLD_CHUNKS_Y / 2) };
 
 // Derived world size, in tiles and pixels (the finite extent / bounds).

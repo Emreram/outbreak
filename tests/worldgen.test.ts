@@ -5,6 +5,8 @@
 
 import { generateChunk, Tile, SOLID_TILES, TILE_COUNT, chunkStartPx } from "../src/game/worldgen";
 import { biomeAt } from "../src/game/world/biomes";
+import { findSpawnChunk } from "../src/game/world/spawn";
+import { isWaterish } from "../src/game/world/terrainField";
 import { CHUNK_TILES } from "../src/game/constants";
 
 const SOLID = new Set<number>(SOLID_TILES as number[]);
@@ -103,13 +105,70 @@ if (!varied) failed++;
   if (propGidErrs) failed++;
 }
 
-// Spawn point is walkable.
-const start = chunkStartPx(generateChunk("alpha", 20, 20));
-const stx = Math.floor(start.x / 32) - 20 * CHUNK_TILES;
-const sty = Math.floor(start.y / 32) - 20 * CHUNK_TILES;
-const startWalkable = walkable(generateChunk("alpha", 20, 20).grid[sty][stx]);
-console.log(`spawn walkable=${startWalkable} (biome ${biomeAt("alpha", 20, 20).id})`);
-if (!startWalkable) failed++;
+// Spawn point is walkable, DRY ground in the seed's searched spawn chunk.
+{
+  const sc = findSpawnChunk("alpha");
+  const start = chunkStartPx(generateChunk("alpha", sc.x, sc.y));
+  const stx = Math.floor(start.x / 32) - sc.x * CHUNK_TILES;
+  const sty = Math.floor(start.y / 32) - sc.y * CHUNK_TILES;
+  const t = generateChunk("alpha", sc.x, sc.y).grid[sty][stx];
+  const startDry = walkable(t) && !isWaterish(t) && t !== Tile.Mud && t !== Tile.Lava;
+  console.log(`spawn dry+walkable=${startDry} (chunk ${sc.x},${sc.y} · biome ${biomeAt("alpha", sc.x, sc.y).id} · tile ${Tile[t]})`);
+  if (!startDry) failed++;
+}
+
+// --- Terrain Overhaul invariants (coherent water + shorelines) ---------------
+{
+  let isolatedOpenWater = 0; // open Water/DeepWater with NO waterish 4-neighbour (speckles)
+  let deepVsDry = 0; // DeepWater directly against dry land (shoreline must demote)
+  let bareRim = 0; // plain ground touching open Water with no wadeable rim
+  const plain = new Set<Tile>([Tile.Grass, Tile.Dirt, Tile.Sand, Tile.Mud, Tile.TallGrass]);
+  let marshChunks = 0;
+  let marshWalkableOk = 0;
+  for (let cy = 16; cy <= 24; cy++) {
+    for (let cx = 16; cx <= 24; cx++) {
+      const biome = biomeAt("alpha", cx, cy);
+      if (biome.urban) continue;
+      const g = generateChunk("alpha", cx, cy).grid;
+      let walkableTiles = 0;
+      for (let y = 1; y < CHUNK_TILES - 1; y++) {
+        for (let x = 1; x < CHUNK_TILES - 1; x++) {
+          const t = g[y][x];
+          if (!SOLID.has(t)) walkableTiles++;
+          const n = [g[y][x - 1], g[y][x + 1], g[y - 1][x], g[y + 1][x]];
+          if ((t === Tile.Water || t === Tile.DeepWater) && !n.some((m) => isWaterish(m))) isolatedOpenWater++;
+          if (t === Tile.DeepWater && n.some((m) => !isWaterish(m) && m !== Tile.Bridge)) deepVsDry++;
+          if (plain.has(t) && n.some((m) => m === Tile.Water || m === Tile.DeepWater)) bareRim++;
+        }
+      }
+      if (biome.id === "marsh" || biome.id === "wetland") {
+        marshChunks++;
+        if (walkableTiles / ((CHUNK_TILES - 2) * (CHUNK_TILES - 2)) >= 0.7) marshWalkableOk++;
+      }
+    }
+  }
+  console.log(`anti-speckle: isolated=${isolatedOpenWater} deepVsDry=${deepVsDry} bareRim=${bareRim}`);
+  if (isolatedOpenWater > 0) { failed++; console.log("FAIL: isolated open-water speckles exist"); }
+  if (deepVsDry > 0) { failed++; console.log("FAIL: deep water touches dry land"); }
+  if (bareRim > 0) { failed++; console.log("FAIL: open water without a wadeable rim against plain ground"); }
+
+  // Marshes specifically (wherever this seed put them): LAND with pools, mostly
+  // walkable — the old marsh was a chunk-wide walkable sea (the screenshot bug).
+  outer: for (let cy = 1; cy < 39 && marshChunks < 4; cy++) {
+    for (let cx = 1; cx < 39 && marshChunks < 4; cx++) {
+      const id = biomeAt("alpha", cx, cy).id;
+      if (id !== "marsh" && id !== "wetland") continue;
+      marshChunks++;
+      const g = generateChunk("alpha", cx, cy).grid;
+      let walkableTiles = 0;
+      for (let y = 0; y < CHUNK_TILES; y++) for (let x = 0; x < CHUNK_TILES; x++) if (!SOLID.has(g[y][x])) walkableTiles++;
+      if (walkableTiles / (CHUNK_TILES * CHUNK_TILES) >= 0.7) marshWalkableOk++;
+      if (marshChunks >= 4) break outer;
+    }
+  }
+  console.log(`marsh/wetland chunks ≥70% walkable: ${marshWalkableOk}/${marshChunks}`);
+  if (marshChunks > 0 && marshWalkableOk < marshChunks) { failed++; console.log("FAIL: a marsh/wetland chunk is <70% walkable"); }
+}
 
 console.log(failed === 0 ? "ALL WORLDGEN CHECKS PASSED" : `${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);
