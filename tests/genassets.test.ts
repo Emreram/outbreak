@@ -1,12 +1,12 @@
-// Asset-pipeline specs (Anim PR 3): pure JSON/map checks, zero network. Every
-// variant spec must reference a real base spec, carry a non-empty pose
-// instruction, match its base's canvas size, and resolve through
-// GENERATED_KEY_MAP so the runtime can actually load what the pipeline emits.
+// Asset-pipeline specs: pure JSON/map checks, zero network. The Gemini pipeline
+// stays intact (variant specs reference a real base, carry a pose instruction,
+// match canvas size), but the runtime mapping now ENFORCES the rendering fix:
+// nothing the engine rotates may be PNG-overridden — only static decor props —
+// so generated side-view illustrations can never spin like cutouts again.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { GENERATED_KEY_MAP } from "../src/engine/assets";
-import { PET_IDS } from "../src/game/pets";
 
 interface Spec {
   key: string;
@@ -52,14 +52,21 @@ const variants = specs.filter((s) => s.variantOf);
   ok(plainKeys.length === 0, "every base spec has a real description");
 }
 
-// --- runtime resolution ----------------------------------------------------------
+// --- runtime mapping: rotating creatures must NOT be overridden ------------------
+// The regression guard for the broken-creature-rendering bug: every mapped key
+// must be a STATIC prop, and no creature/vehicle key may sneak back in.
 {
-  const unmapped = variants.filter((v) => !GENERATED_KEY_MAP[v.key]);
-  ok(unmapped.length === 0, `every variant key resolves in GENERATED_KEY_MAP${unmapped.length ? " — UNMAPPED: " + unmapped.map((v) => v.key).join(",") : ""}`);
+  const mapped = Object.keys(GENERATED_KEY_MAP);
+  ok(mapped.length > 0 && mapped.every((k) => k.startsWith("prop_")), `only static decor props are PNG-overridden (${mapped.join(", ")})`);
 
-  const petVariants = variants.filter((v) => v.key.startsWith("pet_"));
-  ok(petVariants.length === PET_IDS.length, `all ${PET_IDS.length} pet species have a stride variant spec (${petVariants.length})`);
-  ok(GENERATED_KEY_MAP.animal_deer_b?.endsWith("_b") === true, "the deer's stride frame maps onto its prop key");
+  const ROTATING = /^(player|zombie|survivor_npc|pet_|animal_|vehicle_)/;
+  const leaked = mapped.filter((k) => ROTATING.test(k));
+  ok(leaked.length === 0, `no rotation-facing creature/vehicle key is overridden${leaked.length ? " — LEAKED: " + leaked.join(",") : ""}`);
+
+  // The Gemini pipeline + its variant specs survive for future use, but those
+  // creature variants are deliberately UNMAPPED now (procedural art ships).
+  const mappedVariants = variants.filter((v) => GENERATED_KEY_MAP[v.key]);
+  ok(mappedVariants.length === 0, `creature variant specs stay in the pipeline but unmapped at runtime (${variants.length} specs, 0 mapped)`);
 }
 
 console.log(fail === 0 ? "ALL GEN-ASSET CHECKS PASSED" : `${fail} CHECK(S) FAILED`);

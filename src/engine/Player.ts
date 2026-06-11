@@ -1,7 +1,6 @@
 import Phaser from "phaser";
-import { PLAYER_KEY, PLAYER_SPRINT_A, PLAYER_SPRINT_B, PLAYER_WALK_A, PLAYER_WALK_B, PLAYER_WALK_PASS } from "./textures";
+import { DEFAULT_PLAYER_JACKET, playerJacketFrames, PLAYER_KEY, PLAYER_SPRINT_A, PLAYER_SPRINT_B, PLAYER_WALK_A, PLAYER_WALK_B, PLAYER_WALK_PASS } from "./textures";
 import { applyFrame, frameFor } from "./anim";
-import { fxTexFor } from "./fx";
 import { PLAYER_SPEED, TILE_SIZE } from "../game/constants";
 
 // The player: a physics-bodied placeholder sprite with 8-direction WASD/arrow
@@ -129,28 +128,14 @@ export class Player {
     return this.facing;
   }
 
-  /** Tint the survivor sprite (character-creation appearance). fxTexFor bakes the
-   *  colour into a texture copy on the Canvas renderer, which ignores live tints —
-   *  every frame of the walk/sprint cycle gets its own tinted copy so the whole
-   *  cycle stays coloured. Baked once here, never per-frame (cache-bounded). */
+  /** Recolour the survivor for the character-creation appearance. The chosen
+   *  colour is baked into the JACKET ONLY (natural skin/hair/pack survive), so
+   *  the cycle stays a readable character instead of a flat tinted blob — no
+   *  whole-sprite multiply. Cached per colour in textures.ts. */
   setAppearance(color?: number): void {
-    const scene = this.sprite.scene;
-    if (color !== undefined) {
-      const i = fxTexFor(scene, PLAYER_KEY, color);
-      this.frames = {
-        idle: i.key,
-        a: fxTexFor(scene, PLAYER_WALK_A, color).key,
-        b: fxTexFor(scene, PLAYER_WALK_B, color).key,
-        pass: fxTexFor(scene, PLAYER_WALK_PASS, color).key,
-        sa: fxTexFor(scene, PLAYER_SPRINT_A, color).key,
-        sb: fxTexFor(scene, PLAYER_SPRINT_B, color).key,
-      };
-      if (scene.textures.exists(i.key)) this.sprite.setTexture(i.key);
-      this.sprite.setTint(i.tint);
-    } else {
-      this.frames = { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B, pass: PLAYER_WALK_PASS, sa: PLAYER_SPRINT_A, sb: PLAYER_SPRINT_B };
-      this.sprite.setTexture(PLAYER_KEY).clearTint();
-    }
+    this.frames = playerJacketFrames(this.sprite.scene, color ?? DEFAULT_PLAYER_JACKET);
+    if (this.sprite.scene.textures.exists(this.frames.idle)) this.sprite.setTexture(this.frames.idle);
+    this.sprite.clearTint();
   }
 
   /** Quick squash-stretch punch when swinging a melee hit. */
