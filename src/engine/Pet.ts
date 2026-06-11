@@ -8,7 +8,8 @@
 import Phaser from "phaser";
 import type { PetDef } from "../game/pets";
 import { bondedDamage } from "../game/pets";
-import { petTexKey, petWingKey, PET_SHADOW } from "./petSprites";
+import { petFrameBKey, petTexKey, petWingKey, PET_SHADOW } from "./petSprites";
+import { applyFrame, frameFor, gaitPose, resolveFrames, GAITS, type FrameSet } from "./anim";
 import { ZOMBIE_KEY } from "./textures";
 
 export type PetMode = "wild" | "owned";
@@ -37,6 +38,12 @@ export class Pet {
   private wing?: Phaser.GameObjects.Image;
   private shadow?: Phaser.GameObjects.Image;
   private bobT = Math.random() * Math.PI * 2;
+  // Gait (Animation Pass): stride phase + wing-flap phase accumulate with REAL
+  // body speed so strides slow as the animal does; frames follow the chain
+  // (generated pair > procedural pair > single frame + motion).
+  private gaitT = Math.random() * Math.PI * 2;
+  private flapT = Math.random() * Math.PI * 2;
+  private readonly frames: FrameSet;
 
   constructor(scene: Phaser.Scene, x: number, y: number, def: PetDef, mode: PetMode) {
     this.def = def;
@@ -44,6 +51,7 @@ export class Pet {
     this.hp = def.hp;
     const key = petTexKey(def.id);
     const tex = scene.textures.exists(key) ? key : ZOMBIE_KEY;
+    this.frames = resolveFrames((k) => scene.textures.exists(k), tex, { b: petFrameBKey(def.id) });
     this.sprite = scene.physics.add.sprite(x, y, tex).setDepth(8);
     this.sprite.setCollideWorldBounds(true);
     (this.sprite.body as Phaser.Physics.Arcade.Body).setSize(20, 20);
@@ -69,7 +77,7 @@ export class Pet {
     return this.mode === "owned" ? bondedDamage(this.def, this.bond) : this.def.damage;
   }
 
-  update(px: number, py: number, zombie: { x: number; y: number } | null, now: number): void {
+  update(px: number, py: number, zombie: { x: number; y: number } | null, now: number, dt = 16): void {
     this.bobT += 0.05;
     const dx = px - this.sprite.x;
     const dy = py - this.sprite.y;
@@ -117,19 +125,27 @@ export class Pet {
       }
     }
 
-    // facing + idle breath/walk bob
-    const moving = (this.sprite.body as Phaser.Physics.Arcade.Body).speed > 4;
-    const bob = moving ? Math.sin(now * 0.02) * 0.07 : 0;
-    this.sprite.setRotation(this.facing + bob);
-    this.sprite.setScale(this.sprite.scaleX, 1 + (moving ? 0 : Math.sin(this.bobT) * 0.02));
+    // Gait motion layer (Animation Pass): per-archetype stride drives rotation
+    // sway, footfall bob (scaleY only — the body stays authoritative), the frame
+    // swap, and the wing flap rate. Idle keeps the gentle breathe.
+    const body = this.sprite.body as Phaser.Physics.Arcade.Body;
+    const moving = body.speed > 4;
+    const spec = GAITS[this.def.look.archetype] ?? GAITS.quadruped;
+    const speedFrac = Math.min(1, Math.max(0.3, body.speed / (BASE_SPEED * 1.2)));
+    if (moving) this.gaitT += (dt / 1000) * spec.strideHz * speedFrac * Math.PI * 2;
+    const pose = gaitPose(spec, this.gaitT, speedFrac, false);
+    this.sprite.setRotation(this.facing + (moving ? pose.sway : 0));
+    this.sprite.setScale(this.sprite.scaleX, 1 + (moving ? pose.scaleYMul : Math.sin(this.bobT) * 0.02));
+    applyFrame(this.sprite, frameFor(this.frames, moving, this.gaitT));
 
-    // fly accessories: hover bob, flapping wings, detached shadow
+    // fly accessories: hover bob, speed-coupled wing flap, detached shadow
     if (this.def.move === "fly") {
       const hover = Math.sin(this.bobT * 1.4) * 5;
       this.sprite.y += hover * 0.02; // gentle drift (body is authoritative)
+      this.flapT += (dt / 1000) * pose.flapHz * Math.PI * 2;
       if (this.wing) {
         this.wing.setPosition(this.sprite.x, this.sprite.y).setRotation(this.sprite.rotation);
-        this.wing.setScale(1, 0.6 + Math.abs(Math.sin(this.bobT * 2.4)) * 0.4); // flap
+        this.wing.setScale(1, 0.6 + Math.abs(Math.sin(this.flapT)) * 0.4); // flap
       }
       this.shadow?.setPosition(this.sprite.x, this.sprite.y + 14).setScale(0.75 + Math.sin(this.bobT * 1.4) * 0.05);
     }

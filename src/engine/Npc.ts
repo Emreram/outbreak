@@ -1,5 +1,6 @@
 import Phaser from "phaser";
-import { SURVIVOR_NPC_KEY, PLAYER_KEY } from "./textures";
+import { SURVIVOR_NPC_KEY, SURVIVOR_NPC_WALK_A, SURVIVOR_NPC_WALK_B, PLAYER_KEY } from "./textures";
+import { applyFrame, frameFor, type FrameSet } from "./anim";
 import { fxTexFor } from "./fx";
 
 // Survivor NPC entity (Feature 10b): a lightweight, non-infected actor. Ambient
@@ -42,6 +43,8 @@ export class Npc {
   private wanderUntil = 0;
   private baseTint?: number; // tier/kind tint, re-applied after a hurt flash
   private tag?: Phaser.GameObjects.Text; // floating quality name-tag
+  private frames: FrameSet; // walk cycle, tint baked PER FRAME (Animation Pass)
+  private readonly phase = Math.random() * Math.PI * 2; // desync the crowd
 
   constructor(scene: Phaser.Scene, x: number, y: number, opts: NpcOpts) {
     this.id = opts.id;
@@ -54,8 +57,10 @@ export class Npc {
     this.maxHp = opts.maxHp;
     const base = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
     // fxTexFor bakes the kind/tier colour into a texture copy on the Canvas
-    // renderer (which ignores live tints); WebGL keeps the runtime tint.
+    // renderer (which ignores live tints); WebGL keeps the runtime tint. Each
+    // walk frame needs its own baked copy (done ONCE here, never per-frame).
     const t = opts.color !== undefined ? fxTexFor(scene, base, opts.color) : { key: base, tint: 0xffffff };
+    this.frames = this.bakeFrames(scene, base, opts.color);
     this.sprite = scene.physics.add.sprite(x, y, scene.textures.exists(t.key) ? t.key : base).setDepth(9);
     this.sprite.setCollideWorldBounds(true);
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
@@ -78,6 +83,18 @@ export class Npc {
     }
   }
 
+  /** Bake the (optionally tinted) walk-cycle frames — constructor/setTint only. */
+  private bakeFrames(scene: Phaser.Scene, base: string, color?: number): FrameSet {
+    const wa = scene.textures.exists(SURVIVOR_NPC_WALK_A) ? SURVIVOR_NPC_WALK_A : base;
+    const wb = scene.textures.exists(SURVIVOR_NPC_WALK_B) ? SURVIVOR_NPC_WALK_B : base;
+    if (color === undefined) return { idle: base, a: wa, b: wb };
+    return {
+      idle: fxTexFor(scene, base, color).key,
+      a: fxTexFor(scene, wa, color).key,
+      b: fxTexFor(scene, wb, color).key,
+    };
+  }
+
   /** Companions follow the player and rush nearby zombies; survivors mill about. */
   update(px: number, py: number, zombie: { x: number; y: number } | null, now: number): void {
     if (this.tag) this.tag.setPosition(this.sprite.x, this.sprite.y - 24);
@@ -87,6 +104,7 @@ export class Npc {
         const dy = zombie.y - this.sprite.y;
         const d = Math.hypot(dx, dy) || 1;
         this.move(dx / d, dy / d, SPEED);
+        this.animate(now);
         return;
       }
       const dx = px - this.sprite.x;
@@ -94,6 +112,7 @@ export class Npc {
       const d = Math.hypot(dx, dy) || 1;
       if (d > 64) this.move(dx / d, dy / d, Math.min(SPEED * 1.3, d * 3));
       else this.idle();
+      this.animate(now);
       return;
     }
     // ambient survivor: gentle wander, stay roughly in place. Camp residents (U5)
@@ -113,6 +132,14 @@ export class Npc {
       }
     }
     this.sprite.setRotation(this.facing + Math.sin(now * 0.015) * 0.08);
+    this.animate(now);
+  }
+
+  /** Walk-frame swap + a livelier bob while moving (Animation Pass). */
+  private animate(now: number): void {
+    const moving = (this.sprite.body as Phaser.Physics.Arcade.Body).speed > 4;
+    applyFrame(this.sprite, frameFor(this.frames, moving, now * 0.011 + this.phase));
+    if (moving) this.sprite.setRotation(this.facing + Math.sin(now * 0.011 + this.phase) * 0.09);
   }
 
   private move(nx: number, ny: number, speed: number): void {
@@ -137,11 +164,14 @@ export class Npc {
     return this.hp <= 0;
   }
 
-  /** Re-tint (e.g. survivor → companion on recruit) and keep it through hurt flashes. */
+  /** Re-tint (e.g. survivor → companion on recruit) and keep it through hurt
+   *  flashes — re-bakes the whole walk cycle in the new colour. */
   setTint(color: number): void {
-    const base = this.sprite.scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
-    const t = fxTexFor(this.sprite.scene, base, color);
-    if (this.sprite.scene.textures.exists(t.key)) this.sprite.setTexture(t.key);
+    const scene = this.sprite.scene;
+    const base = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
+    const t = fxTexFor(scene, base, color);
+    this.frames = this.bakeFrames(scene, base, color);
+    if (scene.textures.exists(t.key)) this.sprite.setTexture(t.key);
     this.baseTint = t.tint;
     this.sprite.setTint(t.tint);
   }

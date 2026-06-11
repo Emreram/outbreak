@@ -1898,7 +1898,7 @@ export class WorldScene extends Phaser.Scene {
         const z = this.nearestEnemyTo(pet.sprite.x, pet.sprite.y, 240);
         if (z) zt = { x: z.sprite.x, y: z.sprite.y };
       }
-      pet.update(px, py, zt, now);
+      pet.update(px, py, zt, now, delta);
     }
     for (let i = this.pets.length - 1; i >= 0; i--) {
       const pet = this.pets[i];

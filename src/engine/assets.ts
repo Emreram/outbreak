@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { propKey } from "./propSprites";
+import { generatedTextureKeys } from "./generatedKeys";
 import { PET_IDS } from "../game/pets";
 
 // AssetManifest (Feature 3): the single swap-point between AI-generated PNGs and the
@@ -32,8 +33,17 @@ export const GENERATED_KEY_MAP: Record<string, string> = {
 };
 
 // Every pet species can be art-overridden too (PR-E): spec key pet_<id> maps to
-// the live texture key petSprites uses (the same string by construction).
-for (const id of PET_IDS) GENERATED_KEY_MAP[`pet_${id}`] = `pet_${id}`;
+// the live texture key petSprites uses (the same string by construction). The _b
+// stride frames (Animation Pass) ride the same convention.
+for (const id of PET_IDS) {
+  GENERATED_KEY_MAP[`pet_${id}`] = `pet_${id}`;
+  GENERATED_KEY_MAP[`pet_${id}_b`] = `pet_${id}_b`;
+}
+GENERATED_KEY_MAP.animal_deer_b = propKey("animal_deer") + "_b";
+
+// The generated-key registry lives in ./generatedKeys (a zero-import leaf) so
+// the procedural generators can consult it without import cycles.
+export { generatedTextureKeys, isGeneratedTexture } from "./generatedKeys";
 
 /** Queue an optional generated-asset load from a scene's preload(). If the manifest is
  *  present, each mapped PNG is loaded under its runtime key (winning over procedural
@@ -58,7 +68,10 @@ export function loadGeneratedAssets(scene: Phaser.Scene): void {
       if (!data || typeof data !== "object") return;
       for (const [specKey, file] of Object.entries(data as Record<string, string>)) {
         const runtime = GENERATED_KEY_MAP[specKey];
-        if (runtime && typeof file === "string") scene.load.image(runtime, `${GENERATED_DIR}/${file}`);
+        if (runtime && typeof file === "string") {
+          scene.load.image(runtime, `${GENERATED_DIR}/${file}`);
+          generatedTextureKeys.add(runtime);
+        }
       }
     },
   );

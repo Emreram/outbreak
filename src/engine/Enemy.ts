@@ -1,7 +1,8 @@
 import Phaser from "phaser";
 import type { EnemyFamily, LootFamily, ZombieDef, ZombieTrait } from "../game/enemies/types";
 import { bloodProfileFor, type BloodProfile } from "../game/enemies/blood";
-import { zombieFrameBKey, zombieTextureKey } from "./zombieSprites";
+import { zombieFrameBKey, zombieFrameCKey, zombieTextureKey } from "./zombieSprites";
+import { applyFrame, frameFor } from "./anim";
 import { ZOMBIE_KEY, PLAYER_KEY } from "./textures";
 import { RARITY_META, rarityRank } from "../game/items/rarity";
 
@@ -33,6 +34,8 @@ export class Enemy {
   private phase = Math.random() * 6.28;
   private readonly texA: string;
   private readonly texB?: string; // alternate shamble frame (PR-E)
+  private readonly texC?: string; // "gather" beat frame — expressive movers only (Animation Pass)
+  private lastDist = 9999; // player distance, cached for the stalker creep-amp
   private knockedUntil = 0;
   private bleedDps = 0;
   private dotUntil = 0;
@@ -66,6 +69,8 @@ export class Enemy {
     this.texA = tex;
     const kb = zombieFrameBKey(def.id);
     this.texB = tex === key && scene.textures.exists(kb) ? kb : undefined; // 2-frame shamble (PR-E)
+    const kc = zombieFrameCKey(def.id);
+    this.texC = tex === key && scene.textures.exists(kc) ? kc : undefined; // 4-step movers (Animation Pass)
     this.sprite = scene.physics.add.sprite(x, y, tex);
     this.sprite.setOrigin(0.5, 0.5);
     this.sprite.setScale(def.scale);
@@ -129,6 +134,7 @@ export class Enemy {
     const dx = px - this.sprite.x;
     const dy = py - this.sprite.y;
     const dist = Math.hypot(dx, dy) || 1;
+    this.lastDist = dist;
     const aggro = this.def.aggro + noise;
     const speed = this.def.speed * this.frenzyMult();
 
@@ -177,18 +183,28 @@ export class Enemy {
   }
 
   private applySway(now: number): void {
+    // Per-class motion identity (Animation Pass): crawlers drag at a heavy
+    // half-rate, runners pump, stalkers go eerily still as they close in.
     const fast = this.family === "zombie_runner" || this.hasTrait("fast");
     const wide = this.def.movement === "crawler";
-    const amp = wide ? 0.2 : fast ? 0.22 : 0.12;
-    const freq = fast ? 0.022 : 0.008;
-    const sway = Math.sin(now * freq + this.phase);
-    this.sprite.setRotation(this.facing + sway * amp);
-    // 2-frame shamble (PR-E): the arms swing in time with the body sway.
-    if (this.texB) {
-      const moving = (this.sprite.body as Phaser.Physics.Arcade.Body).speed > 4;
-      const want = moving && sway < 0 ? this.texB : this.texA;
-      if (this.sprite.texture.key !== want) this.sprite.setTexture(want);
+    let amp = wide ? 0.2 : fast ? 0.22 : 0.12;
+    const freq = wide ? 0.006 : fast ? 0.022 : 0.008;
+    if (this.def.movement === "stalker" && this.lastDist < 170) amp *= 0.5; // the creep
+    const phaseRad = now * freq + this.phase;
+    this.sprite.setRotation(this.facing + Math.sin(phaseRad) * amp);
+    // Shamble frames in time with the sway: 2-step [A,B], or the 4-step
+    // [B, A(gather-pass), C, A] for expressive movers. Lurchers freeze on the
+    // base frame through their pause beat — the lunge-gather reads clearly.
+    if (!this.texB) return;
+    const moving = (this.sprite.body as Phaser.Physics.Arcade.Body).speed > 4;
+    if (this.def.movement === "lurcher" && now % 850 >= 450) {
+      applyFrame(this.sprite, this.texA);
+      return;
     }
+    const set = this.texC
+      ? { idle: this.texA, a: this.texB, b: this.texC, pass: this.texA }
+      : { idle: this.texA, a: this.texA, b: this.texB };
+    applyFrame(this.sprite, frameFor(set, moving, phaseRad));
   }
 
   private drawUi(): void {

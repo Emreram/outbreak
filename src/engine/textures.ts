@@ -11,10 +11,18 @@ export const TILESET_KEY = "tiles";
 export const PLAYER_KEY = "player";
 export const ZOMBIE_KEY = "zombie";
 export const SURVIVOR_NPC_KEY = "survivor_npc";
-// Two-frame walk cycle for the player (PR-E): arms swing alternately; the
-// Player entity swaps frames off its walk phase (idle returns to PLAYER_KEY).
+// Player walk cycle (PR-E, upgraded to a 4-step contact–pass–contact–pass in
+// the Animation Pass): arms swing alternately through a tucked pass frame; a
+// sprint pair doubles the swing with a forward lean. The Player entity swaps
+// frames off its walk phase (idle returns to PLAYER_KEY).
 export const PLAYER_WALK_A = "player_wa";
 export const PLAYER_WALK_B = "player_wb";
+export const PLAYER_WALK_PASS = "player_wp";
+export const PLAYER_SPRINT_A = "player_sa";
+export const PLAYER_SPRINT_B = "player_sb";
+// NPC walk pair (Animation Pass) — survivors/companions stop gliding too.
+export const SURVIVOR_NPC_WALK_A = "survivor_npc_wa";
+export const SURVIVOR_NPC_WALK_B = "survivor_npc_wb";
 
 // CC0 character assets served from /public (loaded in BootScene). If a load
 // fails, the generators below provide a placeholder for that key. The terrain
@@ -326,8 +334,11 @@ function oval(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, r
   ctx.fill();
 }
 
-/** pose: 0 = idle (arms even), ±1 = walk frames (arms swing alternately). */
-function drawSurvivorCanvas(p: SurvivorPalette, pose = 0): HTMLCanvasElement {
+/** pose: 0 = idle (arms even), ±1 = walk contact frames, ±2 = sprint contact
+ *  frames (double swing). opts.tuck draws the mid-stride PASS frame (arms pulled
+ *  in, slight forward gather); opts.lean shifts the whole figure toward +x
+ *  (sprint drive). All variants bake their colours — canvas-tint parity. */
+function drawSurvivorCanvas(p: SurvivorPalette, pose = 0, opts?: { tuck?: boolean; lean?: number }): HTMLCanvasElement {
   const S = CHAR_SIZE;
   const C = S / 2;
   const cv = document.createElement("canvas");
@@ -338,23 +349,27 @@ function drawSurvivorCanvas(p: SurvivorPalette, pose = 0): HTMLCanvasElement {
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  // soft drop shadow
+  // soft drop shadow (never leans — it's the ground)
   ctx.fillStyle = "rgba(0,0,0,0.22)";
   oval(ctx, C, C + 9, 13, 6);
 
-  // backpack behind (−x)
+  const lean = opts?.lean ?? 0;
+  if (lean !== 0) ctx.translate(lean, 0);
+
+  // backpack behind (−x); sprinting presses it tighter to the back
   ctx.fillStyle = hx(p.pack);
   ctx.strokeStyle = "rgba(0,0,0,0.45)";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.rect(C - 13, C - 7, 9, 14);
+  ctx.rect(C - 13 + (lean !== 0 ? 1 : 0), C - 7, 9 - (lean !== 0 ? 1 : 0), 14);
   ctx.fill();
   ctx.stroke();
 
-  // arms reaching forward (+x); walk frames swing them alternately
+  // arms reaching forward (+x); walk frames swing them alternately, the pass
+  // frame tucks both in mid-stride
   ctx.strokeStyle = rgbf(p.jacket, 0.82);
   ctx.lineWidth = 5;
-  const reach = (s: number): number => 9 + pose * (s === -1 ? 1 : -1) * 3;
+  const reach = (s: number): number => (opts?.tuck ? 7 : 9) + pose * (s === -1 ? 1 : -1) * 3;
   for (const s of [-1, 1]) {
     ctx.beginPath();
     ctx.moveTo(C - 2, C + s * 7);
@@ -404,19 +419,28 @@ function drawSurvivorCanvas(p: SurvivorPalette, pose = 0): HTMLCanvasElement {
 }
 
 /** The player survivor — olive jacket, no slung rifle (a live weapon overlays it).
- *  Generates the idle frame plus the two walk frames (PR-E). */
+ *  Generates the idle frame, the 4-step walk cycle (contact A · pass · contact B),
+ *  and the sprint contact pair (Animation Pass). */
 export function generatePlayerTexture(scene: Phaser.Scene, _size: number): void {
   const pal = { jacket: 0x5b6b52, skin: 0xc89a6a, hair: 0x3a2c1e, pack: 0x6e5a3a };
-  if (!scene.textures.exists(PLAYER_KEY)) scene.textures.addCanvas(PLAYER_KEY, drawSurvivorCanvas(pal));
-  if (!scene.textures.exists(PLAYER_WALK_A)) scene.textures.addCanvas(PLAYER_WALK_A, drawSurvivorCanvas(pal, 1));
-  if (!scene.textures.exists(PLAYER_WALK_B)) scene.textures.addCanvas(PLAYER_WALK_B, drawSurvivorCanvas(pal, -1));
+  const add = (key: string, pose: number, opts?: { tuck?: boolean; lean?: number }) => {
+    if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawSurvivorCanvas(pal, pose, opts));
+  };
+  add(PLAYER_KEY, 0);
+  add(PLAYER_WALK_A, 1);
+  add(PLAYER_WALK_B, -1);
+  add(PLAYER_WALK_PASS, 0, { tuck: true, lean: 0.8 });
+  add(PLAYER_SPRINT_A, 2, { lean: 1.5 });
+  add(PLAYER_SPRINT_B, -2, { lean: 1.5 });
 }
 
 /** Survivor NPC — light neutral so the scene's faction tint (cyan/green) reads;
- *  armed so they look like fighters. */
+ *  armed so they look like fighters. Walk pair added in the Animation Pass. */
 export function generateSurvivorNpcTexture(scene: Phaser.Scene): void {
-  if (scene.textures.exists(SURVIVOR_NPC_KEY)) return;
-  scene.textures.addCanvas(SURVIVOR_NPC_KEY, drawSurvivorCanvas({ jacket: 0x9aa0a8, skin: 0xd0a878, hair: 0x2e2722, pack: 0x4a4f57, armed: true }));
+  const pal = { jacket: 0x9aa0a8, skin: 0xd0a878, hair: 0x2e2722, pack: 0x4a4f57, armed: true };
+  if (!scene.textures.exists(SURVIVOR_NPC_KEY)) scene.textures.addCanvas(SURVIVOR_NPC_KEY, drawSurvivorCanvas(pal));
+  if (!scene.textures.exists(SURVIVOR_NPC_WALK_A)) scene.textures.addCanvas(SURVIVOR_NPC_WALK_A, drawSurvivorCanvas(pal, 1));
+  if (!scene.textures.exists(SURVIVOR_NPC_WALK_B)) scene.textures.addCanvas(SURVIVOR_NPC_WALK_B, drawSurvivorCanvas(pal, -1));
 }
 
 // --- ground micro-decor (PR-E): pebbles / grass tufts / pavement cracks ---------

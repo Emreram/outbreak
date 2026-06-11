@@ -1,5 +1,6 @@
 import Phaser from "phaser";
-import { PLAYER_KEY, PLAYER_WALK_A, PLAYER_WALK_B } from "./textures";
+import { PLAYER_KEY, PLAYER_SPRINT_A, PLAYER_SPRINT_B, PLAYER_WALK_A, PLAYER_WALK_B, PLAYER_WALK_PASS } from "./textures";
+import { applyFrame, frameFor } from "./anim";
 import { fxTexFor } from "./fx";
 import { PLAYER_SPEED, TILE_SIZE } from "../game/constants";
 
@@ -26,11 +27,19 @@ export class Player {
   /** Terrain multiplier — 1 on dry ground, <1 wading shallow water / mud / lava
    *  (set each frame by the scene from the tile underfoot; Living World). */
   terrainMult = 1;
-  /** True while a vehicle/mount owns the sprite's texture — the 2-frame walk
-   *  cycle (PR-E) must not stomp it. */
+  /** True while a vehicle/mount owns the sprite's texture — the walk cycle
+   *  must not stomp it (the mount's animator lives in the scene's rideTick). */
   artLocked = false;
-  // The current frame trio (re-pointed at tinted copies by setAppearance).
-  private frames = { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B };
+  // The current frame keys (re-pointed at tinted copies by setAppearance):
+  // 4-step walk [a, pass, b, pass] + sprint contact pair (Animation Pass).
+  private frames = {
+    idle: PLAYER_KEY,
+    a: PLAYER_WALK_A,
+    b: PLAYER_WALK_B,
+    pass: PLAYER_WALK_PASS,
+    sa: PLAYER_SPRINT_A,
+    sb: PLAYER_SPRINT_B,
+  };
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
@@ -90,36 +99,56 @@ export class Player {
       this.facing = Math.atan2(vy, vx); // turn to face the direction of travel
       this.walkT += sprint ? 2 : 1;
       // Walk lean/sway via rotation — scale is left free for the hit/lunge tweens.
-      this.sprite.setRotation(this.facing + Math.sin(this.walkT * 0.35) * 0.07);
+      // Sprinting drives the body harder.
+      this.sprite.setRotation(this.facing + Math.sin(this.walkT * 0.35) * (sprint ? 0.1 : 0.07));
     } else {
       this.sprite.setVelocity(0, 0);
       this.sprite.setRotation(this.facing);
     }
 
-    // Two-frame walk cycle (PR-E): arms swing with the same phase as the body
-    // sway; idle returns to the even frame. Vehicles/mounts lock the texture.
+    // 4-step walk cycle [contact A, pass, contact B, pass] in phase with the body
+    // sway; sprinting swaps in the big-swing contact pair at double cadence; idle
+    // settles on the even frame. Vehicles/mounts lock the texture.
     if (!this.artLocked) {
-      const want = len > 0 ? (Math.sin(this.walkT * 0.35) >= 0 ? this.frames.a : this.frames.b) : this.frames.idle;
-      if (this.sprite.texture.key !== want && this.sprite.scene.textures.exists(want)) {
-        this.sprite.setTexture(want);
+      const f = this.frames;
+      const set = sprint
+        ? { idle: f.idle, a: f.sa, b: f.sb, pass: f.pass }
+        : { idle: f.idle, a: f.a, b: f.b, pass: f.pass };
+      applyFrame(this.sprite, frameFor(set, len > 0, this.walkT * 0.35));
+      // Idle micro-breathe (skipped while a hit/lunge tween owns the scale).
+      if (len === 0 && !this.sprite.scene.tweens.isTweening(this.sprite)) {
+        this.sprite.setScale(this.sprite.scaleX, 1 + Math.sin(this.sprite.scene.time.now * 0.0045) * 0.015);
+      } else if (len > 0 && !this.sprite.scene.tweens.isTweening(this.sprite)) {
+        this.sprite.setScale(this.sprite.scaleX, 1);
       }
     }
   }
 
+  /** The un-swayed heading — the scene's mounted gait layers its own sway on top. */
+  get facingRad(): number {
+    return this.facing;
+  }
+
   /** Tint the survivor sprite (character-creation appearance). fxTexFor bakes the
    *  colour into a texture copy on the Canvas renderer, which ignores live tints —
-   *  all three walk frames get their own tinted copy so the cycle stays coloured. */
+   *  every frame of the walk/sprint cycle gets its own tinted copy so the whole
+   *  cycle stays coloured. Baked once here, never per-frame (cache-bounded). */
   setAppearance(color?: number): void {
     const scene = this.sprite.scene;
     if (color !== undefined) {
       const i = fxTexFor(scene, PLAYER_KEY, color);
-      const a = fxTexFor(scene, PLAYER_WALK_A, color);
-      const b = fxTexFor(scene, PLAYER_WALK_B, color);
-      this.frames = { idle: i.key, a: a.key, b: b.key };
+      this.frames = {
+        idle: i.key,
+        a: fxTexFor(scene, PLAYER_WALK_A, color).key,
+        b: fxTexFor(scene, PLAYER_WALK_B, color).key,
+        pass: fxTexFor(scene, PLAYER_WALK_PASS, color).key,
+        sa: fxTexFor(scene, PLAYER_SPRINT_A, color).key,
+        sb: fxTexFor(scene, PLAYER_SPRINT_B, color).key,
+      };
       if (scene.textures.exists(i.key)) this.sprite.setTexture(i.key);
       this.sprite.setTint(i.tint);
     } else {
-      this.frames = { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B };
+      this.frames = { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B, pass: PLAYER_WALK_PASS, sa: PLAYER_SPRINT_A, sb: PLAYER_SPRINT_B };
       this.sprite.setTexture(PLAYER_KEY).clearTint();
     }
   }
