@@ -4,10 +4,10 @@ import { biomeAt } from "./biomes";
 import { applyScars } from "./disasterScars";
 import type { DisasterZone } from "../../shared/contracts";
 import { dangerTierAt, lootBiasAt } from "./scaling";
+import { findSpawnChunk } from "./spawn";
 import {
   CHUNK_TILES,
   CHUNK_LOAD_RADIUS,
-  SPAWN_CHUNK,
   TILE_SIZE,
   WORLD_CHUNKS_X,
   WORLD_CHUNKS_Y,
@@ -98,7 +98,8 @@ export class ChunkManager {
     this.scene = scene;
     this.seed = seed;
     this.opts = opts;
-    const spawn = generateChunk(seed, SPAWN_CHUNK.x, SPAWN_CHUNK.y);
+    const sc = findSpawnChunk(seed); // a naturally hospitable, dry chunk for this seed
+    const spawn = generateChunk(seed, sc.x, sc.y);
     this.start = chunkStartPx(spawn);
   }
 

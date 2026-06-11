@@ -26,7 +26,8 @@ import {
   type ChunkData,
 } from "./world/tiles";
 import { biomeAt, type BiomeDef } from "./world/biomes";
-import { field } from "./world/noise";
+import { field, hashUnit } from "./world/noise";
+import { isWaterish, terrainTileAt } from "./world/terrainField";
 import { isRoad, isRoadCol, isRoadRow } from "./world/roads";
 import { applySetpieces } from "./world/setpieces";
 
@@ -133,31 +134,31 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   const gx0 = cx * size;
   const gy0 = cy * size;
 
-  // 1) Base terrain + NOISE-MODULATED scatter: a per-tile feature field clusters
-  //    scatter into dense thickets and open clearings instead of a flat, uniform
-  //    sprinkle — so two same-biome chunks read differently and a forest has shape.
+  // 1) Terrain. Natural chunks sample the PURE per-tile terrain field (organic
+  //    biome borders, coherent lakes/rivers/marsh-pools, beach gradients — see
+  //    world/terrainField.ts); urban chunks keep their chunk-coherent base (roads
+  //    and buildings need square logic) but get a natural fringe where they border
+  //    countryside. No rng is consumed by terrain: it's all hash/field-driven, so
+  //    the grid is a pure function of (seed, cx, cy).
   const grid: Tile[][] = [];
-  for (let ly = 0; ly < size; ly++) grid[ly] = new Array<Tile>(size).fill(biome.base);
-  for (const s of biome.scatter) {
+  if (!biome.urban) {
     for (let ly = 0; ly < size; ly++) {
-      for (let lx = 0; lx < size; lx++) {
-        if (grid[ly][lx] !== biome.base) continue;
-        const m = field(`${seed}:feat`, gx0 + lx, gy0 + ly, 7, 2); // 0..1 density modulation
-        if (rng.chance(s.p * (0.3 + 1.7 * m))) grid[ly][lx] = s.tile;
+      grid[ly] = new Array<Tile>(size);
+      for (let lx = 0; lx < size; lx++) grid[ly][lx] = paintedNaturalTileAt(seed, gx0 + lx, gy0 + ly);
+    }
+    shorelinePass(grid, seed, cx, cy, size);
+  } else {
+    for (let ly = 0; ly < size; ly++) grid[ly] = new Array<Tile>(size).fill(biome.base);
+    for (const s of biome.scatter) {
+      for (let ly = 0; ly < size; ly++) {
+        for (let lx = 0; lx < size; lx++) {
+          if (grid[ly][lx] !== biome.base) continue;
+          const m = field(`${seed}:feat`, gx0 + lx, gy0 + ly, 7, 2); // 0..1 density modulation
+          if (hashUnit(`${seed}:uscatter:${s.tile}`, gx0 + lx, gy0 + ly) < s.p * (0.3 + 1.7 * m)) grid[ly][lx] = s.tile;
+        }
       }
     }
-  }
-
-  // 1b) Seamless rivers: a global ridge-noise channel that lines up exactly across
-  //     chunk borders (pure fn of GLOBAL tile coords). Skipped in urban + already-wet
-  //     biomes so it never water-logs a buildable block.
-  if (!biome.urban && biome.base !== Tile.Water && biome.base !== Tile.DeepWater && biome.base !== Tile.ShallowWater) {
-    carveRivers(grid, seed, gx0, gy0, size);
-  }
-
-  // 1c) An occasional pond gives dry inland biomes a little water shape.
-  if (!biome.urban && biome.base !== Tile.Water && biome.base !== Tile.DeepWater && rng.chance(0.16)) {
-    carvePond(grid, size, rng);
+    paintUrbanFringe(grid, seed, cx, cy, size);
   }
 
   const buildings: Building[] = [];
@@ -214,9 +215,9 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
     containers.push({ gid: `${cx}_${cy}_L${ci++}`, tx: gx, ty: gy, tier: 3, type: "warehouse", kind: "crate", locked: rng.chance(0.5) });
   }
 
-  // 4) Decorative props (non-blocking sprites).
+  // 4) Decorative props (non-blocking sprites) — dry open ground only.
   for (let i = 0; i < biome.propDensity; i++) {
-    const t = nonWaterLocal(grid, size, rng);
+    const t = openGroundLocal(grid, size, rng);
     if (!t) continue;
     props.push({ kind: rng.pick(biome.props.length ? biome.props : ["rock"]), x: (gx0 + t.x + 0.5) * tileSize, y: (gy0 + t.y + 0.5) * tileSize, gid: `${cx}_${cy}_p${pi++}` });
   }
@@ -241,13 +242,21 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   return chunk;
 }
 
+// Tiles a player should START on: dry, open, readable ground.
+const START_GROUND = new Set<Tile>([
+  Tile.Grass, Tile.Dirt, Tile.Trail, Tile.Sand, Tile.Pavement, Tile.Sidewalk, Tile.Road, Tile.Bridge,
+]);
+
 /** A walkable world-pixel spawn point for a freshly-generated chunk: the nearest
- *  OPEN tile to the centre (road/ground), avoiding building interiors. */
+ *  DRY OPEN tile to the centre. Three tiers — preferred dry ground, then any
+ *  walkable non-wet tile, then anything walkable — so a run never opens with the
+ *  survivor wading in a pond or stuck in mud. */
 export function chunkStartPx(chunk: ChunkData): { x: number; y: number } {
   const { grid, size, tileSize, cx, cy } = chunk;
   const c = Math.floor(size / 2);
   const toPx = (lx: number, ly: number) => ({ x: (cx * size + lx + 0.5) * tileSize, y: (cy * size + ly + 0.5) * tileSize });
-  let firstWalkable: { x: number; y: number } | null = null;
+  let tier2: { x: number; y: number } | null = null; // walkable, not wet, not interior
+  let tier3: { x: number; y: number } | null = null; // any walkable
   for (let r = 0; r < size; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
@@ -257,12 +266,15 @@ export function chunkStartPx(chunk: ChunkData): { x: number; y: number } {
         if (lx < 0 || ly < 0 || lx >= size || ly >= size) continue;
         const t = grid[ly][lx];
         if (isSolid(t)) continue;
-        if (!firstWalkable) firstWalkable = toPx(lx, ly);
-        if (t !== Tile.Floor && t !== Tile.Door) return toPx(lx, ly); // prefer open ground
+        if (START_GROUND.has(t)) return toPx(lx, ly); // nearest preferred ground wins outright
+        if (!tier3) tier3 = toPx(lx, ly);
+        if (!tier2 && t !== Tile.Floor && t !== Tile.Door && !isWaterish(t) && t !== Tile.Mud && t !== Tile.Lava) {
+          tier2 = toPx(lx, ly);
+        }
       }
     }
   }
-  return firstWalkable ?? toPx(c, c);
+  return tier2 ?? tier3 ?? toPx(c, c);
 }
 
 // --- urban generation ------------------------------------------------------
@@ -378,7 +390,7 @@ function areaClearable(grid: Tile[][], sx: number, sy: number, ex: number, ey: n
       total++;
       const t = grid[y]?.[x];
       if (t === Tile.Wall || t === Tile.Floor || t === Tile.Door) return false; // overlaps an existing building
-      if (t === Tile.Water || t === Tile.DeepWater) waterish++;
+      if (t !== undefined && isWaterish(t)) waterish++;
     }
   }
   return total > 0 && waterish / total < 0.2;
@@ -487,39 +499,88 @@ function floorTileIn(
   return candidates.length ? rng.pick(candidates) : null;
 }
 
-// --- rivers & ponds (seamless / per-chunk water shape) ---------------------
+// --- natural terrain painting (per-tile field + trails + shoreline) ----------
 
-const RIVER_SCALE = 30; // wavelength (tiles) of the river noise — bigger = sparser, smoother
-const RIVER_WATER = 0.972; // ridge threshold for open channel
-const RIVER_BANK = 0.94; // ridge threshold for shallow banks either side
+/** The natural tile actually PAINTED at a global coord: the pure terrain field
+ *  composed with the global country-road web — the (previously invisible) road
+ *  grid becomes dirt Trails through the countryside, and where it crosses open
+ *  water it becomes a BRIDGE, so rivers are real barriers with deterministic
+ *  crossings. Pure in (seed, gx, gy) — also used as the shoreline ring sampler,
+ *  which is what makes the shoreline pass seamless across chunk borders. */
+function paintedNaturalTileAt(seed: string, gx: number, gy: number): Tile {
+  const t = terrainTileAt(seed, gx, gy);
+  if (isRoadCol(seed, gx) || isRoadRow(seed, gy)) {
+    if (t === Tile.Lava || t === Tile.Basalt) return t; // the road died here
+    if (t === Tile.DeepWater) return t; // no bridging the open sea
+    if (isWaterish(t)) return Tile.Bridge;
+    return Tile.Trail;
+  }
+  return t;
+}
 
-/** Carve a continuous river channel through this chunk wherever a global ridge
- *  field peaks. Because it samples GLOBAL tile coords, the channel meanders
- *  seamlessly across chunk borders (no per-chunk seams). */
-function carveRivers(grid: Tile[][], seed: string, gx0: number, gy0: number, size: number): void {
+// Plain ground the shoreline rim conversion may claim (trees/crops/roads stay put).
+const SHORE_CONVERTIBLE = new Set<Tile>([Tile.Grass, Tile.Dirt, Tile.Sand, Tile.Mud, Tile.TallGrass]);
+
+/** Shoreline post-pass (double-buffered, order-independent): guarantee every
+ *  water body has a readable, wadeable rim — plain ground touching open Water
+ *  becomes a ShallowWater fringe, DeepWater never touches land directly, and
+ *  Foam appears ONLY where Sand actually meets water. The out-of-chunk ring is
+ *  sampled via the same pure painter, so the pass is seamless across chunks
+ *  (urban neighbours sample as dry pavement — they paint their own ground). */
+function shorelinePass(grid: Tile[][], seed: string, cx: number, cy: number, size: number): void {
+  const gx0 = cx * size;
+  const gy0 = cy * size;
+  const snap: Tile[][] = grid.map((row) => row.slice());
+  const at = (lx: number, ly: number): Tile => {
+    if (lx >= 0 && ly >= 0 && lx < size && ly < size) return snap[ly][lx];
+    const gx = gx0 + lx;
+    const gy = gy0 + ly;
+    const ncx = Math.floor(gx / size);
+    const ncy = Math.floor(gy / size);
+    if (biomeAt(seed, ncx, ncy).urban) return Tile.Pavement; // urban paints its own dry ground
+    return paintedNaturalTileAt(seed, gx, gy);
+  };
   for (let ly = 0; ly < size; ly++) {
     for (let lx = 0; lx < size; lx++) {
-      const v = field(`${seed}:river`, gx0 + lx, gy0 + ly, RIVER_SCALE, 2);
-      const ridge = 1 - Math.abs(2 * v - 1); // peaks (→1) along the 0.5 contour
-      if (ridge > RIVER_WATER) grid[ly][lx] = Tile.Water;
-      else if (ridge > RIVER_BANK && grid[ly][lx] !== Tile.Water) grid[ly][lx] = Tile.ShallowWater;
+      const t = snap[ly][lx];
+      const n = [at(lx - 1, ly), at(lx + 1, ly), at(lx, ly - 1), at(lx, ly + 1)];
+      if (t === Tile.DeepWater) {
+        // Deep water never laps directly against land — demote to open water.
+        if (n.some((x) => !isWaterish(x) && x !== Tile.Bridge)) grid[ly][lx] = Tile.Water;
+      } else if (SHORE_CONVERTIBLE.has(t) && n.some((x) => x === Tile.Water || x === Tile.DeepWater)) {
+        grid[ly][lx] = Tile.ShallowWater; // wadeable rim between land and open water
+      } else if (t === Tile.Sand && n.some((x) => x === Tile.ShallowWater) && hashUnit(`${seed}:foam`, gx0 + lx, gy0 + ly) < 0.45) {
+        grid[ly][lx] = Tile.Foam; // surf line — only where a beach meets the water
+      }
     }
   }
 }
 
-/** A small circular pond: deep Water core, ShallowWater rim. */
-function carvePond(grid: Tile[][], size: number, rng: Rng): void {
-  const cx = rng.int(6, size - 7);
-  const cy = rng.int(6, size - 7);
-  const r = rng.int(2, 4);
-  for (let dy = -r; dy <= r; dy++) {
-    for (let dx = -r; dx <= r; dx++) {
-      const d2 = dx * dx + dy * dy;
-      if (d2 > r * r) continue;
-      const x = cx + dx;
-      const y = cy + dy;
-      if (x < 0 || y < 0 || x >= size || y >= size) continue;
-      grid[y][x] = d2 <= (r - 1) * (r - 1) ? Tile.Water : Tile.ShallowWater;
+/** Soften an urban chunk's border where it meets countryside: the outer band
+ *  bordering a NON-urban neighbour shows natural ground (clamped dry) instead of
+ *  wall-to-wall pavement, so city edges stop being razor-straight palette cuts.
+ *  Runs BEFORE roads/buildings, which overwrite it where they need to. */
+function paintUrbanFringe(grid: Tile[][], seed: string, cx: number, cy: number, size: number): void {
+  const BAND = 2;
+  const openSide = {
+    left: !biomeAt(seed, cx - 1, cy).urban,
+    right: !biomeAt(seed, cx + 1, cy).urban,
+    up: !biomeAt(seed, cx, cy - 1).urban,
+    down: !biomeAt(seed, cx, cy + 1).urban,
+  };
+  if (!openSide.left && !openSide.right && !openSide.up && !openSide.down) return;
+  const gx0 = cx * size;
+  const gy0 = cy * size;
+  for (let ly = 0; ly < size; ly++) {
+    for (let lx = 0; lx < size; lx++) {
+      const inBand =
+        (openSide.left && lx < BAND) || (openSide.right && lx >= size - BAND) ||
+        (openSide.up && ly < BAND) || (openSide.down && ly >= size - BAND);
+      if (!inBand) continue;
+      let t = terrainTileAt(seed, gx0 + lx, gy0 + ly);
+      if (isWaterish(t) || t === Tile.Foam) t = Tile.Sand; // city fringe stays dry
+      else if (t === Tile.Lava || t === Tile.Basalt) t = Tile.Scorched;
+      grid[ly][lx] = t;
     }
   }
 }
@@ -534,21 +595,29 @@ function adjRoad(grid: Tile[][], x: number, y: number, size: number): boolean {
   return false;
 }
 
+// Wet/hazard walkables that landmarks, caches and decorative props must avoid —
+// nothing should stand IN a pond, in mud, or on a lava field.
+const WET_OR_HAZARD = new Set<Tile>([Tile.ShallowWater, Tile.Mud, Tile.Foam, Tile.Lava]);
+
 function walkableLocal(grid: Tile[][], size: number, rng: Rng): { x: number; y: number } | null {
   for (let i = 0; i < 80; i++) {
     const x = rng.int(0, size - 1);
     const y = rng.int(0, size - 1);
-    if (!isSolid(grid[y][x]) && grid[y][x] !== Tile.Floor) return { x, y };
+    const t = grid[y][x];
+    if (!isSolid(t) && t !== Tile.Floor && !WET_OR_HAZARD.has(t)) return { x, y };
   }
   return null;
 }
 
-function nonWaterLocal(grid: Tile[][], size: number, rng: Rng): { x: number; y: number } | null {
+/** A spot for a decorative prop: open DRY ground only. (Trees standing in the
+ *  middle of a pond were a real, screenshot-reported bug — the old check only
+ *  rejected open Water.) */
+function openGroundLocal(grid: Tile[][], size: number, rng: Rng): { x: number; y: number } | null {
   for (let i = 0; i < 30; i++) {
     const x = rng.int(0, size - 1);
     const y = rng.int(0, size - 1);
     const t = grid[y][x];
-    if (t !== Tile.Water && t !== Tile.Wall && t !== Tile.Floor) return { x, y };
+    if (t !== Tile.Wall && t !== Tile.Floor && !isWaterish(t) && !WET_OR_HAZARD.has(t) && t !== Tile.Bridge) return { x, y };
   }
   return null;
 }

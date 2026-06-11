@@ -117,7 +117,7 @@ export function pushRecentEvent(s: GameState, line: string, keep = 6): void {
 
 // Exported so tests target the REAL key (a hardcoded copy went stale across the
 // v1→v3 bumps and silently turned the corrupt-save checks into no-ops).
-export const SAVE_KEY = "outbreak_save_v3"; // v3: Living World (organic biomes/rivers/coasts + disaster scars) — world layout reflows, so old saves start fresh
+export const SAVE_KEY = "outbreak_save_v4"; // v4: Terrain Overhaul (per-tile biome field, coherent water, new spawn) — world layout reflows, so old saves start fresh
 
 export function saveGame(s: GameState): void {
   try {

@@ -21,18 +21,36 @@ const ok = (cond: boolean, msg: string) => {
 };
 
 const SEED = "alpha";
-const CX = 20;
-const CY = 20; // a land chunk (spawn region)
 const has = (grid: Tile[][], t: Tile) => grid.some((r) => r.includes(t));
 const snapshot = (grid: Tile[][]) => JSON.stringify(grid);
 
+// Pick a land chunk with NO pre-existing lava/basalt (volcanic/badlands terrain
+// can legitimately hold both), searching out from the world centre so the test
+// is robust to biome-layout reflows across terrain versions.
+function cleanChunk(): { cx: number; cy: number } {
+  for (let r = 0; r < 8; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const cx = 20 + dx;
+        const cy = 20 + dy;
+        const g = generateChunk(SEED, cx, cy).grid;
+        if (!has(g, Tile.Lava) && !has(g, Tile.Basalt) && !has(g, Tile.DeepWater)) return { cx, cy };
+      }
+    }
+  }
+  return { cx: 20, cy: 20 };
+}
+const { cx: CX, cy: CY } = cleanChunk();
+
 // Epicentre at the chunk's centre tile, in GLOBAL world pixels.
-const centreTile = CX * CHUNK_TILES + CHUNK_TILES / 2;
+const centreTileX = CX * CHUNK_TILES + CHUNK_TILES / 2;
+const centreTileY = CY * CHUNK_TILES + CHUNK_TILES / 2;
 const erupt = (overrides: Partial<DisasterZone> = {}): DisasterZone => ({
   id: "z1",
   kind: "eruption",
-  px: (centreTile + 0.5) * TILE_SIZE,
-  py: (centreTile + 0.5) * TILE_SIZE,
+  px: (centreTileX + 0.5) * TILE_SIZE,
+  py: (centreTileY + 0.5) * TILE_SIZE,
   radius: 12,
   startDay: 0,
   intensity: 1,

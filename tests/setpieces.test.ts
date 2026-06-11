@@ -88,7 +88,9 @@ function ok(cond: boolean, msg: string): void {
   // worldgen rng stream — existing saves' chest_/searched_ flags would misalign.
   // (The old check compared the hash to itself, which could never fail.) If the
   // reshuffle is INTENTIONAL, bump SAVE_KEY and re-pin the new hash.
-  const PINNED_MAIN_STREAM_HASH = "c96122e6";
+  // Re-pinned for the Terrain Overhaul (PR1): terrain became a pure field (no rng
+  // in scatter), so the main stream reshuffled ONCE — covered by the v4 save wipe.
+  const PINNED_MAIN_STREAM_HASH = "ff874d62";
   const hash = fnv(mainStream);
   console.log(`  main-stream hash=${hash}`);
   ok(hash === PINNED_MAIN_STREAM_HASH, `main stream matches the pinned hash (${hash} vs ${PINNED_MAIN_STREAM_HASH})`);

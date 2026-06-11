@@ -1,19 +1,16 @@
 // Biome catalog (CLAUDE.md §10 "the AI handles what's inside" — here the code
-// decides the *kind* of place). ~22 biomes assigned by two low-frequency seeded
-// noise fields so neighbours blend into contiguous regions, plus a forced
-// ocean border at the world edge. Each biome is pure data: terrain, structures,
-// props, and loot/danger bias.
+// decides the *kind* of place). The biome CLASSIFIER (table/bands/thresholds)
+// lives in terrainField.ts and works at TILE resolution; this module keeps the
+// pure-data biome definitions and the chunk-dominant `biomeAt` API (classified
+// at the chunk centre) that loot/danger/spawn-tables/minimap consume.
 
 import { Tile, type BuildingType } from "./tiles";
 import { field, hashUnit } from "./noise";
-import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y, SPAWN_CHUNK } from "../constants";
+import { naturalBiomeIdAt, type BiomeId } from "./terrainField";
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../constants";
 
-export type BiomeId =
-  | "downtown" | "suburb" | "commercial_strip" | "industrial" | "warehouse_district"
-  | "hospital_zone" | "police_district" | "military_base" | "school_campus" | "shopping_mall"
-  | "trainyard" | "construction_site" | "forest" | "dense_woods" | "farmland" | "grassland"
-  | "riverbank" | "lake" | "marsh" | "coast" | "quarry" | "parkland" | "ocean"
-  | "volcanic" | "wetland" | "badlands";
+// Re-export so the many existing `import { BiomeId } from "./biomes"` keep working.
+export type { BiomeId } from "./terrainField";
 
 export interface ScatterRule {
   tile: Tile;
@@ -172,24 +169,25 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     propDensity: 8, lootSource: "street", lootBias: 0, danger: 0,
     landmarks: [{ kind: "radio_tower", label: "Radio tower", p: 0.08 }],
   }),
+  // Water in riverbank/lake/marsh/coast/wetland now comes from the COHERENT field
+  // systems in terrainField.ts (river banks, lake blobs with beach rings, marsh
+  // pools, the coast gradient) — not per-tile scatter speckles. Their `base` is
+  // the DRY ground between the water bodies.
   riverbank: def({
     id: "riverbank", name: "Riverbank", base: Tile.Grass,
-    scatter: [{ tile: Tile.Water, p: 0.12 }, { tile: Tile.Sand, p: 0.1 }, { tile: Tile.TallGrass, p: 0.08 }],
     buildingPool: ["cabin"], structureChance: 0.12, props: ["tree", "rock", "tent", "corpse"],
     propDensity: 12, lootSource: "forest", lootBias: 0.15, danger: 1,
     landmarks: [{ kind: "fishing_dock", label: "Fishing dock", p: 0.12 }],
     labelColor: 0x8fc7e6,
   }),
   lake: def({
-    id: "lake", name: "Lake", base: Tile.Water,
-    scatter: [{ tile: Tile.ShallowWater, p: 0.18 }, { tile: Tile.Sand, p: 0.06 }],
-    buildingPool: [], structureChance: 0, props: ["rock"], propDensity: 3,
+    id: "lake", name: "Lake", base: Tile.Grass,
+    buildingPool: ["cabin"], structureChance: 0.05, props: ["rock", "tree", "bush"], propDensity: 6,
     lootSource: "street", lootBias: 0.2, danger: 1, landmarks: [],
     labelColor: 0x8fc7e6,
   }),
   marsh: def({
-    id: "marsh", name: "Marshland", base: Tile.ShallowWater,
-    scatter: [{ tile: Tile.TallGrass, p: 0.2 }, { tile: Tile.Water, p: 0.12 }, { tile: Tile.Bush, p: 0.06 }],
+    id: "marsh", name: "Marshland", base: Tile.Grass,
     buildingPool: ["cabin"], structureChance: 0.06, props: ["bush", "tree", "corpse"], propDensity: 10,
     lootSource: "forest", lootBias: 0.1, danger: 2,
     landmarks: [{ kind: "sunken_shack", label: "Sunken shack", p: 0.1 }],
@@ -197,7 +195,6 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
   }),
   coast: def({
     id: "coast", name: "Coast", base: Tile.Sand,
-    scatter: [{ tile: Tile.Water, p: 0.16 }, { tile: Tile.ShallowWater, p: 0.14 }, { tile: Tile.Bush, p: 0.03 }],
     buildingPool: ["cabin", "motel"], structureChance: 0.12, props: ["rock", "wreck", "tent", "corpse"],
     propDensity: 10, lootSource: "street", lootBias: 0.2, danger: 1,
     landmarks: [{ kind: "lighthouse", label: "Lighthouse", p: 0.14 }, { kind: "beached_boat", label: "Beached trawler", p: 0.1 }],
@@ -235,7 +232,6 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
   }),
   wetland: def({
     id: "wetland", name: "Wetland", base: Tile.Mud,
-    scatter: [{ tile: Tile.ShallowWater, p: 0.2 }, { tile: Tile.TallGrass, p: 0.18 }, { tile: Tile.Water, p: 0.08 }, { tile: Tile.Bush, p: 0.05 }],
     buildingPool: ["cabin"], structureChance: 0.05, props: ["bush", "tree", "corpse"], propDensity: 10,
     lootSource: "forest", lootBias: 0.12, danger: 2,
     landmarks: [{ kind: "sunken_shack", label: "Sunken shack", p: 0.1 }],
@@ -251,80 +247,31 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
   }),
 };
 
-// 5×5 lookup over (density row, moisture col); each quantised band picks a biome.
-// (coast is no longer in the table — it's produced by the continental coastline
-//  field in biomeAt; the freed slot becomes wetland.)
-const TABLE: BiomeId[][] = [
-  ["badlands", "grassland", "parkland", "marsh", "lake"],
-  ["farmland", "farmland", "forest", "dense_woods", "riverbank"],
-  ["construction_site", "suburb", "suburb", "forest", "wetland"],
-  ["commercial_strip", "suburb", "school_campus", "warehouse_district", "trainyard"],
-  ["downtown", "downtown", "hospital_zone", "industrial", "quarry"],
-];
-
 // Rare special districts, injected where a third noise spikes over dense areas.
+// (Chunk-level identity — a police district is a district, not a tile gradient.)
 const SPECIALS: BiomeId[] = ["police_district", "military_base", "shopping_mall"];
-
-// Continental land/sea thresholds (low-frequency field): below OCEAN_LEVEL is open
-// water, the thin band up to COAST_LEVEL is the coastline. Conservative so land
-// dominates (protects biome-count + building-density invariants).
-const OCEAN_LEVEL = 0.26;
-const COAST_LEVEL = 0.32;
-
-// Always-playable land biomes for the spawn chunk (no water/marsh starts), still
-// varied per seed so the opening location differs run to run.
-const START_BIOMES: BiomeId[] = ["suburb", "commercial_strip", "forest", "farmland", "grassland", "parkland"];
-
-// fbm noise clusters near 0.5; stretch around the midpoint so the extreme
-// bands (corner biomes like downtown/lake/grassland/quarry) actually appear.
-function band(v: number): number {
-  const s = (v - 0.5) * 1.7 + 0.5;
-  return Math.max(0, Math.min(4, Math.floor(s * 5)));
-}
+const DENSE_IDS = new Set<BiomeId>([
+  "commercial_strip", "school_campus", "warehouse_district", "trainyard",
+  "downtown", "hospital_zone", "industrial", "quarry",
+]);
 
 /** Chebyshev distance (in chunks) to the nearest world edge. */
 function edgeDistChunks(cx: number, cy: number): number {
   return Math.min(cx, cy, WORLD_CHUNKS_X - 1 - cx, WORLD_CHUNKS_Y - 1 - cy);
 }
 
-/** The biome for a chunk — contiguous via low-frequency noise, with organic
- *  coastlines (continental field), meandering biome borders (domain warp), rare
- *  isolated volcanic regions, and ocean at the world edge. Pure + deterministic. */
+/** The DOMINANT biome for a chunk — the tile-resolution classifier sampled at the
+ *  chunk centre (terrainField.naturalBiomeIdAt), plus chunk-level special-district
+ *  injection and the hard ocean ring at the world edge. This stays the API the
+ *  rest of the game consumes (loot, danger, spawn tables, minimap, vehicles);
+ *  actual per-tile terrain inside a chunk comes from terrainField directly. */
 export function biomeAt(seed: string, cx: number, cy: number): BiomeDef {
   if (edgeDistChunks(cx, cy) <= 0) return BIOMES.ocean;
 
-  // The spawn chunk is always a playable land biome (varied per seed) so a run
-  // never opens with the player stuck wading in a lake/marsh. It also keeps the
-  // continental field below from ever drowning the opening location.
-  if (cx === SPAWN_CHUNK.x && cy === SPAWN_CHUNK.y) {
-    const i = Math.floor(hashUnit(seed + ":start", cx, cy) * START_BIOMES.length) % START_BIOMES.length;
-    return BIOMES[START_BIOMES[i]];
-  }
-
-  // Continental land/sea: a very-low-frequency field carves real bays + coastlines
-  // INSIDE the map, not just at the border — so water has shape and you actually
-  // reach a shore. Land still dominates (conservative thresholds).
-  const cont = field(seed + ":cont", cx, cy, 17, 2);
-  if (cont < OCEAN_LEVEL) return BIOMES.ocean;
-  if (cont < COAST_LEVEL) return BIOMES.coast;
-
-  // Rare, isolated volcanic regions — a distinct, dangerous landmark, independent
-  // of the urban/density axis so it reads as "a volcano", not a city block. Tuned
-  // so every seed has a few volcanic fields to find (lava) without being overrun.
-  if (field(seed + ":volc", cx, cy, 5, 2) > 0.83) return BIOMES.volcanic;
-
-  // Domain warp: perturb the sample point with a low-frequency field so biome
-  // borders meander organically instead of snapping to an axis-aligned grid
-  // (the old "blocky/repetitive" look). Warp wavelength ≫ feature size keeps
-  // regions contiguous.
-  const wx = (field(seed + ":warpx", cx, cy, 12, 2) - 0.5) * 6;
-  const wy = (field(seed + ":warpy", cx, cy, 12, 2) - 0.5) * 6;
-  const density = field(seed + ":dens", cx + wx, cy + wy, 6, 3);
-  const moisture = field(seed + ":moist", cx + wx, cy + wy, 8, 3);
-  const dRow = band(density);
+  const id = naturalBiomeIdAt(seed, cx + 0.5, cy + 0.5);
 
   // Rare special districts only in built-up (high-density) regions.
-  if (dRow >= 3) {
+  if (DENSE_IDS.has(id)) {
     const spec = field(seed + ":spec", cx, cy, 3, 2);
     if (spec > 0.9) {
       const idx = Math.floor(hashUnit(seed + ":specpick", cx, cy) * SPECIALS.length) % SPECIALS.length;
@@ -332,7 +279,7 @@ export function biomeAt(seed: string, cx: number, cy: number): BiomeDef {
     }
   }
 
-  return BIOMES[TABLE[dRow][band(moisture)]];
+  return BIOMES[id];
 }
 
 export function getBiome(id: BiomeId | string): BiomeDef {
