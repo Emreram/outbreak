@@ -353,6 +353,21 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0xd13a2a, 1).fillCircle(12, 13, 2.2); // bobber
     g.fillStyle(0xe8eef4, 1).fillCircle(12, 12.2, 1);
   },
+  // A great creature's nest (PR-A pet dens): ringed branches/bones + warm hollow.
+  pet_den: (g) => {
+    g.fillStyle(0x14100c, 0.4).fillEllipse(15, 18, 26, 12); // packed-earth ring shadow
+    g.fillStyle(0x5a4326, 1);
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2;
+      const x = 15 + Math.cos(a) * 10;
+      const y = 16 + Math.sin(a) * 7;
+      g.fillRoundedRect(x - 3, y - 1.2, 6, 2.4, 1); // woven branches
+    }
+    g.fillStyle(0xe8e2d0, 1).fillRoundedRect(7, 11, 5, 1.8, 1).fillRoundedRect(19, 19, 5, 1.8, 1); // old bones
+    g.fillStyle(0x2a2018, 1).fillEllipse(15, 16, 12, 7); // the hollow
+    g.fillStyle(0x3a2c1e, 1).fillEllipse(15, 16, 8, 4.6);
+    g.fillStyle(0xffd23f, 0.5).fillCircle(13, 15, 1.2).fillCircle(18, 17, 1); // a glint of... something
+  },
   flowers: (g) => {
     g.fillStyle(0x2c5a2a, 0.8).fillEllipse(15, 20, 20, 9); // grass tuft
     const bloom = (x: number, y: number, c: number): void => {

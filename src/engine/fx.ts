@@ -15,6 +15,7 @@ export const FX_DROP = "fx_drop"; // elongated arterial droplet
 export const FX_MIST = "fx_mist"; // soft atomised spray haze
 export const FX_SMEAR = "fx_smear"; // directional spatter streak (decal)
 export const FX_BEAM = "fx_beam"; // vertical light shaft (rare loot marker)
+export const FX_HEART = "fx_heart"; // tame/feed affection burst (PR-A; lazily generated)
 
 // --- colour helpers ------------------------------------------------------------
 function scaleColor(c: number, f: number): number {
@@ -466,6 +467,32 @@ export function dustPuff(scene: Phaser.Scene, x: number, y: number, count = 4): 
   e.setDepth(7);
   e.explode(count, x, y);
   scene.time.delayedCall(700, () => e.destroy());
+}
+
+/** Rising hearts — tame success / feeding a pet (PR-A). Baked pink (canvas parity). */
+export function heartBurst(scene: Phaser.Scene, x: number, y: number, count = 5): void {
+  if (!scene.textures.exists(FX_HEART)) {
+    const g = scene.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(0xff7aa6, 1);
+    g.fillCircle(3, 3, 2.6).fillCircle(7, 3, 2.6); // lobes
+    g.fillTriangle(0.6, 4.4, 9.4, 4.4, 5, 10); // point
+    g.fillStyle(0xffd9e8, 0.9).fillCircle(3.4, 2.6, 1); // glint
+    g.generateTexture(FX_HEART, 10, 10);
+    g.destroy();
+  }
+  for (let i = 0; i < count; i++) {
+    const h = scene.add.image(x + (Math.random() - 0.5) * 18, y - 4, FX_HEART).setDepth(20).setScale(0.8 + Math.random() * 0.5);
+    scene.tweens.add({
+      targets: h,
+      y: h.y - 26 - Math.random() * 14,
+      x: h.x + (Math.random() - 0.5) * 10,
+      alpha: 0,
+      duration: 600 + Math.random() * 250,
+      delay: i * 70,
+      ease: "Quad.easeOut",
+      onComplete: () => h.destroy(),
+    });
+  }
 }
 
 /** Fade + spin + shrink a dead body out, then destroy the sprite. */

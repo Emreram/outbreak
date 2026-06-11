@@ -234,6 +234,11 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   //      (`:shore:`), gid namespace `_sh<i>` (invariants #1 + #2).
   applyShoreProps(seed, chunk);
 
+  // 4.7) Pet dens (Companions PR-A): a rare "Strange nest" in deep wilderness —
+  //      the only wild source of the epic+ fantasy creatures. FORKED rng (`:den:`),
+  //      gid namespace `_pd<i>` (invariants #1 + #2).
+  applyPetDen(seed, chunk);
+
   // 5) Anti-emptiness: guarantee at least one interactable per chunk.
   if (buildings.length === 0 && containers.length === 0) {
     const t = walkableLocal(grid, size, rng);
@@ -671,6 +676,28 @@ function applyShoreProps(seed: string, chunk: ChunkData): void {
       made++;
     }
   }
+}
+
+// --- pet dens (Companions PR-A) ----------------------------------------------
+
+// Deep-wilds biomes where a great creature might nest.
+const DEN_BIOMES = new Set(["dense_woods", "forest", "marsh", "badlands", "volcanic", "grassland"]);
+const DEN_P = 0.04;
+
+/** A rare nest landmark — approaching it wakes its (deterministic) resident, the
+ *  only wild way to meet an epic+ creature. Forked rng + appended gid keep the
+ *  main stream byte-identical (invariants #1 + #2). */
+function applyPetDen(seed: string, chunk: ChunkData): void {
+  if (!DEN_BIOMES.has(chunk.biome)) return;
+  if (chunk.landmarks.length > 0) return; // density control: one story per chunk
+  const rng = createRng(`${seed}:den:${chunk.cx}:${chunk.cy}`);
+  if (!rng.chance(DEN_P)) return;
+  const t = openGroundLocal(chunk.grid, chunk.size, rng);
+  if (!t) return;
+  const x = (chunk.cx * chunk.size + t.x + 0.5) * chunk.tileSize;
+  const y = (chunk.cy * chunk.size + t.y + 0.5) * chunk.tileSize;
+  chunk.props.push({ kind: "pet_den", x, y, gid: `${chunk.cx}_${chunk.cy}_pd0` });
+  chunk.landmarks.push({ kind: "pet_den", label: "Strange nest", x, y });
 }
 
 // --- small helpers ---------------------------------------------------------

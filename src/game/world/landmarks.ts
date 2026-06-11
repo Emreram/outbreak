@@ -34,6 +34,7 @@ const STYLES: Record<string, LandmarkStyle> = {
   mining_rig: { glyph: "⛏", color: "#cdb89a", prop: "boulder" },
   bandstand: { glyph: "♪", color: "#bfe3a8", prop: "bench" },
   lava_vent: { glyph: "▲", color: "#ff7a2a", prop: "boulder" },
+  pet_den: { glyph: "♞", color: "#e8b4ff", prop: "pet_den" }, // a great creature's nest (PR-A)
   // Set-piece scenes (U2) — stamps provide the visuals, so no anchor prop.
   military_checkpoint: { glyph: "⛔", color: "#c9d6a0" },
   crashed_convoy: { glyph: "⚠", color: "#ffb36b" },
