@@ -37,6 +37,10 @@ export interface BiomeDef {
   danger: number; // added to the distance danger tier
   landmarks: LandmarkRule[];
   labelColor: number;
+  /** Minimap cell colour override. Water-identity biomes need it since their
+   *  `base` tile became dry land in the terrain overhaul (lake base is Grass —
+   *  the lake itself comes from the per-tile field). Fallback: base tile fill. */
+  mapColor?: number;
 }
 
 const URBAN_PROPS = ["car", "wreck", "crate", "barrel", "corpse", "sign", "streetlight", "dumpster"];
@@ -181,13 +185,13 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     labelColor: 0x8fc7e6,
   }),
   lake: def({
-    id: "lake", name: "Lake", base: Tile.Grass,
+    id: "lake", name: "Lake", base: Tile.Grass, mapColor: 0x3f6f93,
     buildingPool: ["cabin"], structureChance: 0.05, props: ["rock", "tree", "bush"], propDensity: 6,
     lootSource: "street", lootBias: 0.2, danger: 1, landmarks: [],
     labelColor: 0x8fc7e6,
   }),
   marsh: def({
-    id: "marsh", name: "Marshland", base: Tile.Grass,
+    id: "marsh", name: "Marshland", base: Tile.Grass, mapColor: 0x49705c,
     buildingPool: ["cabin"], structureChance: 0.06, props: ["bush", "tree", "corpse"], propDensity: 10,
     lootSource: "forest", lootBias: 0.1, danger: 2,
     landmarks: [{ kind: "sunken_shack", label: "Sunken shack", p: 0.1 }],
@@ -231,7 +235,7 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     labelColor: 0xff8a4a,
   }),
   wetland: def({
-    id: "wetland", name: "Wetland", base: Tile.Mud,
+    id: "wetland", name: "Wetland", base: Tile.Mud, mapColor: 0x4f5a3a,
     buildingPool: ["cabin"], structureChance: 0.05, props: ["bush", "tree", "corpse"], propDensity: 10,
     lootSource: "forest", lootBias: 0.12, danger: 2,
     landmarks: [{ kind: "sunken_shack", label: "Sunken shack", p: 0.1 }],

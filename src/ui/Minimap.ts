@@ -84,7 +84,10 @@ export class Minimap {
         const sx = ox + (dx + HALF) * CELL;
         const sy = oy + (dy + HALF) * CELL;
         if (seen.has(`${cx},${cy}`)) {
-          this.g.fillStyle(TILE_COLORS[biomeAt(seed, cx, cy).base].fill, 1);
+          // mapColor override keeps water-identity biomes (lake/marsh/wetland)
+          // reading as water/swamp now that their BASE tile is dry land.
+          const b = biomeAt(seed, cx, cy);
+          this.g.fillStyle(b.mapColor ?? TILE_COLORS[b.base].fill, 1);
         } else {
           this.g.fillStyle(0x0c1118, 1); // fog
         }
