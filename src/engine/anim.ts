@@ -95,6 +95,26 @@ export function gaitPose(spec: GaitSpec, phaseRad: number, speedFrac: number, mo
   return { sway, scaleYMul, frameB: s < 0, flapHz: 1.6 + speedFrac * 1.2 };
 }
 
+// --- combat swing styles (Anim PR 4) ---------------------------------------------
+// Pure routing: which swing FX a weapon class earns. Lives here (not fx.ts) so
+// node tests never have to bundle Phaser to assert the mapping.
+
+export type MeleeStyle = "slash" | "thrust" | "smash";
+
+export function meleeStyleFor(wclass: string): MeleeStyle {
+  switch (wclass) {
+    case "spear":
+    case "polearm":
+      return "thrust";
+    case "blunt":
+    case "fist":
+    case "thrown":
+      return "smash";
+    default: // blade / axe / whip — the classic cut
+      return "slash";
+  }
+}
+
 // --- prop sway (consumed by the world-animation PR; constants live here so every
 // motion number in the game is in one file) --------------------------------------
 

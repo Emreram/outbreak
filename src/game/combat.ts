@@ -1,7 +1,7 @@
 import type { GameState } from "../shared/contracts";
 import type { Rng } from "./rng";
 import { equippedMeleeDef, equippedRangedDef } from "./inventory";
-import type { WeaponDef } from "./items/types";
+import type { WeaponClass, WeaponDef } from "./items/types";
 import { cooldownMult, meleeMult, rangedMult } from "./perks";
 
 // Pure combat math: turn the equipped weapon's def + abilities into a resolved hit.
@@ -14,6 +14,7 @@ function val(w: WeaponDef, kind: string): number {
 export interface MeleeHit {
   damage: number;
   crit: boolean;
+  wclass: WeaponClass; // drives the swing FX style (slash/thrust/smash)
   cleave: number; // extra targets in the arc
   knockback: number; // px/s
   bleed: number; // dps
@@ -38,6 +39,7 @@ export function meleeOutcome(state: GameState, rng: Rng): MeleeHit {
   return {
     damage,
     crit,
+    wclass: w.wclass,
     cleave: val(w, "cleave"),
     knockback: val(w, "knockback"),
     bleed,
@@ -50,6 +52,12 @@ export function meleeOutcome(state: GameState, rng: Rng): MeleeHit {
     cooldownMs: Math.round(w.cooldownMs * cooldownMult(state)), // Quick perk
   };
 }
+
+/** Gun classes that physically eject brass (Anim PR 4) — bows, launchers,
+ *  flame and energy weapons throw nothing to the ground. */
+export const BALLISTIC_CLASSES: ReadonlySet<WeaponClass> = new Set([
+  "pistol", "revolver", "smg", "shotgun", "rifle", "dmr", "lmg", "nailgun",
+]);
 
 export interface ShotPlan {
   weapon: WeaponDef;

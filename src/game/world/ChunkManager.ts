@@ -316,6 +316,14 @@ export class ChunkManager {
 
   // --- chests (interactive; owned per loaded chunk) ------------------------
 
+  /** Wind-swayed prop images across loaded chunks (Anim PR 4 — the scene's
+   *  sway pass culls + caps; mirrors activeChests). */
+  activeSwayables(): { img: Phaser.GameObjects.Image; phase: number; kind: string }[] {
+    const out: { img: Phaser.GameObjects.Image; phase: number; kind: string }[] = [];
+    for (const lc of this.loaded.values()) for (const sw of lc.view.swayables) out.push(sw);
+    return out;
+  }
+
   activeChests(): ActiveChest[] {
     const out: ActiveChest[] = [];
     for (const lc of this.loaded.values()) for (const c of lc.chests) out.push(c);

@@ -18,6 +18,7 @@ import { SETPIECES } from "../src/game/world/setpieces";
 import { BIOMES } from "../src/game/world/biomes";
 import { landmarkStyle } from "../src/game/world/landmarks";
 import { propKinds, TWO_FRAME_PROP_KINDS } from "../src/engine/propSprites";
+import { SWAY_SPECS } from "../src/engine/anim";
 import { generateChunk } from "../src/game/worldgen";
 import { WEAPONS } from "../src/game/items/weapons";
 import { ammoItemForType } from "../src/game/items/catalog";
@@ -138,6 +139,9 @@ const bad = (names: Iterable<string>): string[] => [...names].filter((n) => !rea
   // Animation Pass: every two-frame animal kind must be a real drawer too.
   const badFrames = TWO_FRAME_PROP_KINDS.filter((k) => !kinds.has(k));
   ok(badFrames.length === 0, `every two-frame prop kind has a drawer${badFrames.length ? " — MISSING: " + badFrames.join(", ") : ""}`);
+  // …and every wind-swayed kind must exist, or the sway pass animates nothing.
+  const badSway = Object.keys(SWAY_SPECS).filter((k) => !kinds.has(k));
+  ok(badSway.length === 0, `every swaying prop kind has a drawer${badSway.length ? " — MISSING: " + badSway.join(", ") : ""}`);
 }
 
 // 8) Barter: every trade offer asks for AND gives real items. A "give" item that

@@ -2,7 +2,16 @@ import Phaser from "phaser";
 import { SOLID_TILES, Tile, type Building, type ChunkData, type Prop } from "../game/worldgen";
 import { landmarkStyle } from "../game/world/landmarks";
 import { DECOR_CRACK, DECOR_PEBBLE, DECOR_TUFT, TILESET_KEY } from "./textures";
+import { posPhase, SWAY_SPECS } from "./anim";
 import { propKey } from "./propSprites";
+
+/** A wind-swayed prop image (Anim PR 4) — collected per chunk, animated by the
+ *  scene's budgeted sway pass. */
+export interface Swayable {
+  img: Phaser.GameObjects.Image;
+  phase: number;
+  kind: string;
+}
 
 // Renders ONE streamed chunk: a Phaser tilemap layer at the chunk's world
 // origin, its wall/water/tree colliders, building labels, and decorative props.
@@ -19,6 +28,7 @@ export interface ColliderSpec {
 
 export class ChunkView {
   readonly layer: Phaser.Tilemaps.TilemapLayer;
+  readonly swayables: Swayable[] = []; // wind-animated dressing (Anim PR 4)
   private readonly map: Phaser.Tilemaps.Tilemap;
   private readonly extras: Phaser.GameObjects.GameObject[] = [];
   private readonly colliders: Phaser.Physics.Arcade.Collider[] = [];
@@ -52,12 +62,22 @@ export class ChunkView {
     }
 
     // Decorative props (below the player/enemies, above terrain). Searchable props
-    // are skipped here — ChunkManager owns those as interactive sprites.
+    // are skipped here — ChunkManager owns those as interactive sprites. Kinds in
+    // SWAY_SPECS pivot at their ROOT (origin shifted + y compensated so nothing
+    // moves on screen) and register for the scene's wind pass (Anim PR 4).
     for (const p of chunk.props) {
       if (skipProp?.(p)) continue;
       const key = propKey(p.kind);
       if (!scene.textures.exists(key)) continue;
-      this.extras.push(scene.add.image(p.x, p.y, key).setDepth(4));
+      const spec = SWAY_SPECS[p.kind];
+      if (spec) {
+        const img = scene.add.image(p.x, p.y, key).setDepth(4).setOrigin(0.5, spec.originY);
+        img.y = p.y + img.height * (spec.originY - 0.5);
+        this.extras.push(img);
+        this.swayables.push({ img, phase: posPhase(p.x, p.y), kind: p.kind });
+      } else {
+        this.extras.push(scene.add.image(p.x, p.y, key).setDepth(4));
+      }
     }
 
     // Ground micro-decor (PR-E): hash-scattered pebbles / grass tufts / pavement

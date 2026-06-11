@@ -66,7 +66,7 @@ import { scheduleDisaster, disasterPhase, intensityAt, inZone, type LiveDisaster
 import { ammoMult, damageTakenMult, lootLuck, sprintDrainMult, type DamageKind } from "../game/perks";
 import { addItem, ammoReserve, armorDefensePct, autoEquip, equipWeapon, equippedRangedDef, hasItem, quickUseItems, reloadEquipped, removeItem, useConsumable, weaponsInBag } from "../game/inventory";
 import type { WeaponDef } from "../game/items/types";
-import { meleeOutcome, shotOutcome, type MeleeHit, type ShotPlan } from "../game/combat";
+import { meleeOutcome, shotOutcome, BALLISTIC_CLASSES, type MeleeHit, type ShotPlan } from "../game/combat";
 import { rollLoot } from "../game/items/lootTables";
 import { defOf } from "../game/items/catalog";
 import { RARITY_META, rarityGlowSpec } from "../game/items/rarity";
@@ -125,9 +125,17 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, kickPuff, FX_CLOUD, FX_DUST, FX_GLOW, FX_LEAF, FX_VIGNETTE } from "../engine/fx";
-import { applyFrame, frameFor, gaitPose, GAITS, type FrameSet } from "../engine/anim";
+import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, kickPuff, ejectCasing, exhaustPuff, FX_CLOUD, FX_DUST, FX_GLOW, FX_LEAF, FX_VIGNETTE } from "../engine/fx";
+import { applyFrame, frameFor, gaitPose, meleeStyleFor, swayAngle, GAITS, SWAY_SPECS, type FrameSet } from "../engine/anim";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
+
+/** How an enemy died (Anim PR 4) — drives the corpse TRANSITION style only. */
+interface DeathCtx {
+  dir?: { x: number; y: number };
+  crit?: boolean;
+  explosive?: boolean;
+  vehicle?: boolean;
+}
 
 /** A fallen zombie left on the ground — searchable once, fades after a while. */
 interface CorpseRec {
@@ -316,6 +324,10 @@ export class WorldScene extends Phaser.Scene {
   private bankLean = 0;
   private lastMountFacing = 0;
   private lastMountFrameB = false;
+  private exhaustAcc = 0; // vehicle tailpipe cadence (Anim PR 4)
+  // Budgeted prop sway (Anim PR 4): near-camera swayers, rebuilt every 500ms.
+  private swayNear: { img: Phaser.GameObjects.Image; phase: number; kind: string }[] = [];
+  private swayAcc = 9999;
   private readonly trampleHits = new WeakMap<Enemy, number>(); // per-foe trample cooldown
   private ambientAcc = 0;
   private ambientDelay = 30000;
@@ -449,6 +461,8 @@ export class WorldScene extends Phaser.Scene {
     this.mountFrames = undefined;
     this.mountGaitT = 0;
     this.bankLean = 0;
+    this.swayNear = [];
+    this.swayAcc = 9999;
     this.lastLandPx = null;
     this.staminaWarned = false;
     this.ambientAcc = 0;
@@ -1087,6 +1101,7 @@ export class WorldScene extends Phaser.Scene {
     // The flashlight glow tracks the player even while paused.
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
     this.tickAtmosphere(time, delta);
+    this.tickSway(time, delta);
     this.updateBurningFx(time);
     this.terrain.update(delta); // animate water/lava shimmer + shoreline FX
     this.applyLighting(this.dayFraction()); // continuous day/night easing (frozen while paused)
@@ -1551,6 +1566,27 @@ export class WorldScene extends Phaser.Scene {
     if (this.leaves) {
       if (leafOn && !this.leaves.emitting) this.leaves.start();
       else if (!leafOn && this.leaves.emitting) this.leaves.stop();
+    }
+  }
+
+  /** Budgeted prop sway (Anim PR 4): the wind moves the dressing layer. The
+   *  near-camera set rebuilds every 500ms (box cull, hard cap 48); per frame
+   *  it's just N sines + setRotation — microseconds. */
+  private tickSway(time: number, delta: number): void {
+    this.swayAcc += delta;
+    if (this.swayAcc >= 500) {
+      this.swayAcc = 0;
+      const px = this.player.sprite.x;
+      const py = this.player.sprite.y;
+      this.swayNear = this.chunks
+        .activeSwayables()
+        .filter((sw) => sw.img.active && Math.abs(sw.img.x - px) < 700 && Math.abs(sw.img.y - py) < 550)
+        .slice(0, 48);
+    }
+    for (const sw of this.swayNear) {
+      if (!sw.img.active) continue;
+      const spec = SWAY_SPECS[sw.kind];
+      if (spec) sw.img.setRotation(swayAngle(spec, time, sw.phase));
     }
   }
 
@@ -2692,7 +2728,15 @@ export class WorldScene extends Phaser.Scene {
   private driveTick(delta: number): void {
     const av = this.driving;
     if (!av) return;
-    if (this.player.isMoving()) {
+    const moving = this.player.isMoving();
+    // engine exhaust at the tail: a steady chug while rolling, a lazy idle puff
+    this.exhaustAcc += delta;
+    if (this.exhaustAcc >= (moving ? 150 : 600)) {
+      this.exhaustAcc = 0;
+      const back = this.player.sprite.rotation + Math.PI;
+      exhaustPuff(this, this.player.sprite.x + Math.cos(back) * 18, this.player.sprite.y + Math.sin(back) * 18, moving ? 2 : 1);
+    }
+    if (moving) {
       av.data.fuel = Math.max(0, av.data.fuel - delta * 0.0013);
       this.runOverZombies();
     }
@@ -2712,7 +2756,7 @@ export class WorldScene extends Phaser.Scene {
     for (const e of [...this.enemies]) {
       if (Math.hypot(e.sprite.x - px, e.sprite.y - py) < reach) {
         const dead = e.takeDamage(60);
-        if (dead) this.onEnemyKilled(e); // gibs + pool handled there
+        if (dead) this.onEnemyKilled(e, { dir: { x: e.sprite.x - px, y: e.sprite.y - py }, vehicle: true }); // gibs + pool handled there
         else if (e.crushFxReady(now)) {
           // throttled so a slow boss under the wheels doesn't spray every frame
           const rdir = { x: e.sprite.x - px, y: e.sprite.y - py };
@@ -3012,7 +3056,7 @@ export class WorldScene extends Phaser.Scene {
       splatHit(this, e.sprite.x, e.sprite.y, e.blood, { x: e.sprite.x - px, y: e.sprite.y - py }, 0.8);
       kickPuff(this, e.sprite.x, e.sprite.y, { x: (e.sprite.x - px) / n, y: (e.sprite.y - py) / n }); // hooves kick them aside
       this.cameras.main.shake(30, 0.002);
-      if (dead) this.onEnemyKilled(e);
+      if (dead) this.onEnemyKilled(e, { dir: { x: e.sprite.x - px, y: e.sprite.y - py }, vehicle: true });
     }
   }
 
@@ -4929,7 +4973,7 @@ export class WorldScene extends Phaser.Scene {
     const py = this.player.sprite.y;
     this.cameras.main.shake(50, 0.003);
     this.player.lunge();
-    meleeArc(this, px, py, this.player.sprite.rotation);
+    meleeArc(this, px, py, this.player.sprite.rotation, meleeStyleFor(hit.wclass)); // slash/thrust/smash by weapon class
     this.huntNearbyAnimal(hit.range + 16, hit.damage); // a swing also strikes nearby game
 
     const targets = this.enemies
@@ -4969,11 +5013,11 @@ export class WorldScene extends Phaser.Scene {
     }
     if (dead) {
       this.hitstop(hit.crit || execute ? 95 : 60); // longer freeze on a heavy/crit kill
-      this.onEnemyKilled(e);
+      this.onEnemyKilled(e, { dir: ndir, crit: hit.crit || execute });
     }
   }
 
-  private onEnemyKilled(e: Enemy): void {
+  private onEnemyKilled(e: Enemy, ctx?: DeathCtx): void {
     if (this.enemies.indexOf(e) < 0) return; // already reaped this frame
     this.kills += 1;
     this.grantXp("combat", 4);
@@ -4983,7 +5027,7 @@ export class WorldScene extends Phaser.Scene {
     pushRecentEvent(this.state, `Put down a ${e.def.name}.`);
     this.onDeathTraits(e); // exploder / splitter / bloated bursts
     this.dropLoot(e);
-    if (this.leavesCorpse(e)) this.convertToCorpse(e); // body stays — searchable once
+    if (this.leavesCorpse(e)) this.convertToCorpse(e, ctx); // body stays — searchable once
     else this.removeEnemy(e); // burst/fade death animation
   }
 
@@ -4994,8 +5038,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   /** Convert the dead enemy's OWN sprite into a lingering ground corpse (no new
-   *  sprite): physics off, gore-layer depth, capped ring buffer + TTL (U1). */
-  private convertToCorpse(e: Enemy): void {
+   *  sprite): physics off, gore-layer depth, capped ring buffer + TTL (U1).
+   *  The Animation Pass varies the TRANSITION only — flop (default), crumple,
+   *  or a launch on crit/explosive/vehicle kills — every style ends in the
+   *  identical searchable corpse record, so the loot economy can't drift. */
+  private convertToCorpse(e: Enemy, ctx?: DeathCtx): void {
     const i = this.enemies.indexOf(e);
     if (i >= 0) this.enemies.splice(i, 1);
     e.cleanupUi();
@@ -5004,11 +5051,46 @@ export class WorldScene extends Phaser.Scene {
     if (body) body.enable = false;
     this.tweens.killTweensOf(e.sprite);
     e.sprite.setData("corpse", true); // pending hit-flash callbacks must not clear the tint
-    e.sprite
-      .setRotation((Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2 + (Math.random() - 0.5) * 0.5))
-      .setTint(0x767676)
-      .setAlpha(0.92)
-      .setDepth(3); // gore layer: blood decals + bodies sit under props/actors
+    e.sprite.setTint(0x767676).setDepth(3); // gore layer: under props/actors
+    const finalRot = (Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2 + (Math.random() - 0.5) * 0.5);
+    const launch = !!ctx && (ctx.crit || ctx.explosive || ctx.vehicle) && !!ctx.dir;
+    if (launch) {
+      // flung: the blow carries the body 16–22px before it settles
+      const d = Math.hypot(ctx!.dir!.x, ctx!.dir!.y) || 1;
+      const fling = 16 + Math.random() * 6;
+      gibs(this, e.sprite.x, e.sprite.y, e.blood); // extra gore at the impact point
+      this.tweens.add({
+        targets: e.sprite,
+        x: e.sprite.x + (ctx!.dir!.x / d) * fling,
+        y: e.sprite.y + (ctx!.dir!.y / d) * fling,
+        rotation: finalRot,
+        alpha: 0.92,
+        duration: 220,
+        ease: "Back.easeOut",
+        onComplete: () => dustPuff(this, e.sprite.x, e.sprite.y + 6, 3),
+      });
+    } else if (Math.random() < 0.4) {
+      // crumple: folds in on itself where it stands
+      this.tweens.add({
+        targets: e.sprite,
+        rotation: finalRot,
+        scaleX: e.sprite.scaleX * 0.86,
+        scaleY: e.sprite.scaleY * 0.86,
+        alpha: 0.92,
+        duration: 260,
+        ease: "Quad.easeIn",
+      });
+    } else {
+      // flop: keels over with a small dust kick
+      this.tweens.add({
+        targets: e.sprite,
+        rotation: finalRot,
+        alpha: 0.92,
+        duration: 180,
+        ease: "Quad.easeIn",
+        onComplete: () => dustPuff(this, e.sprite.x, e.sprite.y + 6, 2),
+      });
+    }
     this.corpses.push({ sprite: e.sprite, searched: false, diesAt: this.time.now + 90000 });
     while (this.corpses.length > 24) this.fadeCorpse(this.corpses.shift()!); // hard cap
   }
@@ -5151,6 +5233,22 @@ export class WorldScene extends Phaser.Scene {
     if (chest.locked && !this.tryUnlock(chest)) return; // blocked — tryUnlock explains why
     chest.opened = true;
     chest.sprite.setTexture(CHEST_OPEN).clearTint();
+    // lid-pop + a pinch of gold sparks (Anim PR 4) — routing stays untouched
+    chest.sprite.setScale(chest.sprite.scaleX, 0.7);
+    this.tweens.add({ targets: chest.sprite, scaleY: 1, duration: 180, ease: "Back.easeOut" });
+    const gold = fxTexFor(this, FX_DUST, 0xffd23f);
+    const sparks = this.add.particles(chest.sprite.x, chest.sprite.y - 6, gold.key, {
+      speed: { min: 16, max: 42 },
+      angle: { min: 240, max: 300 },
+      lifespan: { min: 280, max: 520 },
+      scale: { start: 0.8, end: 0 },
+      alpha: { start: 0.9, end: 0 },
+      tint: gold.tint,
+      blendMode: Phaser.BlendModes.ADD,
+      emitting: false,
+    }).setDepth(8);
+    sparks.explode(3);
+    this.time.delayedCall(600, () => sparks.destroy());
     chest.badge?.destroy();
     chest.badge = undefined;
     if (!this.state.worldFlags.includes(`chest_${chest.gid}`)) this.state.worldFlags.push(`chest_${chest.gid}`);
@@ -5422,6 +5520,11 @@ export class WorldScene extends Phaser.Scene {
     const py = this.player.sprite.y;
     this.spawnMuzzle(px, py, angle);
     this.cameras.main.shake(40, 0.0018);
+    // recoil kick + ejected brass (ballistic actions only — Anim PR 4)
+    if (!this.tweens.isTweening(this.player.sprite)) {
+      this.tweens.add({ targets: this.player.sprite, scaleX: 1.07, scaleY: 1.07, duration: 70, yoyo: true, ease: "Quad.easeOut" });
+    }
+    if (BALLISTIC_CLASSES.has(plan.weapon.wclass)) ejectCasing(this, px, py, angle);
     const pellets = Math.max(1, plan.pellets);
     for (let i = 0; i < pellets; i++) {
       const jitter = pellets > 1 ? (Math.random() - 0.5) * plan.spread * 2 : (Math.random() - 0.5) * 0.05;
@@ -5519,7 +5622,7 @@ export class WorldScene extends Phaser.Scene {
     if (data.burn > 0) e.applyDot(data.burn, 3000);
     if (data.stunMs > 0) e.applyStun(data.stunMs);
     if (data.knockback > 0) e.knockback(data.dirX, data.dirY, data.knockback, this.time.now);
-    if (dead) this.onEnemyKilled(e);
+    if (dead) this.onEnemyKilled(e, { dir: sdir, crit: data.crit });
   }
 
   private explode(x: number, y: number, data: ProjData): void {
@@ -5533,7 +5636,7 @@ export class WorldScene extends Phaser.Scene {
         if (data.burn > 0) e.applyDot(data.burn, 3000);
         // each caught enemy bleeds its OWN fluid, flung away from the blast
         const bdir = { x: e.sprite.x - x, y: e.sprite.y - y };
-        if (dead) this.onEnemyKilled(e);
+        if (dead) this.onEnemyKilled(e, { dir: bdir, explosive: true });
         else {
           splatHit(this, e.sprite.x, e.sprite.y, e.blood, bdir, 1.2);
           bloodDecal(this, e.sprite.x, e.sprite.y, 0.7, e.blood.pool);
