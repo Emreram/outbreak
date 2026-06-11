@@ -30,14 +30,24 @@ export const GENERATED_KEY_MAP: Record<string, string> = {
 
 /** Queue an optional generated-asset load from a scene's preload(). If the manifest is
  *  present, each mapped PNG is loaded under its runtime key (winning over procedural
- *  art, since generators skip existing textures); if absent, this is a silent no-op. */
+ *  art, since generators skip existing textures); if absent, this is a silent no-op.
+ *  Loaded as TEXT, not JSON: Phaser's JSON loader re-THROWS on a parse failure, and a
+ *  missing manifest comes back as the SPA's index.html on dev/static hosts — which
+ *  used to surface an uncaught SyntaxError on every boot. */
 export function loadGeneratedAssets(scene: Phaser.Scene): void {
-  scene.load.json(GEN_MANIFEST_KEY, `${GENERATED_DIR}/manifest.json`);
+  scene.load.text(GEN_MANIFEST_KEY, `${GENERATED_DIR}/manifest.json`);
   // When the manifest finishes loading, add the listed PNGs to the SAME load run so
   // they're ready by the time create() runs the procedural generators.
   scene.load.once(
-    `filecomplete-json-${GEN_MANIFEST_KEY}`,
-    (_key: string, _type: string, data: unknown) => {
+    `filecomplete-text-${GEN_MANIFEST_KEY}`,
+    (_key: string, _type: string, raw: unknown) => {
+      if (typeof raw !== "string" || !raw.trim().startsWith("{")) return; // absent / HTML fallback
+      let data: unknown;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        return; // malformed manifest — procedural art carries the game
+      }
       if (!data || typeof data !== "object") return;
       for (const [specKey, file] of Object.entries(data as Record<string, string>)) {
         const runtime = GENERATED_KEY_MAP[specKey];

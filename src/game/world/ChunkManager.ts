@@ -265,6 +265,23 @@ export class ChunkManager {
     return null;
   }
 
+  /** Nearest walkable tile centre within `maxR` tiles — a deterministic ring
+   *  scan (nearest first), used as the landing scanner for flying mounts (PR-B). */
+  nearestWalkable(gtx: number, gty: number, maxR: number): { x: number; y: number } | null {
+    if (this.walkable(gtx, gty)) return { x: (gtx + 0.5) * TILE_SIZE, y: (gty + 0.5) * TILE_SIZE };
+    for (let r = 1; r <= maxR; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring perimeter only
+          if (this.walkable(gtx + dx, gty + dy)) {
+            return { x: (gtx + dx + 0.5) * TILE_SIZE, y: (gty + dy + 0.5) * TILE_SIZE };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   /** A walkable point at least `minR` tiles away, sampled within loaded chunks. */
   randomWalkableInView(px: number, py: number, minR: number): { x: number; y: number } | null {
     const gtx = Math.floor(px / TILE_SIZE);

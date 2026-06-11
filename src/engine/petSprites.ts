@@ -7,7 +7,7 @@
 // key that already exists.
 
 import Phaser from "phaser";
-import { PETS, type PetDef, type PetFeature } from "../game/pets";
+import { PETS, isRideable, type PetDef, type PetFeature } from "../game/pets";
 import { RARITY_META } from "../game/items/rarity";
 
 const SIZE = 64;
@@ -21,10 +21,18 @@ export function petTexKey(id: string): string {
 export function petWingKey(id: string): string {
   return `petwing_${id}`;
 }
+export function mountedTexKey(id: string): string {
+  return `mounted_${id}`;
+}
 
 /** Every species id a drawer exists for (mirrors propKinds for the tests). */
 export function petSpriteIds(): string[] {
   return Object.keys(PETS);
+}
+
+/** Every rideable species id a mounted composite is generated for (PR-B). */
+export function mountableSpriteIds(): string[] {
+  return Object.values(PETS).filter((d) => isRideable(d)).map((d) => d.id);
 }
 
 function shade(hex: number, f: number): string {
@@ -202,6 +210,31 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
   return cv;
 }
 
+/** Mounted composite (PR-B): the pet canvas with a rider perched on its back —
+ *  one baked texture per rideable species, rotated whole by the engine's
+ *  rotation-facing exactly like the vehicle sprites. */
+export function drawMountedCanvas(def: PetDef): HTMLCanvasElement {
+  const cv = drawPetCanvas(def);
+  const x = cv.getContext("2d");
+  if (!x) return cv;
+  // The saddle point: just behind the head works for every archetype at 64px.
+  const rx = C - 2;
+  const ry = C - 9;
+  x.fillStyle = "#39536b"; // jacket
+  ellipse(x, rx, ry, 5, 6);
+  x.fillStyle = "#2c4254"; // arm forward to the reins
+  x.fillRect(rx + 2, ry - 2, 8, 2.6);
+  x.fillStyle = "#d9a066"; // head
+  x.beginPath();
+  x.arc(rx, ry - 8, 3.4, 0, Math.PI * 2);
+  x.fill();
+  x.fillStyle = "#4a3826"; // hair
+  x.beginPath();
+  x.arc(rx - 0.8, ry - 8.8, 3, Math.PI * 0.85, Math.PI * 2.05);
+  x.fill();
+  return cv;
+}
+
 /** Wing overlay (flap-animated by scaling): two spread wings, transparent centre. */
 export function drawWingCanvas(def: PetDef): HTMLCanvasElement {
   const cv = document.createElement("canvas");
@@ -236,6 +269,10 @@ export function generatePetTextures(scene: Phaser.Scene): void {
     if (def.look.features?.includes("wings")) {
       const wk = petWingKey(def.id);
       if (!scene.textures.exists(wk)) scene.textures.addCanvas(wk, drawWingCanvas(def));
+    }
+    if (isRideable(def)) {
+      const mk = mountedTexKey(def.id);
+      if (!scene.textures.exists(mk)) scene.textures.addCanvas(mk, drawMountedCanvas(def));
     }
   }
   if (!scene.textures.exists(PET_SHADOW)) {

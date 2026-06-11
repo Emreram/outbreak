@@ -101,9 +101,11 @@ import { Animal, ANIMALS, type AnimalKind } from "../engine/Animal";
 import { Npc } from "../engine/Npc";
 import { Pet } from "../engine/Pet";
 import {
-  activePet, addPet, baitFor, denFlag, denSpecies, feedPet, getPetDef, getPetState,
-  removePet, rollWildPet, setActivePet, tameChance, MAX_WILD_PETS, TAME_MS, type PetDef,
+  activePet, addPet, baitFor, bondedSpeed, denFlag, denSpecies, feedPet, getPetDef, getPetState,
+  isRideable, mountPassesTile, removePet, rollWildPet, setActivePet, tameChance,
+  FLIGHT_DRAIN_PER_S, FLIGHT_REGEN_PER_S, MAX_WILD_PETS, TAME_MS, TRAMPLE_RANK, type PetDef, type PetState,
 } from "../game/pets";
+import { mountedTexKey, PET_SHADOW } from "../engine/petSprites";
 import { PetModal } from "../ui/PetModal";
 import type { ZombieDef } from "../game/enemies/types";
 import { rollAmbientUndead, rollZombie, resetSpawnVariety } from "../game/enemies/spawnTable";
@@ -282,6 +284,19 @@ export class WorldScene extends Phaser.Scene {
   private tame: { pet: Pet; bait: string; done: number; ring: Phaser.GameObjects.Graphics } | null = null;
   private petModal!: PetModal;
   private petOpen = false;
+  // Riding (PR-B): like driving, the player BECOMES the mount. Never persisted —
+  // every load starts dismounted (the active pet restores as a companion).
+  private riding: { def: PetDef; rec: PetState } | null = null;
+  private airborne = false; // flying mount aloft: tile/placeable collision bypassed
+  private mountStamina = 0; // seconds of flight left (fliers only)
+  private mountShadow?: Phaser.GameObjects.Image; // detached shadow = altitude
+  private lastLandPx: { x: number; y: number } | null = null; // breadcrumb: last walkable ground overflown
+  private breadcrumbAcc = 0;
+  private wingbeatAcc = 0;
+  private hoofAcc = 0;
+  private wakeAcc = 0;
+  private staminaWarned = false;
+  private readonly trampleHits = new WeakMap<Enemy, number>(); // per-foe trample cooldown
   private ambientAcc = 0;
   private ambientDelay = 30000;
   private aiNoticeShown = false; // show the "AI offline" toast at most once per run
@@ -407,6 +422,11 @@ export class WorldScene extends Phaser.Scene {
     this.petAcc = 0;
     this.petDenAcc = 0;
     this.tame = null;
+    this.riding = null; // always dismounted on load/restart
+    this.airborne = false;
+    this.mountShadow = undefined;
+    this.lastLandPx = null;
+    this.staminaWarned = false;
     this.ambientAcc = 0;
     this.ambientDelay = 30000; // set properly once state/day is known (below)
     this.aiNoticeShown = false;
@@ -544,8 +564,10 @@ export class WorldScene extends Phaser.Scene {
     this.weaponSprite = this.add.image(startX, startY, heldKey("Fists")).setDepth(11).setScale(0.8).setVisible(false);
 
     // Collider specs applied to every streamed chunk layer (walls/water/trees).
+    // The player's spec carries the mount gate (PR-B): wings clear every tile,
+    // a swimming mount passes open water — everyone else collides normally.
     collide.push(
-      { target: this.player.sprite },
+      { target: this.player.sprite, process: (_o, t) => !mountPassesTile(this.riding?.def.move, this.airborne, t.index) },
       { target: this.enemyGroup },
       { target: this.animalGroup },
       { target: this.npcGroup },
@@ -560,7 +582,7 @@ export class WorldScene extends Phaser.Scene {
     // Blocking placeables (barricades/walls/gates) physically fortify: the player,
     // zombies, and animals all collide with them (Feature 7). The siege tick wears
     // them down as zombies press against them.
-    this.physics.add.collider(this.player.sprite, this.placeGroup);
+    this.physics.add.collider(this.player.sprite, this.placeGroup, undefined, () => !this.airborne); // wings clear barricades too
     this.physics.add.collider(this.enemyGroup, this.placeGroup);
     this.physics.add.collider(this.animalGroup, this.placeGroup);
     this.physics.add.collider(this.npcGroup, this.placeGroup);
@@ -822,13 +844,18 @@ export class WorldScene extends Phaser.Scene {
       const tv = this.touch.vector();
       // Living World: the tile underfoot slows wading/mud/lava, kicks up contact FX,
       // and ignites you on lava (stepping into water elsewhere douses the fire).
-      const terr = terrainEffect(
-        this.chunks.tileAt(Math.floor(this.player.sprite.x / TILE_SIZE), Math.floor(this.player.sprite.y / TILE_SIZE)),
-      );
-      this.player.terrainMult = this.driving ? 1 : terr.mult; // vehicles plough through
-      if (!this.driving) {
+      const tileUnder = this.chunks.tileAt(Math.floor(this.player.sprite.x / TILE_SIZE), Math.floor(this.player.sprite.y / TILE_SIZE));
+      const terr = terrainEffect(tileUnder);
+      const onWater = tileUnder === Tile.Water || tileUnder === Tile.DeepWater || tileUnder === Tile.ShallowWater;
+      // Vehicles plough through; wings clear everything; a swimming mount is at
+      // home in water and awkward on land (PR-B).
+      this.player.terrainMult =
+        this.driving || this.airborne ? 1
+        : this.riding?.def.move === "swim" ? (onWater ? 1 : 0.5)
+        : terr.mult;
+      if (!this.driving && !this.airborne) {
         if (terr.hazard === "lava") ignitePlayer(this.state, 1600, time);
-        else if (terr.stepFx === "splash") soakPlayer(this.state, 2200, time);
+        else if (terr.stepFx === "splash" || (onWater && this.riding !== null)) soakPlayer(this.state, 2200, time);
       }
       if (time < this.grabbedUntil) {
         this.player.sprite.setVelocity(0, 0); // held fast by a grabber
@@ -842,6 +869,7 @@ export class WorldScene extends Phaser.Scene {
       this.reconcileVehicles();
       this.reconcilePlaceables();
       if (this.driving) this.driveTick(delta);
+      if (this.riding) this.rideTick(time, delta);
       if (this.buildMode) this.updateBuildGhost();
       if (this.search) this.tickSearch(delta);
       if (this.tame) this.tickTame(delta);
@@ -911,11 +939,11 @@ export class WorldScene extends Phaser.Scene {
         }
       }
 
-      if (this.player.isMoving() && time - this.lastStep > 300) {
+      if (!this.airborne && this.player.isMoving() && time - this.lastStep > 300) {
         this.lastStep = time;
         const fx = this.player.sprite.x;
         const fy = this.player.sprite.y + 8;
-        if (terr.stepFx === "splash") splashPuff(this, fx, fy, 5);
+        if (terr.stepFx === "splash" || (onWater && this.riding?.def.move === "swim")) splashPuff(this, fx, fy, 5);
         else if (terr.stepFx === "ember") emberPuff(this, fx, fy, 4);
         else if (terr.stepFx === "mud") dustPuff(this, fx, fy, 3);
         else dustPuff(this, fx, fy, 2);
@@ -983,6 +1011,9 @@ export class WorldScene extends Phaser.Scene {
     } else if (!this.dead && this.driving) {
       this.hintText.setText(`Driving — Fuel ${Math.ceil(this.driving.data.fuel)}%  ·  Press E to park`).setVisible(true);
       this.setHighlight(null, time);
+    } else if (!this.dead && this.riding) {
+      this.hintText.setText(this.ridingHint()).setVisible(true);
+      this.setHighlight(null, time);
     } else if (!this.dead && !this.inEncounter) {
       const veh = this.nearestVehicle(52);
       const npc = veh ? null : this.nearestNpc(46);
@@ -996,7 +1027,14 @@ export class WorldScene extends Phaser.Scene {
       const near = veh || npc || ownPet || wildPet || store || chest || scav || boards || farm ? null : this.buildingAt();
       if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
       else if (npc) this.hintText.setText(`Press E to talk to ${npc.name}${npc.kind === "companion" ? " (companion)" : ""}`).setVisible(true);
-      else if (ownPet) this.hintText.setText(`Press E to feed ${this.petLabel(ownPet)} · P for pets`).setVisible(true);
+      else if (ownPet)
+        this.hintText
+          .setText(
+            isRideable(ownPet.def)
+              ? `Press E to ride ${this.petLabel(ownPet)} · P for pets`
+              : `Press E to feed ${this.petLabel(ownPet)} · P for pets`,
+          )
+          .setVisible(true);
       else if (wildPet) this.hintText.setText(this.tameHint(wildPet)).setVisible(true);
       else if (store) this.hintText.setText("Press E to open base storage").setVisible(true);
       else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
@@ -1090,6 +1128,7 @@ export class WorldScene extends Phaser.Scene {
   /** Loot within arm's reach flies into the bag (U3): kill the bob, disable the
    *  body (the tween owns delivery), and run the normal pickup on arrival. */
   private magnetDrops(): void {
+    if (this.airborne) return; // no vacuuming loot from the sky
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
     for (const obj of this.itemGroup.getChildren() as Phaser.Physics.Arcade.Image[]) {
@@ -1163,7 +1202,7 @@ export class WorldScene extends Phaser.Scene {
       } else if (et === Tile.ShallowWater || et === Tile.Mud) {
         this.scaleBodyVelocity(e.sprite, 0.6);
       }
-      if (e.tryAttack(px, py, now) && !this.driving) this.takeHit(e); // in a car you're out of reach
+      if (e.tryAttack(px, py, now) && !this.driving && !this.airborne) this.takeHit(e); // in a car / aloft you're out of reach
       this.enemySpecials(e, px, py, now);
       if (e.tryBleedTrail(now)) bloodTrail(this, e.sprite.x, e.sprite.y, e.blood, e.velocity()); // wounded foes leave a trail
     }
@@ -1943,8 +1982,13 @@ export class WorldScene extends Phaser.Scene {
     this.persist();
   }
 
-  /** E on your own pet: feed it if you carry its food, otherwise open the roster. */
+  /** E on your own pet: ride it if it can carry you; else feed it if you carry
+   *  its food, otherwise open the roster (feeding mounts lives in the P modal). */
   private feedOrManage(pet: Pet): void {
+    if (pet.stateId && isRideable(pet.def)) {
+      this.mountPet(pet);
+      return;
+    }
     const bait = baitFor(pet.def, (item) => hasItem(this.state, item));
     const rec = pet.stateId ? getPetState(this.state, pet.stateId) : undefined;
     if (bait && rec && (pet.hp < pet.def.hp || rec.bond < 5)) {
@@ -1963,6 +2007,11 @@ export class WorldScene extends Phaser.Scene {
 
   private openPetModal(): void {
     if (this.anyModalOpen() || this.dead) return;
+    if (this.riding) {
+      this.showToast("Dismount first (E)");
+      sfx.ui();
+      return;
+    }
     this.petOpen = true;
     this.setGameKeys(false);
     this.petModal.open(this.state);
@@ -2137,6 +2186,15 @@ export class WorldScene extends Phaser.Scene {
   private tryInteract(): void {
     if (this.driving) {
       this.exitVehicle();
+      return;
+    }
+    if (this.riding) {
+      if (this.airborne) {
+        this.showToast("Land first — SPACE");
+        sfx.ui();
+        return;
+      }
+      this.dismountPet();
       return;
     }
     if (this.buildMode) {
@@ -2517,6 +2575,242 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  // --- riding (PR-B): mount/dismount + ground/fly/swim traversal ---------------
+
+  /** Swing into the saddle (vehicle pattern: the player BECOMES the mount). The
+   *  live companion folds into the mounted composite sprite until you step off. */
+  private mountPet(pet: Pet): void {
+    const rec = pet.stateId ? getPetState(this.state, pet.stateId) : undefined;
+    if (!rec || !isRideable(pet.def) || this.riding || this.driving) return;
+    this.cancelTame();
+    this.cancelSearch();
+    this.syncPetStates();
+    this.riding = { def: pet.def, rec };
+    const i = this.pets.indexOf(pet);
+    if (i >= 0) this.pets.splice(i, 1);
+    pet.destroy();
+    const key = mountedTexKey(pet.def.id);
+    if (this.textures.exists(key)) this.player.sprite.setTexture(key);
+    this.player.sprite.setScale(1.05);
+    this.recenterPlayerBody();
+    this.player.speedMult = bondedSpeed(pet.def, rec.bond);
+    this.mountStamina = pet.def.staminaMax;
+    this.staminaWarned = false;
+    this.lastLandPx = { x: this.player.sprite.x, y: this.player.sprite.y };
+    this.weaponSprite.setVisible(false);
+    this.weaponGlow.setVisible(false);
+    this.firing = false;
+    this.cameras.main.zoomTo(1.175, 400, "Quad.easeOut");
+    sfx.mountUp();
+    sfx.petVoice(pet.def.voice);
+    const nm = rec.name ?? pet.def.name;
+    this.showToast(
+      pet.def.move === "fly"
+        ? `Riding ${nm} — SPACE to take off · E to dismount`
+        : pet.def.move === "swim"
+          ? `Riding ${nm} — it can cross open water · E to dismount`
+          : `Riding ${nm} — E to dismount`,
+    );
+    pushRecentEvent(this.state, `Saddled up on ${nm}.`);
+  }
+
+  /** Step down: restore the survivor and put the live companion back beside you.
+   *  A swimming mount dismounted ON water steps you to the nearest dry tile. */
+  private dismountPet(): void {
+    const r = this.riding;
+    if (!r || this.airborne) return; // callers route airborne E to "land first"
+    const { tx, ty } = this.player.tilePos();
+    if (!this.chunks.walkable(tx, ty)) {
+      const spot = this.chunks.nearestWalkable(tx, ty, 6);
+      if (!spot) {
+        this.showToast("Nowhere to step off here!");
+        sfx.ui();
+        return;
+      }
+      this.player.sprite.setPosition(spot.x, spot.y);
+    }
+    this.riding = null;
+    this.player.speedMult = 1;
+    this.player.sprite.setScale(1);
+    this.player.sprite.setTexture(PLAYER_KEY);
+    this.player.setAppearance(this.state.appearance?.color);
+    this.recenterPlayerBody();
+    const pet = this.spawnPetEntity(r.def, this.player.sprite.x + 26, this.player.sprite.y, "owned");
+    pet.stateId = r.rec.id;
+    pet.hp = r.rec.hp;
+    pet.bond = r.rec.bond;
+    this.cameras.main.zoomTo(1.25, 400, "Quad.easeOut");
+    sfx.mountUp();
+    this.showToast("Dismounted.");
+    this.persist();
+  }
+
+  /** Re-centre the 20px arcade body inside whatever frame the player wears now
+   *  (survivor / vehicle / mounted composite — frames differ in size). */
+  private recenterPlayerBody(): void {
+    (this.player.sprite.body as Phaser.Physics.Arcade.Body).setSize(20, 20);
+  }
+
+  /** SPACE on a flier: take wing if grounded, find ground if aloft. */
+  private toggleFlight(): void {
+    const r = this.riding;
+    if (!r || r.def.move !== "fly" || this.dead) return;
+    if (this.airborne) {
+      this.tryLand(false);
+    } else if (this.mountStamina < 1.5) {
+      this.showToast("Its wings are too tired — let it rest a moment.");
+      sfx.ui();
+    } else if (this.buildingAt()) {
+      this.showToast("No room to take off in here.");
+      sfx.ui();
+    } else {
+      this.takeOff();
+    }
+  }
+
+  private takeOff(): void {
+    this.airborne = true;
+    this.staminaWarned = false;
+    this.breadcrumbAcc = 0;
+    dustPuff(this, this.player.sprite.x, this.player.sprite.y + 10, 8);
+    sfx.mountWhoosh();
+    // Altitude illusion: the rider grows a touch and casts a detached shadow.
+    this.tweens.add({ targets: this.player.sprite, scale: 1.22, duration: 300, ease: "Quad.easeOut" });
+    this.mountShadow?.destroy();
+    this.mountShadow = this.add
+      .image(this.player.sprite.x, this.player.sprite.y + 16, PET_SHADOW)
+      .setDepth(3)
+      .setAlpha(0.7);
+    this.cameras.main.zoomTo(1.1, 400, "Quad.easeOut");
+  }
+
+  /** Land on the spot below, else the nearest walkable tile within 6. Refuses
+   *  over open ocean — when forced (exhausted), the breadcrumb of the last
+   *  walkable ground overflown guarantees a dry landing. */
+  private tryLand(forced: boolean): void {
+    const open = this.findLandingSpot();
+    const spot = open && this.landable(open.x, open.y) ? open : forced ? this.lastLandPx : null;
+    if (!spot) {
+      this.showToast(open ? "Can't land on the building!" : "Nowhere to land!");
+      sfx.ui();
+      return;
+    }
+    this.airborne = false;
+    this.player.sprite.setPosition(spot.x, spot.y);
+    this.chunks.ensureAround(spot.x, spot.y);
+    this.tweens.add({ targets: this.player.sprite, scale: 1.05, duration: 240, ease: "Back.easeOut" });
+    this.mountShadow?.destroy();
+    this.mountShadow = undefined;
+    dustPuff(this, spot.x, spot.y + 10, 10);
+    this.cameras.main.shake(forced ? 140 : 70, forced ? 0.006 : 0.003);
+    this.cameras.main.zoomTo(1.175, 400, "Quad.easeOut");
+    sfx.mountUp();
+    if (forced) this.showToast("Exhausted — it lands hard.");
+  }
+
+  /** The player's tile if walkable, else the nearest dry tile within 6. */
+  private findLandingSpot(): { x: number; y: number } | null {
+    const { tx, ty } = this.player.tilePos();
+    if (this.chunks.walkable(tx, ty)) return { x: this.player.sprite.x, y: this.player.sprite.y };
+    return this.chunks.nearestWalkable(tx, ty, 6);
+  }
+
+  /** Open ground only — wings don't put you down through a roof. */
+  private landable(px: number, py: number): boolean {
+    return this.chunks.buildingAt(Math.floor(px / TILE_SIZE), Math.floor(py / TILE_SIZE)) === null;
+  }
+
+  /** Per-frame riding: flight stamina/breadcrumbs/wingbeats aloft; gallop dust,
+   *  hoofbeats and heavy-mount trample on the ground; wake splash on water. */
+  private rideTick(time: number, delta: number): void {
+    const r = this.riding;
+    if (!r) return;
+    const moving = this.player.isMoving();
+    if (this.airborne) {
+      this.mountStamina = Math.max(0, this.mountStamina - (delta / 1000) * FLIGHT_DRAIN_PER_S);
+      this.mountShadow
+        ?.setPosition(this.player.sprite.x, this.player.sprite.y + 16)
+        .setScale(0.85 + Math.sin(time * 0.004) * 0.06);
+      this.breadcrumbAcc += delta;
+      if (this.breadcrumbAcc >= 500) {
+        this.breadcrumbAcc = 0;
+        const { tx, ty } = this.player.tilePos();
+        if (this.chunks.walkable(tx, ty) && this.landable(this.player.sprite.x, this.player.sprite.y)) {
+          this.lastLandPx = { x: this.player.sprite.x, y: this.player.sprite.y };
+        }
+      }
+      this.wingbeatAcc += delta;
+      if (this.wingbeatAcc >= (moving ? 260 : 420)) {
+        this.wingbeatAcc = 0;
+        sfx.wingbeat();
+      }
+      if (!this.staminaWarned && this.mountStamina <= 3) {
+        this.staminaWarned = true;
+        this.showToast("Its wings are tiring — find ground!");
+        this.hurtPulse(0.25);
+        sfx.ui();
+      }
+      if (this.mountStamina <= 0) this.tryLand(true);
+      return;
+    }
+    this.mountStamina = Math.min(r.def.staminaMax, this.mountStamina + (delta / 1000) * FLIGHT_REGEN_PER_S);
+    if (!moving) return;
+    if (r.def.move === "ground") {
+      this.hoofAcc += delta;
+      if (this.hoofAcc >= 190) {
+        this.hoofAcc = 0;
+        sfx.hoofbeat();
+        dustPuff(this, this.player.sprite.x, this.player.sprite.y + 10, 2);
+      }
+      if (RARITY_META[r.def.rarity].rank >= TRAMPLE_RANK) this.mountTrample(time);
+    } else if (r.def.move === "swim") {
+      const { tx, ty } = this.player.tilePos();
+      const t = this.chunks.tileAt(tx, ty);
+      if (t === Tile.Water || t === Tile.DeepWater || t === Tile.ShallowWater) {
+        this.wakeAcc += delta;
+        if (this.wakeAcc >= 300) {
+          this.wakeAcc = 0;
+          splashPuff(this, this.player.sprite.x, this.player.sprite.y + 8, 4);
+          sfx.waterWake();
+        }
+      }
+    }
+  }
+
+  /** Epic+ ground mounts shoulder the dead aside at a run — far gentler than a
+   *  car. Checked every moving frame (a fast pass would slip between coarse
+   *  ticks) but each foe is only struck once per 350ms. */
+  private mountTrample(now: number): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    for (const e of [...this.enemies]) {
+      const len = Math.hypot(e.sprite.x - px, e.sprite.y - py);
+      if (len >= 32) continue;
+      const last = this.trampleHits.get(e) ?? 0;
+      if (now - last < 350) continue;
+      this.trampleHits.set(e, now);
+      const dead = e.takeDamage(8);
+      const n = len || 1;
+      e.knockback((e.sprite.x - px) / n, (e.sprite.y - py) / n, 150, now);
+      splatHit(this, e.sprite.x, e.sprite.y, e.blood, { x: e.sprite.x - px, y: e.sprite.y - py }, 0.8);
+      if (dead) this.onEnemyKilled(e);
+    }
+  }
+
+  /** The always-on saddle hint (mirrors the driving hint). */
+  private ridingHint(): string {
+    const r = this.riding;
+    if (!r) return "";
+    const nm = r.rec.name ?? r.def.name;
+    if (r.def.move === "fly") {
+      const wings = Math.min(100, Math.round((this.mountStamina / r.def.staminaMax) * 100));
+      return this.airborne
+        ? `Flying ${nm} — Wings ${wings}%  ·  SPACE to land`
+        : `Riding ${nm} — Wings ${wings}%  ·  SPACE to fly  ·  E to dismount`;
+    }
+    return `Riding ${nm}  ·  E to dismount`;
+  }
+
   // --- base building (Feature 7): claim → build → siege → storage -------------
 
   /** Stream built-structure sprites + static bodies in/out as the player crosses
@@ -2594,7 +2888,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private toggleBuild(): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.driving) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.driving || this.riding) return;
     this.buildMode = !this.buildMode;
     if (this.buildMode) {
       this.firing = false;
@@ -3839,7 +4133,7 @@ export class WorldScene extends Phaser.Scene {
   /** Rest/sleep (Z): pass time, recover stamina, at the cost of food/water and a
    *  real chance of waking to the dead. Can't rest with enemies close. */
   private restAction(): void {
-    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.driving || this.buildMode) return;
+    if (this.dead || this.inEncounter || this.enacting || this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.driving || this.riding || this.buildMode) return;
     if (this.nearestEnemy(150)) {
       this.showToast("Too dangerous to rest here");
       return;
@@ -4300,6 +4594,13 @@ export class WorldScene extends Phaser.Scene {
       this.driving = null; // step out of the wreck; the run is over
       this.player.speedMult = 1;
     }
+    if (this.riding) {
+      this.riding = null; // thrown from the saddle; the run is over
+      this.airborne = false;
+      this.mountShadow?.destroy();
+      this.mountShadow = undefined;
+      this.player.speedMult = 1;
+    }
     this.buildMode = false;
     this.buildGhost?.setVisible(false);
     if (this.storeOpen) this.storeUi.close();
@@ -4322,6 +4623,11 @@ export class WorldScene extends Phaser.Scene {
   /** Melee swing at the nearest threat (SPACE/F). Weapons hit harder. */
   private meleeAttack(): void {
     if (this.dead || this.inEncounter || this.driving || this.storeOpen || this.tradeOpen || this.buildMode) return;
+    if (this.riding) {
+      // No swinging from the saddle — on a flier, SPACE works the wings instead.
+      if (this.riding.def.move === "fly") this.toggleFlight();
+      return;
+    }
     const now = this.time.now;
     const hit = meleeOutcome(this.state, liveRng);
     if (now - this.lastMelee < hit.cooldownMs || this.state.player.stamina < 4) return;
@@ -4444,7 +4750,8 @@ export class WorldScene extends Phaser.Scene {
 
   private updateWeaponSprite(): void {
     const name = this.activeWeaponName();
-    if (!name) {
+    if (!name || this.driving || this.riding) {
+      // hands are on the wheel / the reins — the weapon stays holstered
       this.weaponSprite.setVisible(false);
       this.weaponGlow.setVisible(false);
       return;
@@ -4512,7 +4819,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private pickupDrop(spr: Phaser.Physics.Arcade.Image): void {
-    if (!spr.active) return;
+    if (!spr.active || this.airborne) return;
     const item = spr.getData("item") as string;
     const qty = (spr.getData("qty") as number) ?? 1;
     addItem(this.state, item, qty);
@@ -4746,7 +5053,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** Fire the equipped gun toward `angle` (one trigger pull). */
   private fire(angle: number): void {
-    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving || this.storeOpen || this.tradeOpen || this.buildMode) return;
+    if (this.dead || this.inEncounter || this.reloading || this.lootOpen || this.driving || this.riding || this.storeOpen || this.tradeOpen || this.buildMode) return;
     const plan = shotOutcome(this.state, liveRng);
     if (!plan) return; // no gun equipped
     const now = this.time.now;
