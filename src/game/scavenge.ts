@@ -11,6 +11,9 @@ export interface SearchableDef {
   ms: number; // hold-to-search duration
   emptyChance: number; // chance the search turns up nothing
   label: string; // hint text ("Hold E to search the …")
+  /** Themed extra drop rolled on a SUCCESSFUL search (e.g. fish at a fishing
+   *  spot, planks from driftwood) — what makes the spot worth seeking out. */
+  bonus?: { item: string; min: number; max: number; p: number };
 }
 
 export const SEARCHABLE_PROPS: Record<string, SearchableDef> = {
@@ -27,6 +30,12 @@ export const SEARCHABLE_PROPS: Record<string, SearchableDef> = {
   locker_prop: { source: "scav_domestic", ms: 1400, emptyChance: 0.5, label: "locker" },
   bookshelf: { source: "scav_domestic", ms: 1300, emptyChance: 0.6, label: "bookshelf" },
   desk: { source: "scav_domestic", ms: 1200, emptyChance: 0.55, label: "desk" },
+  // Shoreline content (Terrain Overhaul PR3): fishing is a real food source —
+  // seek out the water the new terrain actually builds.
+  fishing_spot: { source: "scav_fishing", ms: 1800, emptyChance: 0.3, label: "fishing spot", bonus: { item: "Raw Fish", min: 1, max: 2, p: 0.85 } },
+  rowboat: { source: "scav_fishing", ms: 1600, emptyChance: 0.4, label: "rowboat", bonus: { item: "Raw Fish", min: 1, max: 2, p: 0.6 } },
+  dock: { source: "scav_fishing", ms: 1400, emptyChance: 0.45, label: "dock", bonus: { item: "Raw Fish", min: 1, max: 1, p: 0.5 } },
+  driftwood: { source: "scav_street", ms: 1200, emptyChance: 0.5, label: "driftwood", bonus: { item: "Wood Plank", min: 1, max: 2, p: 0.7 } },
 };
 
 /** Loot table used when looting a fallen zombie's body (converted corpse). */

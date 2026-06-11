@@ -60,6 +60,19 @@ function ok(cond: boolean, msg: string): void {
   ok(s.worldFlags.length === n, "markSearched dedupes");
 }
 
+// Bonus drops (PR3 fishing/driftwood): every bonus is well-formed — a positive
+// quantity range and a probability in (0, 1]. (Item NAMES are cross-checked
+// against the catalog in dataintegrity.test.ts.)
+{
+  const withBonus = Object.entries(SEARCHABLE_PROPS).filter(([, d]) => d.bonus);
+  ok(withBonus.length >= 3, `bonus-carrying searchables exist (${withBonus.length})`);
+  ok(
+    withBonus.every(([, d]) => d.bonus!.min >= 1 && d.bonus!.max >= d.bonus!.min && d.bonus!.p > 0 && d.bonus!.p <= 1),
+    "every bonus has a sane qty range + probability",
+  );
+  ok(SEARCHABLE_PROPS.fishing_spot?.bonus?.item === "Raw Fish", "fishing spots yield fish");
+}
+
 // Playing-dead: deterministic per (seed, gid, day); odds rise with day but cap.
 {
   const a = playsDead("seedA", "10_10_p5", 2);

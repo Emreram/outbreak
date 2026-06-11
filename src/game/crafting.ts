@@ -42,6 +42,7 @@ export const RECIPES: Recipe[] = [
   { id: "water", out: "Water Bottle", outQty: 1, inputs: [{ item: "Empty Bottle", qty: 1 }], category: "Survival", desc: "Bottle clean water." },
   { id: "cooked_meal", out: "Cooked Meal", outQty: 1, inputs: [{ item: "Potato", qty: 1 }, { item: "Carrot", qty: 1 }], station: "campfire", category: "Survival", desc: "A hot meal (big +hunger, +HP)." },
   { id: "cooked_meat", out: "Cooked Meat", outQty: 1, inputs: [{ item: "Raw Meat", qty: 1 }], station: "campfire", category: "Survival", desc: "Cook raw meat — safe + filling." },
+  { id: "cooked_fish", out: "Cooked Fish", outQty: 1, inputs: [{ item: "Raw Fish", qty: 1 }], station: "campfire", category: "Survival", desc: "Grill the day's catch." },
   // --- Tools ---
   { id: "lockpick", out: "Lockpick", outQty: 2, inputs: [{ item: "Scrap Metal", qty: 1 }], category: "Tools", desc: "Pop locked containers." },
   { id: "leather", out: "Leather", outQty: 1, inputs: [{ item: "Hide", qty: 2 }], category: "Tools", desc: "Tan hides into leather." },

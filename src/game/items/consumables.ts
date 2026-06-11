@@ -66,6 +66,9 @@ const FOOD: ConsumableDef[] = [
   // Hunting (Feature 6): raw meat is risky (small infection), cooking makes it great.
   con("Raw Meat", "common", "food", { hunger: 18, infection: 3 }),
   con("Cooked Meat", "uncommon", "food", { hunger: 42, hp: 10 }),
+  // Fishing (Terrain Overhaul PR3): pulled from shore fishing spots / rowboats.
+  con("Raw Fish", "common", "food", { hunger: 16, infection: 2 }),
+  con("Cooked Fish", "uncommon", "food", { hunger: 38, hp: 8 }),
 ];
 
 const DRINK: ConsumableDef[] = [

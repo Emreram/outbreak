@@ -228,6 +228,12 @@ export function generateChunk(seed: string, cx: number, cy: number): ChunkData {
   //      (`:scene:`), so the main stream above stays byte-identical (invariant #1).
   applySetpieces(seed, chunk);
 
+  // 4.6) Shore & nature props (Terrain Overhaul PR3) — reeds/cattails/lilypads on
+  //      marsh pools, driftwood/rowboats/docks/fishing spots on lake/river/coast
+  //      shores, flower patches in forest clearings. APPEND-ONLY on a FORKED rng
+  //      (`:shore:`), gid namespace `_sh<i>` (invariants #1 + #2).
+  applyShoreProps(seed, chunk);
+
   // 5) Anti-emptiness: guarantee at least one interactable per chunk.
   if (buildings.length === 0 && containers.length === 0) {
     const t = walkableLocal(grid, size, rng);
@@ -581,6 +587,88 @@ function paintUrbanFringe(grid: Tile[][], seed: string, cx: number, cy: number, 
       if (isWaterish(t) || t === Tile.Foam) t = Tile.Sand; // city fringe stays dry
       else if (t === Tile.Lava || t === Tile.Basalt) t = Tile.Scorched;
       grid[ly][lx] = t;
+    }
+  }
+}
+
+// --- shore & nature props (Terrain Overhaul PR3) -----------------------------
+
+/** Water-edge + clearing dressing: the coherent water bodies from terrainField
+ *  get LIFE — reeds and lilypads on marsh pools, driftwood/rowboats/docks and
+ *  searchable fishing spots along lake/river/coast shores, flower patches in
+ *  forest glades. Forked rng + appended gids keep the main stream untouched. */
+function applyShoreProps(seed: string, chunk: ChunkData): void {
+  const { cx, cy, size, tileSize, grid, props } = chunk;
+  const id = chunk.biome;
+  if (id === "ocean" || biomeAt(seed, cx, cy).urban) return;
+  const rng = createRng(`${seed}:shore:${cx}:${cy}`);
+  const gx0 = cx * size;
+  const gy0 = cy * size;
+  let si = 0;
+  const add = (kind: string, lx: number, ly: number): void => {
+    props.push({ kind, x: (gx0 + lx + 0.5) * tileSize, y: (gy0 + ly + 0.5) * tileSize, gid: `${cx}_${cy}_sh${si++}` });
+  };
+
+  // One scan: dry ground hugging open water (banks) + shallow tiles (in-water spots).
+  const banks: Array<{ x: number; y: number }> = [];
+  const shallows: Array<{ x: number; y: number }> = [];
+  for (let ly = 1; ly < size - 1; ly++) {
+    for (let lx = 1; lx < size - 1; lx++) {
+      const t = grid[ly][lx];
+      if (t === Tile.ShallowWater) {
+        shallows.push({ x: lx, y: ly });
+        continue;
+      }
+      if (!isWaterish(t) && !isSolid(t) && t !== Tile.Floor && t !== Tile.Foam && t !== Tile.Bridge) {
+        const n = [grid[ly][lx - 1], grid[ly][lx + 1], grid[ly - 1][lx], grid[ly + 1][lx]];
+        if (n.some((m) => isWaterish(m))) banks.push({ x: lx, y: ly });
+      }
+    }
+  }
+  const takeBank = (): { x: number; y: number } | null => (banks.length ? banks.splice(rng.int(0, banks.length - 1), 1)[0] : null);
+  const takeShallow = (): { x: number; y: number } | null => (shallows.length ? shallows.splice(rng.int(0, shallows.length - 1), 1)[0] : null);
+
+  if (id === "marsh" || id === "wetland") {
+    const reeds = rng.int(3, 7);
+    for (let i = 0; i < reeds; i++) {
+      const t = takeBank();
+      if (!t) break;
+      add(rng.chance(0.5) ? "reeds" : "cattail", t.x, t.y);
+    }
+    const pads = rng.int(2, 5);
+    for (let i = 0; i < pads; i++) {
+      const t = takeShallow();
+      if (!t) break;
+      add("lilypad", t.x, t.y);
+    }
+  } else if (id === "lake" || id === "riverbank" || id === "coast") {
+    const wood = rng.int(0, 2);
+    for (let i = 0; i < wood; i++) {
+      const t = takeBank();
+      if (!t) break;
+      add("driftwood", t.x, t.y);
+    }
+    if (rng.chance(0.06)) {
+      const t = takeBank();
+      if (t) add("rowboat", t.x, t.y);
+    }
+    if (rng.chance(0.05)) {
+      const dockT = takeBank();
+      const spotT = takeShallow();
+      if (dockT) add("dock", dockT.x, dockT.y);
+      if (spotT) add("fishing_spot", spotT.x, spotT.y);
+    }
+  }
+
+  // Flower patches in forest/park clearings (the `:clear` field from PR1).
+  if (id === "forest" || id === "dense_woods" || id === "parkland" || id === "grassland") {
+    for (let tries = 0, made = 0; tries < 14 && made < 3; tries++) {
+      const lx = rng.int(2, size - 3);
+      const ly = rng.int(2, size - 3);
+      if (grid[ly][lx] !== Tile.Grass) continue;
+      if (field(`${seed}:clear`, gx0 + lx, gy0 + ly, 70, 2) <= 0.74) continue;
+      add("flowers", lx, ly);
+      made++;
     }
   }
 }

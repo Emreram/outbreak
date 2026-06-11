@@ -81,15 +81,16 @@ const bad = (names: Iterable<string>): string[] => [...names].filter((n) => !rea
   ok(missing.length === 0, `placeable costs all real${missing.length ? " — MISSING: " + missing.join(", ") : ""}`);
 }
 
-// 5) Hunting + vehicles + recruiting hand out real items.
+// 5) Hunting + vehicles + recruiting + scavenge bonuses hand out real items.
 {
   const names = new Set<string>();
   for (const a of Object.values(ANIMALS)) for (const d of a.drops) names.add(d.item);
   for (const p of CAR_PARTS) names.add(p);
   names.add("Fuel Canister");
   for (const tier of Object.keys(NPC_TIERS)) for (const c of recruitCost(tier).items) names.add(c.item);
+  for (const d of Object.values(SEARCHABLE_PROPS)) if (d.bonus) names.add(d.bonus.item);
   const missing = bad(names);
-  ok(missing.length === 0, `animal drops / car parts / recruit costs all real${missing.length ? " — MISSING: " + missing.join(", ") : ""}`);
+  ok(missing.length === 0, `animal drops / car parts / recruit costs / scavenge bonuses all real${missing.length ? " — MISSING: " + missing.join(", ") : ""}`);
 }
 
 // 6) Backgrounds: loadout items real, perks valid.
