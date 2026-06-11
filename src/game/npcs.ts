@@ -97,7 +97,9 @@ const NAMES = [
 ];
 
 // What survivors will accept in barter (common staples), with a rough unit value.
-const NEEDS = ["Canned Food", "Water Bottle", "Scrap Metal", "Cloth", "Ammo"] as const;
+// Every entry MUST be a real catalog item name — "Ammo" (no such item) once made
+// one offer in five permanently unacceptable (locked by dataintegrity.test.ts).
+const NEEDS = ["Canned Food", "Water Bottle", "Scrap Metal", "Cloth", "9mm Rounds"] as const;
 
 /** Which faction tends to hold a biome (friendly survivors). */
 export function factionForBiome(biome: string): Faction {
