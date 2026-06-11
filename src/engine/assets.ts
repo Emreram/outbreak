@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { propKey } from "./propSprites";
+import { PET_IDS } from "../game/pets";
 
 // AssetManifest (Feature 3): the single swap-point between AI-generated PNGs and the
 // always-on procedural art. The asset pipeline (tools/gen-assets.ts) writes
@@ -26,7 +27,13 @@ export const GENERATED_KEY_MAP: Record<string, string> = {
   vehicle_pickup: propKey("veh_pickup"),
   vehicle_van: propKey("veh_van"),
   animal_deer: propKey("animal_deer"),
+  animal_chicken: propKey("animal_chicken"),
+  animal_cow: propKey("animal_cow"),
 };
+
+// Every pet species can be art-overridden too (PR-E): spec key pet_<id> maps to
+// the live texture key petSprites uses (the same string by construction).
+for (const id of PET_IDS) GENERATED_KEY_MAP[`pet_${id}`] = `pet_${id}`;
 
 /** Queue an optional generated-asset load from a scene's preload(). If the manifest is
  *  present, each mapped PNG is loaded under its runtime key (winning over procedural

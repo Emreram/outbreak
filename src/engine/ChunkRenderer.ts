@@ -1,7 +1,7 @@
 import Phaser from "phaser";
-import { SOLID_TILES, type Building, type ChunkData, type Prop } from "../game/worldgen";
+import { SOLID_TILES, Tile, type Building, type ChunkData, type Prop } from "../game/worldgen";
 import { landmarkStyle } from "../game/world/landmarks";
-import { TILESET_KEY } from "./textures";
+import { DECOR_CRACK, DECOR_PEBBLE, DECOR_TUFT, TILESET_KEY } from "./textures";
 import { propKey } from "./propSprites";
 
 // Renders ONE streamed chunk: a Phaser tilemap layer at the chunk's world
@@ -58,6 +58,30 @@ export class ChunkView {
       const key = propKey(p.kind);
       if (!scene.textures.exists(key)) continue;
       this.extras.push(scene.add.image(p.x, p.y, key).setDepth(4));
+    }
+
+    // Ground micro-decor (PR-E): hash-scattered pebbles / grass tufts / pavement
+    // cracks so plain fields stop reading as flat colour. Pure function of the
+    // GLOBAL tile coords (deterministic, seam-free) and never persisted/collided.
+    if (scene.textures.exists(DECOR_TUFT)) {
+      for (let ly = 0; ly < chunk.size; ly++) {
+        for (let lx = 0; lx < chunk.size; lx++) {
+          const gx = chunk.cx * chunk.size + lx;
+          const gy = chunk.cy * chunk.size + ly;
+          const h = (((gx * 73856093) ^ (gy * 19349663)) >>> 0) % 1000;
+          if (h >= 6) continue; // ~14 per 48×48 chunk
+          const t = chunk.grid[ly][lx];
+          const key =
+            t === Tile.Grass || t === Tile.TallGrass ? DECOR_TUFT
+            : t === Tile.Dirt || t === Tile.Sand || t === Tile.Trail || t === Tile.Scorched ? DECOR_PEBBLE
+            : t === Tile.Road || t === Tile.Pavement || t === Tile.Sidewalk ? DECOR_CRACK
+            : null;
+          if (!key) continue;
+          const jx = ((gx * 2654435761) >>> 16) % chunk.tileSize;
+          const jy = ((gy * 2246822519) >>> 16) % chunk.tileSize;
+          this.extras.push(scene.add.image(px + lx * chunk.tileSize + jx, py + ly * chunk.tileSize + jy, key).setDepth(1));
+        }
+      }
     }
 
     // Landmark set-pieces — a visible anchor prop + a labelled marker so the

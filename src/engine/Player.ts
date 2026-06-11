@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { PLAYER_KEY } from "./textures";
+import { PLAYER_KEY, PLAYER_WALK_A, PLAYER_WALK_B } from "./textures";
 import { fxTexFor } from "./fx";
 import { PLAYER_SPEED, TILE_SIZE } from "../game/constants";
 
@@ -26,6 +26,11 @@ export class Player {
   /** Terrain multiplier — 1 on dry ground, <1 wading shallow water / mud / lava
    *  (set each frame by the scene from the tile underfoot; Living World). */
   terrainMult = 1;
+  /** True while a vehicle/mount owns the sprite's texture — the 2-frame walk
+   *  cycle (PR-E) must not stomp it. */
+  artLocked = false;
+  // The current frame trio (re-pointed at tinted copies by setAppearance).
+  private frames = { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B };
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     this.sprite = scene.physics.add.sprite(x, y, PLAYER_KEY);
@@ -90,16 +95,31 @@ export class Player {
       this.sprite.setVelocity(0, 0);
       this.sprite.setRotation(this.facing);
     }
+
+    // Two-frame walk cycle (PR-E): arms swing with the same phase as the body
+    // sway; idle returns to the even frame. Vehicles/mounts lock the texture.
+    if (!this.artLocked) {
+      const want = len > 0 ? (Math.sin(this.walkT * 0.35) >= 0 ? this.frames.a : this.frames.b) : this.frames.idle;
+      if (this.sprite.texture.key !== want && this.sprite.scene.textures.exists(want)) {
+        this.sprite.setTexture(want);
+      }
+    }
   }
 
   /** Tint the survivor sprite (character-creation appearance). fxTexFor bakes the
-   *  colour into a texture copy on the Canvas renderer, which ignores live tints. */
+   *  colour into a texture copy on the Canvas renderer, which ignores live tints —
+   *  all three walk frames get their own tinted copy so the cycle stays coloured. */
   setAppearance(color?: number): void {
+    const scene = this.sprite.scene;
     if (color !== undefined) {
-      const t = fxTexFor(this.sprite.scene, PLAYER_KEY, color);
-      if (this.sprite.scene.textures.exists(t.key)) this.sprite.setTexture(t.key);
-      this.sprite.setTint(t.tint);
+      const i = fxTexFor(scene, PLAYER_KEY, color);
+      const a = fxTexFor(scene, PLAYER_WALK_A, color);
+      const b = fxTexFor(scene, PLAYER_WALK_B, color);
+      this.frames = { idle: i.key, a: a.key, b: b.key };
+      if (scene.textures.exists(i.key)) this.sprite.setTexture(i.key);
+      this.sprite.setTint(i.tint);
     } else {
+      this.frames = { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B };
       this.sprite.setTexture(PLAYER_KEY).clearTint();
     }
   }

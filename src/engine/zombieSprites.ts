@@ -14,6 +14,11 @@ export function zombieTextureKey(id: string): string {
   return "zsprite_" + id;
 }
 
+/** The alternate shamble frame (PR-E): arms swung opposite + a head sway. */
+export function zombieFrameBKey(id: string): string {
+  return "zsprite_" + id + "_b";
+}
+
 interface Dims {
   bw: number;
   bh: number;
@@ -57,7 +62,9 @@ function ellipse(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number
   ctx.fill();
 }
 
-function drawZombieCanvas(def: ZombieDef): HTMLCanvasElement {
+/** pose 0 = base; pose 1 = the alternate shamble frame (arms swung opposite,
+ *  head swayed) — toggled by Enemy while moving (PR-E). */
+function drawZombieCanvas(def: ZombieDef, pose: 0 | 1 = 0): HTMLCanvasElement {
   const cv = document.createElement("canvas");
   cv.width = SIZE;
   cv.height = SIZE;
@@ -74,16 +81,22 @@ function drawZombieCanvas(def: ZombieDef): HTMLCanvasElement {
   ctx.fillStyle = "rgba(0,0,0,0.25)";
   ellipse(ctx, C, C + d.bh * 0.7, d.bw + 2, d.bh * 0.5);
 
-  // arms reaching forward
+  // arms reaching forward (the B frame drags one back and thrusts the other)
   ctx.strokeStyle = shade(skin, 0.8);
   ctx.lineWidth = L.body === "behemoth" || L.body === "brute" ? 6 : 4;
   ctx.lineCap = "round";
   for (const s of [-1, 1]) {
+    const swing = pose === 1 ? (s === -1 ? 1 : -1) : 0;
     ctx.beginPath();
     ctx.moveTo(C + d.bw * 0.3, C + s * d.bh * 0.5);
-    ctx.lineTo(C + d.bw * 0.3 + d.armLen, C + s * d.bh * 0.25);
+    ctx.lineTo(
+      C + d.bw * 0.3 + d.armLen + swing * Math.max(2, d.armLen * 0.3),
+      C + s * d.bh * (0.25 - swing * 0.16),
+    );
     ctx.stroke();
   }
+  // the B frame sways the head a hair off-axis — the lurch reads even at distance
+  if (pose === 1) ctx.translate(0, -1.2);
 
   // body
   ctx.fillStyle = hex(skin);
@@ -194,11 +207,12 @@ function drawZombieCanvas(def: ZombieDef): HTMLCanvasElement {
   return cv;
 }
 
-/** Generate a texture for every zombie type. Idempotent; run once at boot. */
+/** Generate textures for every zombie type (both shamble frames). Idempotent. */
 export function generateZombieTextures(scene: Phaser.Scene): void {
   for (const def of allZombies()) {
     const key = zombieTextureKey(def.id);
-    if (scene.textures.exists(key)) continue;
-    scene.textures.addCanvas(key, drawZombieCanvas(def));
+    if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawZombieCanvas(def));
+    const kb = zombieFrameBKey(def.id);
+    if (!scene.textures.exists(kb)) scene.textures.addCanvas(kb, drawZombieCanvas(def, 1));
   }
 }
