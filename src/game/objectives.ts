@@ -4,13 +4,14 @@ import { biomeAt } from "./world/biomes";
 import { findSpawnChunk } from "./world/spawn";
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "./constants";
 
-// Opening arc (Expansion U3): the first COMPLETABLE objective chain — a short,
-// guided first day (arm yourself → scavenge → reach a marked safehouse → survive
-// to dawn → reward). Pure reducer over a dumb persisted cursor
-// (GameState.objectives = {chain, step, progress, done?}); definitions live here
-// so saves stay tiny and old saves (no cursor) simply show the plain run goal.
+// Opening arc (Expansion U3, extended by Companions PR-D): the first COMPLETABLE
+// objective chain — a short, guided first day (arm yourself → scavenge → befriend
+// the stray → reach a marked safehouse → survive to dawn → reward). Pure reducer
+// over a dumb persisted cursor (GameState.objectives = {chain, step, progress,
+// done?}); definitions live here so saves stay tiny and old saves (no cursor)
+// simply show the plain run goal.
 
-export type ObjectiveEventKind = "weapon_equipped" | "container_searched" | "chunk_entered" | "dawn";
+export type ObjectiveEventKind = "weapon_equipped" | "container_searched" | "pet_tamed" | "chunk_entered" | "dawn";
 
 export interface ObjectiveEvent {
   kind: ObjectiveEventKind;
@@ -20,7 +21,7 @@ export interface ObjectiveEvent {
 
 export interface ObjectiveStep {
   id: string;
-  kind: "equip_weapon" | "search_n" | "reach_marker" | "survive_dawn";
+  kind: "equip_weapon" | "search_n" | "tame_pet" | "reach_marker" | "survive_dawn";
   need: number;
   label: (progress: number, need: number) => string;
 }
@@ -28,6 +29,7 @@ export interface ObjectiveStep {
 export const OPENING_CHAIN: readonly ObjectiveStep[] = [
   { id: "arm", kind: "equip_weapon", need: 1, label: () => "Arm yourself — equip any weapon" },
   { id: "scavenge", kind: "search_n", need: 4, label: (p, n) => `Scavenge the area — search containers or wrecks (${p}/${n})` },
+  { id: "befriend", kind: "tame_pet", need: 1, label: () => "Befriend the stray — hold E near it with food in your pack" },
   { id: "safehouse", kind: "reach_marker", need: 1, label: () => "Reach the marked safehouse (M for map)" },
   { id: "dawn", kind: "survive_dawn", need: 1, label: () => "Survive until dawn" },
 ];
@@ -70,6 +72,7 @@ export function notifyObjective(state: GameState, ev: ObjectiveEvent): Objective
   const matches =
     (step.kind === "equip_weapon" && ev.kind === "weapon_equipped") ||
     (step.kind === "search_n" && ev.kind === "container_searched") ||
+    (step.kind === "tame_pet" && ev.kind === "pet_tamed") ||
     (step.kind === "survive_dawn" && ev.kind === "dawn") ||
     (step.kind === "reach_marker" &&
       ev.kind === "chunk_entered" &&
@@ -84,12 +87,29 @@ export function notifyObjective(state: GameState, ev: ObjectiveEvent): Objective
 
   o.step += 1;
   o.progress = 0;
+  skipSatisfiedSteps(state); // a roster already holding a pet skips "befriend" silently
   if (o.step >= OPENING_CHAIN.length) {
     o.done = true;
     return { advanced: true, stepDone: true, chainDone: true, toast: "Opening objective complete!" };
   }
   const next = OPENING_CHAIN[o.step];
   return { advanced: true, stepDone: true, chainDone: false, toast: `Objective: ${next.label(0, next.need)}` };
+}
+
+/** Skip steps the run has already satisfied (or can no longer teach): the
+ *  befriend step bows out if a pet is on the roster, or for cursors carried
+ *  past day 0 — including OLD saves whose persisted index predates the step. */
+export function skipSatisfiedSteps(state: GameState): void {
+  const o = state.objectives;
+  if (!o || o.done || o.chain !== "opening") return;
+  while (
+    OPENING_CHAIN[o.step]?.kind === "tame_pet" &&
+    ((state.pets?.length ?? 0) > 0 || state.day > 0)
+  ) {
+    o.step += 1;
+    o.progress = 0;
+  }
+  if (o.step >= OPENING_CHAIN.length) o.done = true;
 }
 
 /** The deterministic safehouse chunk for this run: 2–3 chunks from spawn, on a
