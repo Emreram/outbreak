@@ -3,6 +3,7 @@ import { TILE_SIZE } from "../game/constants";
 import { ASSET_PATHS, generatePlayerTexture, generateSurvivorNpcTexture, generateTileTexture } from "../engine/textures";
 import { loadGeneratedAssets } from "../engine/assets";
 import { generatePropTextures } from "../engine/propSprites";
+import { generatePetTextures } from "../engine/petSprites";
 import { generateFxTextures } from "../engine/fx";
 import { generateAllIcons, generateLootWorldTextures } from "../engine/icons";
 import { generateZombieTextures } from "../engine/zombieSprites";
@@ -30,6 +31,7 @@ export class BootScene extends Phaser.Scene {
     generatePlayerTexture(this, TILE_SIZE);
     generateSurvivorNpcTexture(this);
     generatePropTextures(this);
+    generatePetTextures(this);
     generateFxTextures(this);
     generateAllIcons(this);
     generateLootWorldTextures(this);

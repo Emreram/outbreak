@@ -24,6 +24,7 @@ import { ammoItemForType } from "../src/game/items/catalog";
 import { MockProvider } from "../src/ai/mockProvider";
 import { SCENARIO_THEMES } from "../src/shared/contracts";
 import { generateOffers } from "../src/game/npcs";
+import { PETS } from "../src/game/pets";
 import { createRng } from "../src/game/rng";
 
 const store = new Map<string, string>();
@@ -81,7 +82,8 @@ const bad = (names: Iterable<string>): string[] => [...names].filter((n) => !rea
   ok(missing.length === 0, `placeable costs all real${missing.length ? " — MISSING: " + missing.join(", ") : ""}`);
 }
 
-// 5) Hunting + vehicles + recruiting + scavenge bonuses hand out real items.
+// 5) Hunting + vehicles + recruiting + scavenge bonuses + pet diets hand out /
+//    consume real items.
 {
   const names = new Set<string>();
   for (const a of Object.values(ANIMALS)) for (const d of a.drops) names.add(d.item);
@@ -89,8 +91,9 @@ const bad = (names: Iterable<string>): string[] => [...names].filter((n) => !rea
   names.add("Fuel Canister");
   for (const tier of Object.keys(NPC_TIERS)) for (const c of recruitCost(tier).items) names.add(c.item);
   for (const d of Object.values(SEARCHABLE_PROPS)) if (d.bonus) names.add(d.bonus.item);
+  for (const p of Object.values(PETS)) for (const d of p.diet) names.add(d);
   const missing = bad(names);
-  ok(missing.length === 0, `animal drops / car parts / recruit costs / scavenge bonuses all real${missing.length ? " — MISSING: " + missing.join(", ") : ""}`);
+  ok(missing.length === 0, `animal drops / car parts / recruit costs / scavenge bonuses / pet diets all real${missing.length ? " — MISSING: " + missing.join(", ") : ""}`);
 }
 
 // 6) Backgrounds: loadout items real, perks valid.

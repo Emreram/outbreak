@@ -326,6 +326,59 @@ class Sfx {
     this.tone(196, 0.55, "sawtooth", 0.06, 92);
     this.tone(207, 0.55, "sawtooth", 0.045, 98);
   }
+
+  // --- pets (PR-A): species voices + taming feedback -------------------------
+
+  /** A pet calls out — one synth recipe per voice family, positional-capable. */
+  petVoice(voice: string, pan = 0, dist = 0): void {
+    const o = { pan, dist };
+    switch (voice) {
+      case "dog":
+        this.tone(380, 0.09, "square", 0.06, 240, o);
+        setTimeout(() => this.tone(360, 0.08, "square", 0.05, 230, o), 110);
+        break;
+      case "cat":
+        this.tone(520, 0.18, "sine", 0.05, 700, o);
+        break;
+      case "horse":
+        this.tone(300, 0.16, "sawtooth", 0.05, 520, o);
+        setTimeout(() => this.tone(520, 0.18, "sawtooth", 0.045, 260, o), 150);
+        this.noise(0.12, 700, 0.03, o);
+        break;
+      case "bird":
+        this.tone(2200, 0.05, "sine", 0.04, 2600, o);
+        setTimeout(() => this.tone(1800, 0.06, "sine", 0.035, 2300, o), 90);
+        break;
+      case "wolf":
+        this.tone(320, 0.6, "sine", 0.05, 480, o);
+        break;
+      case "drake":
+        this.tone(900, 0.28, "sawtooth", 0.06, 400, o);
+        this.noise(0.18, 1500, 0.03, o);
+        break;
+      case "serpent":
+        this.noise(0.4, 2400, 0.04, o);
+        break;
+      default: // mythic — a soft otherworldly triad
+        this.tone(392, 0.5, "sine", 0.035, 392, o);
+        this.tone(494, 0.5, "sine", 0.03, 494, o);
+        this.tone(587, 0.5, "sine", 0.025, 587, o);
+    }
+  }
+
+  /** Bond formed — a rising warm triad + chime. */
+  tameSuccess(): void {
+    this.tone(392, 0.14, "sine", 0.05, 392);
+    setTimeout(() => this.tone(494, 0.14, "sine", 0.05, 494), 110);
+    setTimeout(() => this.tone(587, 0.22, "sine", 0.05, 587), 220);
+    setTimeout(() => this.tone(1175, 0.3, "sine", 0.035, 1175), 330);
+  }
+
+  /** The offer is refused — a small falling minor second. */
+  tameFail(): void {
+    this.tone(440, 0.12, "sine", 0.045, 415);
+    setTimeout(() => this.tone(415, 0.18, "sine", 0.04, 392), 120);
+  }
 }
 
 export const sfx = new Sfx();

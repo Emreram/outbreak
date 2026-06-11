@@ -6,6 +6,7 @@ import { rarityCss, RARITY_META } from "../game/items/rarity";
 import { getBackground } from "../game/backgrounds";
 import { weatherName } from "../game/weather";
 import { defOf } from "../game/items/catalog";
+import { PETS } from "../game/pets";
 import { iconKey } from "../engine/icons";
 
 // On-screen HUD (CLAUDE.md §13 Phase 3), decluttered to essentials only: the
@@ -52,6 +53,7 @@ export class HUD {
   private lastClock = ""; // last HH:MM seen — reused when a refresh omits it, so the time never flickers
   private readonly valueTexts: Phaser.GameObjects.Text[] = [];
   private readonly armorText: Phaser.GameObjects.Text;
+  private readonly petText!: Phaser.GameObjects.Text;
   private readonly debugText: Phaser.GameObjects.Text;
   // Active-weapon panel (top-right).
   private readonly apBg: Phaser.GameObjects.Graphics;
@@ -84,6 +86,7 @@ export class HUD {
       this.valueTexts.push(mk(BAR_X + BAR_W + 8, y - 1, "11px", "#f4efe2"));
     });
     this.armorText = mk(PANEL_X + 8, 0, "11px", "#9fb3c8");
+    this.petText = mk(PANEL_X + 8, 0, "11px", "#cdd9e5").setVisible(false); // active companion chip (PR-A)
     this.debugText = mk(PANEL_X + 8, 0, "10px", "#5f7488");
 
     // Active-weapon panel (top-right), rendered each frame from the active selection.
@@ -132,7 +135,22 @@ export class HUD {
     const armorParts = [body ? `B:${body.defense}` : "B:—", head ? `H:${head.defense}` : "H:—"].join(" ");
     this.armorText.setPosition(PANEL_X + 8, armorY).setText(`ARMOR ${total}%  (${armorParts})`);
 
-    const dY = armorY + this.armorText.height + 6;
+    // Active-pet chip: who's with you, how they're holding up, how much they love you.
+    const petY = armorY + this.armorText.height + 4;
+    const pet = (s.pets ?? []).find((p) => p.active);
+    if (pet) {
+      const def = PETS[pet.species];
+      const hearts = "♥".repeat(Math.floor(pet.bond)) + "♡".repeat(5 - Math.floor(pet.bond));
+      this.petText
+        .setPosition(PANEL_X + 8, petY)
+        .setText(`🐾 ${pet.name ?? def?.name ?? pet.species}  ${Math.max(0, Math.round(pet.hp))}/${def?.hp ?? "?"}hp  ${hearts}`)
+        .setColor(def ? RARITY_META[def.rarity].css : "#cdd9e5")
+        .setVisible(true);
+    } else {
+      this.petText.setVisible(false).setPosition(PANEL_X + 8, petY).setText("");
+    }
+
+    const dY = petY + (pet ? this.petText.height + 4 : 0) + 2;
     this.debugText
       .setPosition(PANEL_X + 8, dY)
       .setText(`${debug.fps} fps · ${debug.tx},${debug.ty} · GM:${debug.brain}`);

@@ -99,6 +99,12 @@ import { PLAYER_KEY } from "../engine/textures";
 import { Enemy } from "../engine/Enemy";
 import { Animal, ANIMALS, type AnimalKind } from "../engine/Animal";
 import { Npc } from "../engine/Npc";
+import { Pet } from "../engine/Pet";
+import {
+  activePet, addPet, baitFor, denFlag, denSpecies, feedPet, getPetDef, getPetState,
+  removePet, rollWildPet, setActivePet, tameChance, MAX_WILD_PETS, TAME_MS, type PetDef,
+} from "../game/pets";
+import { PetModal } from "../ui/PetModal";
 import type { ZombieDef } from "../game/enemies/types";
 import { rollAmbientUndead, rollZombie, resetSpawnVariety } from "../game/enemies/spawnTable";
 import { getZombie } from "../game/enemies/catalog";
@@ -114,7 +120,7 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
 
 /** A fallen zombie left on the ground — searchable once, fades after a while. */
@@ -268,6 +274,14 @@ export class WorldScene extends Phaser.Scene {
   private animalGroup!: Phaser.Physics.Arcade.Group;
   private animalAcc = 0;
   private animalDelay = 24000;
+  private pets: Pet[] = []; // live pet sprites: the active companion + wild tamables
+  private petGroup!: Phaser.Physics.Arcade.Group;
+  private petAcc = 0;
+  private petDelay = 26000;
+  private petDenAcc = 0; // low-cadence den proximity scan
+  private tame: { pet: Pet; bait: string; done: number; ring: Phaser.GameObjects.Graphics } | null = null;
+  private petModal!: PetModal;
+  private petOpen = false;
   private ambientAcc = 0;
   private ambientDelay = 30000;
   private aiNoticeShown = false; // show the "AI offline" toast at most once per run
@@ -389,6 +403,10 @@ export class WorldScene extends Phaser.Scene {
     this.enemies = [];
     this.animals = [];
     this.animalAcc = 0;
+    this.pets = []; // scene restart: live pets re-spawn from the save (restorePets)
+    this.petAcc = 0;
+    this.petDenAcc = 0;
+    this.tame = null;
     this.ambientAcc = 0;
     this.ambientDelay = 30000; // set properly once state/day is known (below)
     this.aiNoticeShown = false;
@@ -472,6 +490,7 @@ export class WorldScene extends Phaser.Scene {
     this.itemGroup = this.physics.add.group();
     this.placeGroup = this.physics.add.staticGroup(); // blocking placeables (Feature 7)
     this.npcGroup = this.physics.add.group(); // survivors / companions (Feature 10b)
+    this.petGroup = this.physics.add.group(); // tamable/owned pets (PR-A)
 
     const collide: ColliderSpec[] = [];
     this.terrain = new AnimatedTerrain(this); // created before the manager so the first chunk loads get overlays
@@ -714,7 +733,19 @@ export class WorldScene extends Phaser.Scene {
         this.setGameKeys(true);
       },
     );
+    this.petModal = new PetModal();
+    this.petModal.setHandlers({
+      onSetActive: (id) => this.onSetActivePet(id),
+      onFeed: (id) => this.onFeedPet(id),
+      onRename: (id, name) => this.onRenamePet(id, name),
+      onRelease: (id) => this.onReleasePet(id),
+      onClose: () => {
+        this.petOpen = false;
+        this.setGameKeys(true);
+      },
+    });
     this.restoreCompanions(); // re-spawn recruited companions from the save
+    this.restorePets(); // the active pet walks back to your side (PR-A)
     this.touch = new TouchControls();
     this.touch.setHandlers(
       () => this.tryInteract(),
@@ -761,6 +792,7 @@ export class WorldScene extends Phaser.Scene {
       this.craftUi.destroy();
       this.storeUi.destroy();
       this.tradeUi.destroy();
+      this.petModal.destroy();
       this.touch.destroy();
       this.terrain.destroy();
       this.chunks.destroy();
@@ -812,6 +844,7 @@ export class WorldScene extends Phaser.Scene {
       if (this.driving) this.driveTick(delta);
       if (this.buildMode) this.updateBuildGhost();
       if (this.search) this.tickSearch(delta);
+      if (this.tame) this.tickTame(delta);
       this.magnetDrops(); // nearby loot flies to the bag (U3)
       this.tickBeacons(); // distant happenings: audio, expiry, arrival (U4)
       this.corpseAcc += delta;
@@ -837,6 +870,7 @@ export class WorldScene extends Phaser.Scene {
       this.tickClouds(time);
       this.updateEnemies(time);
       this.updateAnimals(time);
+      this.updatePets(time, delta);
       this.updateNpcs(time);
 
       this.npcAcc += delta;
@@ -918,6 +952,13 @@ export class WorldScene extends Phaser.Scene {
         this.spawnWildAnimals();
       }
 
+      this.petAcc += delta;
+      if (this.petAcc >= this.petDelay) {
+        this.petAcc = 0;
+        this.petDelay = 22000 + Math.random() * 26000;
+        this.maybeSpawnWildPet();
+      }
+
       this.saveAcc += delta;
       if (this.saveAcc >= SAVE_MS) {
         this.saveAcc -= SAVE_MS;
@@ -945,14 +986,18 @@ export class WorldScene extends Phaser.Scene {
     } else if (!this.dead && !this.inEncounter) {
       const veh = this.nearestVehicle(52);
       const npc = veh ? null : this.nearestNpc(46);
-      const store = veh || npc ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
-      const chest = veh || npc || store ? null : this.nearestChest(42);
-      const scav = veh || npc || store || chest ? null : this.nearestSearchable(40);
-      const boards = veh || npc || store || chest || scav ? null : this.nearestBoards(42);
-      const farm = veh || npc || store || chest || scav || boards ? null : this.farmHint();
-      const near = veh || npc || store || chest || scav || boards || farm ? null : this.buildingAt();
+      const ownPet = veh || npc ? null : this.nearestOwnedPet(40);
+      const wildPet = veh || npc || ownPet ? null : this.nearestWildPet(46);
+      const store = veh || npc || ownPet || wildPet ? null : this.nearestPlaceable(44, (k) => placeableDef(k).storage === true);
+      const chest = veh || npc || ownPet || wildPet || store ? null : this.nearestChest(42);
+      const scav = veh || npc || ownPet || wildPet || store || chest ? null : this.nearestSearchable(40);
+      const boards = veh || npc || ownPet || wildPet || store || chest || scav ? null : this.nearestBoards(42);
+      const farm = veh || npc || ownPet || wildPet || store || chest || scav || boards ? null : this.farmHint();
+      const near = veh || npc || ownPet || wildPet || store || chest || scav || boards || farm ? null : this.buildingAt();
       if (veh) this.hintText.setText(this.vehicleHint(veh)).setVisible(true);
       else if (npc) this.hintText.setText(`Press E to talk to ${npc.name}${npc.kind === "companion" ? " (companion)" : ""}`).setVisible(true);
+      else if (ownPet) this.hintText.setText(`Press E to feed ${this.petLabel(ownPet)} · P for pets`).setVisible(true);
+      else if (wildPet) this.hintText.setText(this.tameHint(wildPet)).setVisible(true);
       else if (store) this.hintText.setText("Press E to open base storage").setVisible(true);
       else if (chest) this.hintText.setText(`Press E to open the ${chest.kind.replace(/_/g, " ")}${chest.locked ? " (locked)" : ""}`).setVisible(true);
       else if (scav) this.hintText.setText(`Hold E to search the ${this.searchDefFor(scav).label}`).setVisible(true);
@@ -961,7 +1006,7 @@ export class WorldScene extends Phaser.Scene {
       else if (near) this.hintText.setText(this.buildingHint(near)).setVisible(true);
       else this.hintText.setVisible(false);
       // The resolved physical target gets a soft ground pulse so it reads at a glance (U3).
-      const targetSprite = veh?.sprite ?? npc?.sprite ?? store?.sprite ?? chest?.sprite ?? scav?.sprite ?? boards?.sprite ?? null;
+      const targetSprite = veh?.sprite ?? npc?.sprite ?? ownPet?.sprite ?? wildPet?.sprite ?? store?.sprite ?? chest?.sprite ?? scav?.sprite ?? boards?.sprite ?? null;
       this.setHighlight(targetSprite, time);
     } else {
       this.hintText.setVisible(false);
@@ -1628,6 +1673,370 @@ export class WorldScene extends Phaser.Scene {
     this.killProjectile(spr);
   }
 
+  // --- pets: wild spawns, taming, the loyal companion (PR-A) -------------------
+
+  /** Re-spawn the ACTIVE pet from the save (stabled pets stay data-only). */
+  private restorePets(): void {
+    const rec = activePet(this.state);
+    if (!rec) return;
+    const def = getPetDef(rec.species);
+    if (!def) return;
+    const near = rec.x !== undefined && rec.y !== undefined && Math.hypot(rec.x - this.player.sprite.x, rec.y - this.player.sprite.y) < 600;
+    const x = near && rec.x !== undefined ? rec.x : this.player.sprite.x + Phaser.Math.Between(-40, 40);
+    const y = near && rec.y !== undefined ? rec.y : this.player.sprite.y + Phaser.Math.Between(-40, 40);
+    const pet = this.spawnPetEntity(def, x, y, "owned");
+    pet.stateId = rec.id;
+    pet.hp = rec.hp;
+    pet.bond = rec.bond;
+  }
+
+  /** Write the live companion's position/hp back into its PetState (pre-save). */
+  private syncPetStates(): void {
+    for (const pet of this.pets) {
+      if (pet.mode !== "owned" || !pet.stateId) continue;
+      const rec = getPetState(this.state, pet.stateId);
+      if (!rec) continue;
+      rec.hp = pet.hp;
+      rec.x = Math.round(pet.sprite.x);
+      rec.y = Math.round(pet.sprite.y);
+    }
+  }
+
+  private spawnPetEntity(def: PetDef, x: number, y: number, mode: "wild" | "owned"): Pet {
+    const pet = new Pet(this, x, y, def, mode);
+    this.petGroup.add(pet.sprite);
+    this.pets.push(pet);
+    spawnPopIn(this, pet.sprite);
+    return pet;
+  }
+
+  /** Ambient wild tamables — commons in their home biomes; epic+ never (dens/eggs). */
+  private maybeSpawnWildPet(): void {
+    if (this.pets.filter((p) => p.mode === "wild").length >= MAX_WILD_PETS) return;
+    const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+    const def = rollWildPet(liveRng, biome, this.effDay());
+    if (!def) return;
+    const { tx, ty } = this.player.tilePos();
+    const t = this.chunks.walkableNear(tx, ty, 7, 13);
+    if (!t) return;
+    const pet = this.spawnPetEntity(def, t.x, t.y, "wild");
+    sfx.petVoice(def.voice, Math.sign(t.x - this.player.sprite.x) * 0.5, Math.hypot(t.x - this.player.sprite.x, t.y - this.player.sprite.y));
+    void pet;
+  }
+
+  private updatePets(now: number, delta: number): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    for (const pet of this.pets) {
+      let zt: { x: number; y: number } | null = null;
+      if (pet.mode === "owned") {
+        const z = this.nearestEnemyTo(pet.sprite.x, pet.sprite.y, 240);
+        if (z) zt = { x: z.sprite.x, y: z.sprite.y };
+      }
+      pet.update(px, py, zt, now);
+    }
+    for (let i = this.pets.length - 1; i >= 0; i--) {
+      const pet = this.pets[i];
+      if (pet.mode === "owned") {
+        // bite the dead (companion combat — Npc parity, def-driven damage)
+        const z = this.nearestEnemyTo(pet.sprite.x, pet.sprite.y, 32);
+        if (z && now - pet.lastBite > 900) {
+          pet.lastBite = now;
+          const dir = { x: z.sprite.x - pet.sprite.x, y: z.sprite.y - pet.sprite.y };
+          splatHit(this, z.sprite.x, z.sprite.y, z.blood, dir, 0.9);
+          sfx.petVoice(pet.def.voice);
+          if (z.takeDamage(pet.damage())) this.onEnemyKilled(z);
+        }
+        // and take hits back
+        const zc = this.nearestEnemyTo(pet.sprite.x, pet.sprite.y, 24);
+        if (zc && now - pet.lastBite > 350 && pet.takeDamage(Math.max(2, Math.round(zc.damage * 0.6)), now)) {
+          this.killPet(pet);
+          continue;
+        }
+      } else {
+        // hostile wild predator (botched tame): it bites back
+        if (pet.isHostile(now) && Math.hypot(pet.sprite.x - px, pet.sprite.y - py) < 26 && now - pet.lastBite > 900) {
+          pet.lastBite = now;
+          this.damagePlayer(pet.def.damage, false, `The ${pet.def.name.toLowerCase()} turned on you!`);
+        }
+        // wilds wander off like animals do
+        if (Math.hypot(pet.sprite.x - px, pet.sprite.y - py) > 2200) {
+          pet.destroy();
+          this.pets.splice(i, 1);
+        }
+      }
+    }
+    // low-cadence den watch: walking up to a Strange Nest wakes its resident
+    this.petDenAcc += delta;
+    if (this.petDenAcc >= 1200) {
+      this.petDenAcc = 0;
+      this.checkDens();
+    }
+  }
+
+  /** A "Strange nest" wakes once per run: out steps an epic+ creature, calm and
+   *  tamable — bring the right food and the wonder is yours. */
+  private checkDens(): void {
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+    const pcx = Math.floor(px / (CHUNK_TILES * TILE_SIZE));
+    const pcy = Math.floor(py / (CHUNK_TILES * TILE_SIZE));
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = pcx + dx;
+        const cy = pcy + dy;
+        for (const lm of this.chunks.landmarksAt(cx, cy)) {
+          if (lm.kind !== "pet_den") continue;
+          if (Math.hypot(lm.x - px, lm.y - py) > 150) continue;
+          if (this.state.worldFlags.includes(denFlag(cx, cy))) continue;
+          this.state.worldFlags.push(denFlag(cx, cy));
+          const def = denSpecies(createRng(`${this.state.seed}:denpet:${cx}:${cy}`));
+          const t = this.chunks.walkableNear(Math.floor(lm.x / TILE_SIZE), Math.floor(lm.y / TILE_SIZE), 1, 3);
+          const pet = this.spawnPetEntity(def, t ? t.x : lm.x, t ? t.y : lm.y, "wild");
+          sfx.petVoice(def.voice);
+          this.showToast(`Something stirs in the nest… a ${def.name}!`);
+          pushRecentEvent(this.state, `Found a ${def.name}'s nest.`);
+          void pet;
+          this.persist();
+        }
+      }
+    }
+  }
+
+  private petLabel(pet: Pet): string {
+    const rec = pet.stateId ? getPetState(this.state, pet.stateId) : undefined;
+    return rec?.name ?? pet.def.name;
+  }
+
+  /** Tame invitation — names the bait so the player knows what to bring. */
+  private tameHint(pet: Pet): string {
+    const bait = baitFor(pet.def, (item) => hasItem(this.state, item));
+    return bait
+      ? `Hold E to offer ${bait} to the ${pet.def.name.toLowerCase()}`
+      : `A ${pet.def.name.toLowerCase()} — it wants ${pet.def.diet.slice(0, 2).join(" or ")}`;
+  }
+
+  private nearestWildPet(maxDist: number): Pet | null {
+    let best: Pet | null = null;
+    let bestD = maxDist;
+    for (const p of this.pets) {
+      if (p.mode !== "wild" || p.isHostile(this.time.now)) continue;
+      const d = Math.hypot(p.sprite.x - this.player.sprite.x, p.sprite.y - this.player.sprite.y);
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  private nearestOwnedPet(maxDist: number): Pet | null {
+    let best: Pet | null = null;
+    let bestD = maxDist;
+    for (const p of this.pets) {
+      if (p.mode !== "owned") continue;
+      const d = Math.hypot(p.sprite.x - this.player.sprite.x, p.sprite.y - this.player.sprite.y);
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Begin the hold-E tame channel (the U1 search-channel pattern, pink ring). */
+  private startTame(pet: Pet): void {
+    if (this.tame || this.search || this.dead) return;
+    const bait = baitFor(pet.def, (item) => hasItem(this.state, item));
+    if (!bait) {
+      this.showToast(`The ${pet.def.name.toLowerCase()} wants food: ${pet.def.diet.slice(0, 2).join(" or ")}`);
+      sfx.ui();
+      return;
+    }
+    this.tame = { pet, bait, done: 0, ring: this.add.graphics().setDepth(30) };
+    sfx.petVoice(pet.def.voice);
+  }
+
+  private tickTame(delta: number): void {
+    const t = this.tame;
+    if (!t) return;
+    const holding = (this.keyE?.isDown ?? false) || this.touch.actHeld;
+    const d = Math.hypot(t.pet.sprite.x - this.player.sprite.x, t.pet.sprite.y - this.player.sprite.y);
+    if (!holding || this.player.isMoving() || this.dead || !t.pet.sprite.active || d > 80 || t.pet.isHostile(this.time.now)) {
+      this.cancelTame();
+      return;
+    }
+    t.done += delta;
+    const frac = Math.min(1, t.done / TAME_MS);
+    const x = t.pet.sprite.x;
+    const y = t.pet.sprite.y - 26;
+    t.ring.clear();
+    t.ring.lineStyle(4, 0x10151b, 0.8).strokeCircle(x, y, 10);
+    t.ring.lineStyle(3, 0xff9fc0, 0.95); // affection-pink channel ring
+    t.ring.beginPath();
+    t.ring.arc(x, y, 10, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2, false);
+    t.ring.strokePath();
+    if (frac >= 1) this.completeTame();
+  }
+
+  private cancelTame(): void {
+    if (!this.tame) return;
+    this.tame.ring.destroy();
+    this.tame = null;
+  }
+
+  private completeTame(): void {
+    const t = this.tame;
+    if (!t) return;
+    this.cancelTame();
+    const pet = t.pet;
+    removeItem(this.state, t.bait, 1); // the offer is eaten either way
+    const p = tameChance(pet.def, t.bait);
+    if (liveRng.chance(p)) {
+      const rec = addPet(this.state, pet.def.id);
+      if (!rec) {
+        this.showToast("Your pack is full — release a pet first (P)");
+        sfx.ui();
+        return;
+      }
+      if (rec.active) {
+        // it's the new companion: convert the live entity in place
+        pet.mode = "owned";
+        pet.stateId = rec.id;
+        pet.bond = rec.bond;
+      } else {
+        // roster has an active pet already — this one heads to the stable
+        rec.x = Math.round(pet.sprite.x);
+        rec.y = Math.round(pet.sprite.y);
+        const i = this.pets.indexOf(pet);
+        if (i >= 0) this.pets.splice(i, 1);
+        deathFade(this, pet.sprite); // walks off to the stable (visual exit)
+      }
+      heartBurst(this, pet.sprite.x, pet.sprite.y - 8, 6);
+      sfx.tameSuccess();
+      sfx.petVoice(pet.def.voice);
+      this.showToast(`${pet.def.name} tamed! (P to manage your pets)`);
+      pushRecentEvent(this.state, `Tamed a ${pet.def.name}.`);
+      this.grantXp("crafting", 4);
+      this.objectiveEvent({ kind: "container_searched" }); // counts as field progress pre-D
+    } else {
+      sfx.tameFail();
+      const predator = pet.def.damage >= 7;
+      pet.spook(this.time.now, predator);
+      this.showToast(predator ? `The ${pet.def.name.toLowerCase()} snaps at you!` : `The ${pet.def.name.toLowerCase()} bolts.`);
+    }
+    this.persist();
+  }
+
+  private killPet(pet: Pet): void {
+    const i = this.pets.indexOf(pet);
+    if (i >= 0) this.pets.splice(i, 1);
+    if (pet.stateId) {
+      const rec = getPetState(this.state, pet.stateId);
+      const name = rec?.name ?? pet.def.name;
+      this.state.pets = (this.state.pets ?? []).filter((r) => r.id !== pet.stateId);
+      this.showToast(`${name} fell defending you.`);
+      pushRecentEvent(this.state, `${name} died.`);
+    }
+    sfx.death();
+    deathFade(this, pet.sprite);
+    this.persist();
+  }
+
+  /** E on your own pet: feed it if you carry its food, otherwise open the roster. */
+  private feedOrManage(pet: Pet): void {
+    const bait = baitFor(pet.def, (item) => hasItem(this.state, item));
+    const rec = pet.stateId ? getPetState(this.state, pet.stateId) : undefined;
+    if (bait && rec && (pet.hp < pet.def.hp || rec.bond < 5)) {
+      removeItem(this.state, bait, 1);
+      feedPet(rec);
+      pet.hp = rec.hp;
+      pet.bond = rec.bond;
+      heartBurst(this, pet.sprite.x, pet.sprite.y - 8, 3);
+      sfx.petVoice(pet.def.voice);
+      this.floatText(pet.sprite.x, pet.sprite.y - 12, `${rec.name ?? pet.def.name} +${bait}`, "#ff9fc0");
+      this.persist();
+      return;
+    }
+    this.openPetModal();
+  }
+
+  private openPetModal(): void {
+    if (this.anyModalOpen() || this.dead) return;
+    this.petOpen = true;
+    this.setGameKeys(false);
+    this.petModal.open(this.state);
+  }
+
+  private onSetActivePet(id: string): void {
+    const prevActive = this.pets.find((p) => p.mode === "owned");
+    this.syncPetStates();
+    const rec = setActivePet(this.state, id);
+    // swap the live companion: despawn the old, spawn the new at your side
+    if (prevActive) {
+      const i = this.pets.indexOf(prevActive);
+      if (i >= 0) this.pets.splice(i, 1);
+      prevActive.destroy();
+    }
+    if (rec) {
+      const def = getPetDef(rec.species);
+      if (def) {
+        const pet = this.spawnPetEntity(def, this.player.sprite.x + 30, this.player.sprite.y, "owned");
+        pet.stateId = rec.id;
+        pet.hp = rec.hp;
+        pet.bond = rec.bond;
+        sfx.petVoice(def.voice);
+      }
+    }
+    this.petModal.refresh(this.state);
+    this.persist();
+  }
+
+  private onFeedPet(id: string): void {
+    const rec = getPetState(this.state, id);
+    if (!rec) return;
+    const def = getPetDef(rec.species);
+    if (!def) return;
+    const bait = baitFor(def, (item) => hasItem(this.state, item));
+    if (!bait) {
+      this.showToast(`No food it likes — it wants ${def.diet.slice(0, 2).join(" or ")}`);
+      return;
+    }
+    removeItem(this.state, bait, 1);
+    feedPet(rec);
+    const live = this.pets.find((p) => p.stateId === id);
+    if (live) {
+      live.hp = rec.hp;
+      live.bond = rec.bond;
+      heartBurst(this, live.sprite.x, live.sprite.y - 8, 3);
+    }
+    sfx.petVoice(def.voice);
+    this.petModal.refresh(this.state);
+    this.persist();
+  }
+
+  private onRenamePet(id: string, name: string): void {
+    const rec = getPetState(this.state, id);
+    if (!rec) return;
+    rec.name = name.trim().slice(0, 18) || undefined;
+    this.petModal.refresh(this.state);
+    this.persist();
+  }
+
+  private onReleasePet(id: string): void {
+    const live = this.pets.find((p) => p.stateId === id);
+    if (live) {
+      const i = this.pets.indexOf(live);
+      if (i >= 0) this.pets.splice(i, 1);
+      live.mode = "wild";
+      live.stateId = undefined;
+      deathFade(this, live.sprite);
+    }
+    removePet(this.state, id);
+    this.petModal.refresh(this.state);
+    this.persist();
+  }
+
   private spawnAmbientWalkers(n: number): void {
     const day = this.effDay();
     for (let i = 0; i < n; i++) {
@@ -1752,6 +2161,16 @@ export class WorldScene extends Phaser.Scene {
     const chest = this.nearestChest(42);
     if (chest) {
       this.openChest(chest);
+      return;
+    }
+    const ownPet = this.nearestOwnedPet(40);
+    if (ownPet) {
+      this.feedOrManage(ownPet); // feed if you carry its food, else open the roster
+      return;
+    }
+    const wildPet = this.nearestWildPet(46);
+    if (wildPet) {
+      this.startTame(wildPet); // hold-E: offer food, win a companion
       return;
     }
     const search = this.nearestSearchable(40);
@@ -3525,7 +3944,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** True while any DOM overlay owns the keyboard. */
   private anyModalOpen(): boolean {
-    return this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.inEncounter || this.reader.isOpen();
+    return this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.petOpen || this.inEncounter || this.reader.isOpen();
   }
 
   private onEncounterAction(input: TurnInput): void {
@@ -3782,6 +4201,7 @@ export class WorldScene extends Phaser.Scene {
     kb.on("keydown-B", () => this.toggleBuild()); // build mode (barricades/stations)
     kb.on("keydown-V", () => this.claimToggle()); // claim/release the building as base
     kb.on("keydown-M", () => { this.minimap.toggle(); sfx.ui(); }); // minimap (Feature 10)
+    kb.on("keydown-P", () => this.openPetModal()); // pet roster (PR-A)
     kb.on("keydown-H", () => this.showControlsHint()); // re-show the controls cheat-sheet
     // ESC → main menu, but ONLY from the open world — never while a modal that
     // itself closes on ESC is up (its keystroke must not double as "quit").
@@ -4525,6 +4945,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.dead) return; // never persist a finished run
     this.state.player.x = this.player.sprite.x;
     this.state.player.y = this.player.sprite.y;
+    this.syncPetStates(); // the companion's position/hp ride along (PR-A)
     if (this.driving) {
       // a car-in-motion rides with the player so a mid-drive save isn't lost
       this.driving.data.x = this.player.sprite.x;

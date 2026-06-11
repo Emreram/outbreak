@@ -75,6 +75,21 @@ export interface GameState {
   // Opening-arc objective cursor (U3). Definitions live in game/objectives.ts;
   // old saves (no cursor) simply show the plain run goal in the banner.
   objectives?: { chain: string; step: number; progress: number; done?: boolean };
+  pets?: PetState[]; // tamed companions roster (PR-A; optional → old saves OK)
+  petCounter?: number; // monotonically-increasing pet/egg instance counter (deterministic hatches)
+}
+
+/** A tamed pet the player OWNS (Companions & Spectacle PR-A). The species def
+ *  (stats/look/diet) lives in game/pets.ts; this is just the instance state. */
+export interface PetState {
+  id: string; // unique instance id (pet_<counter>)
+  species: string; // PetDef id
+  name?: string; // player-given nickname
+  bond: number; // 0..5 — feeding raises it (small speed/damage bonus)
+  hp: number;
+  active?: boolean; // the ONE pet that's out with you
+  x?: number;
+  y?: number; // last position (restored near the player when far)
 }
 
 /** A natural-disaster type. Live VFX/damage are transient (engine-side); the
