@@ -10,6 +10,7 @@ import {
   loadGame,
   clearSave,
   pushRecentEvent,
+  SAVE_KEY,
 } from "../src/game/GameState";
 import { addItem, removeItem, hasItem, itemCount, useConsumable, quickUseItems, MAX_STACK } from "../src/game/inventory";
 import { applyDecay, DEFAULT_DECAY } from "../src/game/survival";
@@ -90,9 +91,11 @@ ok(loaded !== null && JSON.stringify(loaded) === JSON.stringify(s), "save/load r
 ok(loaded?.disasters?.[0]?.kind === "eruption" && loaded?.disasters?.[0]?.cataclysm === true, "disaster scars survive a save/load round-trip");
 clearSave();
 ok(loadGame() === null, "clearSave -> null");
-store.set("outbreak_save_v1", "{not json");
+// Write the garbage to the LIVE key (imported, not hardcoded) — a stale literal
+// here once made these two checks pass vacuously against an empty slot.
+store.set(SAVE_KEY, "{not json");
 ok(loadGame() === null, "corrupt JSON -> null");
-store.set("outbreak_save_v1", JSON.stringify({ seed: 123 }));
+store.set(SAVE_KEY, JSON.stringify({ seed: 123 }));
 ok(loadGame() === null, "invalid shape -> null");
 
 // --- consumables: catalog-driven use + quick-use hotbar slots ---

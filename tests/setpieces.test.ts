@@ -84,11 +84,14 @@ function ok(cond: boolean, msg: string): void {
     containers: c.containers.filter((x) => /_(c|L|x)\d/.test(x.gid)).map((x) => x.gid + ":" + x.kind + ":" + x.tx + "," + x.ty),
     props: c.props.filter((p) => p.gid?.includes("_p")).map((p) => p.gid + ":" + p.kind),
   });
-  // Pinned from the first U2 build. If this fails, a change reshuffled the main
+  // Pinned LITERAL from the U2 build. If this fails, a change reshuffled the main
   // worldgen rng stream — existing saves' chest_/searched_ flags would misalign.
+  // (The old check compared the hash to itself, which could never fail.) If the
+  // reshuffle is INTENTIONAL, bump SAVE_KEY and re-pin the new hash.
+  const PINNED_MAIN_STREAM_HASH = "c96122e6";
   const hash = fnv(mainStream);
   console.log(`  main-stream hash=${hash}`);
-  ok(hash === fnv(mainStream), "main-stream hash self-consistent");
+  ok(hash === PINNED_MAIN_STREAM_HASH, `main stream matches the pinned hash (${hash} vs ${PINNED_MAIN_STREAM_HASH})`);
   const again = generateChunk("pin-1", 20, 20);
   const mainStream2 = JSON.stringify({
     buildings: again.buildings.map((b) => b.gid + ":" + b.type + ":" + b.tx + "," + b.ty),
