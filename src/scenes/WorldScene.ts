@@ -106,7 +106,7 @@ import {
   isRideable, mountPassesTile, removePet, rollWildPet, setActivePet, tameChance,
   FLIGHT_DRAIN_PER_S, FLIGHT_REGEN_PER_S, MAX_PET_ROSTER, MAX_WILD_PETS, TAME_MS, TRAMPLE_RANK, type PetDef, type PetState,
 } from "../game/pets";
-import { mountedTexKey, petPortraitUrl, PET_SHADOW } from "../engine/petSprites";
+import { mountedFrameAKey, mountedFrameBKey, mountedTexKey, petPortraitUrl, petWingKey, PET_SHADOW } from "../engine/petSprites";
 import { PetModal } from "../ui/PetModal";
 import { LootReveal, type RevealCard } from "../ui/LootReveal";
 import { chestEggChance, chestEggName, deservesCeremony, hatchPreview, openableDef } from "../game/openables";
@@ -125,7 +125,8 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, FX_CLOUD, FX_DUST, FX_GLOW, FX_LEAF, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, kickPuff, FX_CLOUD, FX_DUST, FX_GLOW, FX_LEAF, FX_VIGNETTE } from "../engine/fx";
+import { applyFrame, frameFor, gaitPose, GAITS, type FrameSet } from "../engine/anim";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
 
 /** A fallen zombie left on the ground — searchable once, fades after a while. */
@@ -304,9 +305,17 @@ export class WorldScene extends Phaser.Scene {
   private lastLandPx: { x: number; y: number } | null = null; // breadcrumb: last walkable ground overflown
   private breadcrumbAcc = 0;
   private wingbeatAcc = 0;
-  private hoofAcc = 0;
   private wakeAcc = 0;
   private staminaWarned = false;
+  // Mounted presentation (Anim PR 2): the mount's gait/frames/wings live HERE —
+  // Player.artLocked keeps Player's own walk cycle out of the saddle.
+  private mountWing?: Phaser.GameObjects.Image;
+  private mountFrames?: FrameSet;
+  private mountGaitT = 0;
+  private mountFlapT = 0;
+  private bankLean = 0;
+  private lastMountFacing = 0;
+  private lastMountFrameB = false;
   private readonly trampleHits = new WeakMap<Enemy, number>(); // per-foe trample cooldown
   private ambientAcc = 0;
   private ambientDelay = 30000;
@@ -436,6 +445,10 @@ export class WorldScene extends Phaser.Scene {
     this.riding = null; // always dismounted on load/restart
     this.airborne = false;
     this.mountShadow = undefined;
+    this.mountWing = undefined;
+    this.mountFrames = undefined;
+    this.mountGaitT = 0;
+    this.bankLean = 0;
     this.lastLandPx = null;
     this.staminaWarned = false;
     this.ambientAcc = 0;
@@ -2727,7 +2740,28 @@ export class WorldScene extends Phaser.Scene {
     const key = mountedTexKey(pet.def.id);
     this.player.artLocked = true; // the mount owns the sprite — no walk frames
     if (this.textures.exists(key)) this.player.sprite.setTexture(key);
-    this.player.sprite.setScale(1.05);
+    // 4-step gallop [contact A, base(pass), contact B, base]: even a single-frame
+    // generated body still posts the RIDER between beats (Anim PR 2).
+    const ma = mountedFrameAKey(pet.def.id);
+    const mb = mountedFrameBKey(pet.def.id);
+    this.mountFrames = {
+      idle: key,
+      a: this.textures.exists(ma) ? ma : key,
+      b: this.textures.exists(mb) ? mb : key,
+      pass: key,
+    };
+    this.mountGaitT = 0;
+    this.mountFlapT = 0;
+    this.bankLean = 0;
+    this.lastMountFacing = this.player.facingRad;
+    // a ridden flier keeps its wings — the overlay the Pet entity owned died with it
+    if (pet.def.look.features?.includes("wings") && this.textures.exists(petWingKey(pet.def.id))) {
+      this.mountWing = this.add.image(this.player.sprite.x, this.player.sprite.y, petWingKey(pet.def.id)).setDepth(11);
+    }
+    // saddle-up hop
+    this.player.sprite.setScale(0.9);
+    this.tweens.add({ targets: this.player.sprite, scale: 1.05, duration: 250, ease: "Back.easeOut" });
+    dustPuff(this, this.player.sprite.x, this.player.sprite.y + 10, 5);
     this.recenterPlayerBody();
     this.player.speedMult = bondedSpeed(pet.def, rec.bond);
     this.mountStamina = pet.def.staminaMax;
@@ -2766,12 +2800,18 @@ export class WorldScene extends Phaser.Scene {
       this.player.sprite.setPosition(spot.x, spot.y);
     }
     this.riding = null;
+    this.mountWing?.destroy();
+    this.mountWing = undefined;
+    this.mountFrames = undefined;
     this.player.speedMult = 1;
     this.player.artLocked = false;
-    this.player.sprite.setScale(1);
     this.player.sprite.setTexture(PLAYER_KEY);
     this.player.setAppearance(this.state.appearance?.color);
     this.recenterPlayerBody();
+    // step-off hop
+    this.player.sprite.setScale(1.12);
+    this.tweens.add({ targets: this.player.sprite, scale: 1, duration: 200, ease: "Quad.easeOut" });
+    dustPuff(this, this.player.sprite.x, this.player.sprite.y + 10, 3);
     const pet = this.spawnPetEntity(r.def, this.player.sprite.x + 26, this.player.sprite.y, "owned");
     pet.stateId = r.rec.id;
     pet.hp = r.rec.hp;
@@ -2863,6 +2903,7 @@ export class WorldScene extends Phaser.Scene {
     const r = this.riding;
     if (!r) return;
     const moving = this.player.isMoving();
+    this.tickMountVisuals(delta, moving);
     if (this.airborne) {
       this.mountStamina = Math.max(0, this.mountStamina - (delta / 1000) * FLIGHT_DRAIN_PER_S);
       this.mountShadow
@@ -2893,12 +2934,7 @@ export class WorldScene extends Phaser.Scene {
     this.mountStamina = Math.min(r.def.staminaMax, this.mountStamina + (delta / 1000) * FLIGHT_REGEN_PER_S);
     if (!moving) return;
     if (r.def.move === "ground") {
-      this.hoofAcc += delta;
-      if (this.hoofAcc >= 190) {
-        this.hoofAcc = 0;
-        sfx.hoofbeat();
-        dustPuff(this, this.player.sprite.x, this.player.sprite.y + 10, 2);
-      }
+      // hoofbeats/dust fire on the stride's footfalls (tickMountVisuals edges)
       if (RARITY_META[r.def.rarity].rank >= TRAMPLE_RANK) this.mountTrample(time);
     } else if (r.def.move === "swim") {
       const { tx, ty } = this.player.tilePos();
@@ -2912,6 +2948,50 @@ export class WorldScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  /** Mounted presentation, every frame (Anim PR 2): archetype gait sway + a
+   *  footfall scaleY bob over the player sprite, the 4-step gallop frame swap,
+   *  banking lean into airborne turns, the wing overlay's fold/flap, and
+   *  stride-synced hoofbeats — sound, dust, and legs all agree. */
+  private tickMountVisuals(delta: number, moving: boolean): void {
+    const r = this.riding;
+    if (!r) return;
+    const spec = GAITS[r.def.look.archetype] ?? GAITS.equine;
+    if (moving) this.mountGaitT += (delta / 1000) * spec.strideHz * Math.PI * 2;
+    const pose = gaitPose(spec, this.mountGaitT, 1, true);
+    // banking: 8-dir input SNAPS facing, so a turn is an impulse — kick the lean
+    // on the heading change, then ease it out over ~1/3s (framerate-independent)
+    const facing = this.player.facingRad;
+    let dF = facing - this.lastMountFacing;
+    if (dF > Math.PI) dF -= Math.PI * 2;
+    if (dF < -Math.PI) dF += Math.PI * 2;
+    this.lastMountFacing = facing;
+    if (this.airborne && Math.abs(dF) > 0.02) {
+      this.bankLean = Phaser.Math.Clamp(this.bankLean + dF * 0.6, -0.22, 0.22);
+    }
+    this.bankLean *= Math.pow(0.0025, delta / 1000);
+    this.player.sprite.setRotation(facing + (moving ? pose.sway : 0) + this.bankLean);
+    // footfall bob: scaleY only — scaleX belongs to the takeoff/landing tweens
+    const sx = this.player.sprite.scaleX;
+    this.player.sprite.setScale(sx, sx * (1 + (moving && !this.airborne ? pose.scaleYMul : 0)));
+    // gallop/swim frame swap (artLocked gates Player's swaps; this is the mount's)
+    if (this.mountFrames) applyFrame(this.player.sprite, frameFor(this.mountFrames, moving && !this.airborne, this.mountGaitT));
+    // wings: folded ripple grounded, full flap aloft (rate ×1.5 — matches the sfx)
+    if (this.mountWing) {
+      this.mountFlapT += (delta / 1000) * pose.flapHz * (this.airborne ? 1.5 : 0.4) * Math.PI * 2;
+      const fold = this.airborne ? 0.6 + Math.abs(Math.sin(this.mountFlapT)) * 0.45 : 0.45 + Math.sin(this.mountFlapT) * 0.06;
+      this.mountWing
+        .setPosition(this.player.sprite.x, this.player.sprite.y)
+        .setRotation(this.player.sprite.rotation)
+        .setScale(sx, fold * sx);
+    }
+    // hooves + dust land on the stride's footfalls, not a wall clock
+    if (r.def.move === "ground" && moving && !this.airborne && pose.frameB !== this.lastMountFrameB) {
+      sfx.hoofbeat();
+      dustPuff(this, this.player.sprite.x, this.player.sprite.y + 10, 2);
+    }
+    this.lastMountFrameB = pose.frameB;
   }
 
   /** Epic+ ground mounts shoulder the dead aside at a run — far gentler than a
@@ -2930,6 +3010,8 @@ export class WorldScene extends Phaser.Scene {
       const n = len || 1;
       e.knockback((e.sprite.x - px) / n, (e.sprite.y - py) / n, 150, now);
       splatHit(this, e.sprite.x, e.sprite.y, e.blood, { x: e.sprite.x - px, y: e.sprite.y - py }, 0.8);
+      kickPuff(this, e.sprite.x, e.sprite.y, { x: (e.sprite.x - px) / n, y: (e.sprite.y - py) / n }); // hooves kick them aside
+      this.cameras.main.shake(30, 0.002);
       if (dead) this.onEnemyKilled(e);
     }
   }
@@ -4803,6 +4885,9 @@ export class WorldScene extends Phaser.Scene {
       this.airborne = false;
       this.mountShadow?.destroy();
       this.mountShadow = undefined;
+      this.mountWing?.destroy();
+      this.mountWing = undefined;
+      this.mountFrames = undefined;
       this.player.speedMult = 1;
       this.player.artLocked = false;
     }
