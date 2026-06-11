@@ -19,6 +19,23 @@ export function zombieFrameBKey(id: string): string {
   return "zsprite_" + id + "_b";
 }
 
+/** The third "gather" frame (Animation Pass): both arms low, torso dropped —
+ *  the beat between strides. Only the most-watched movers get one. */
+export function zombieFrameCKey(id: string): string {
+  return "zsprite_" + id + "_c";
+}
+
+/** Which types earn a 3rd frame: the fast, the crawling, and the huge — the
+ *  classes whose motion the player actually studies (~30 of 102; bounds boot). */
+export function wantsFrameC(def: ZombieDef): boolean {
+  return (
+    def.movement === "crawler" ||
+    def.family === "zombie_runner" ||
+    def.traits.includes("fast") ||
+    def.scale >= 1.25
+  );
+}
+
 interface Dims {
   bw: number;
   bh: number;
@@ -63,8 +80,9 @@ function ellipse(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number
 }
 
 /** pose 0 = base; pose 1 = the alternate shamble frame (arms swung opposite,
- *  head swayed) — toggled by Enemy while moving (PR-E). */
-function drawZombieCanvas(def: ZombieDef, pose: 0 | 1 = 0): HTMLCanvasElement {
+ *  head swayed); pose 2 = the "gather" beat (both arms low + tucked, torso
+ *  dropped) — Enemy cycles [B, A, C, A] through these while moving. */
+function drawZombieCanvas(def: ZombieDef, pose: 0 | 1 | 2 = 0): HTMLCanvasElement {
   const cv = document.createElement("canvas");
   cv.width = SIZE;
   cv.height = SIZE;
@@ -81,22 +99,25 @@ function drawZombieCanvas(def: ZombieDef, pose: 0 | 1 = 0): HTMLCanvasElement {
   ctx.fillStyle = "rgba(0,0,0,0.25)";
   ellipse(ctx, C, C + d.bh * 0.7, d.bw + 2, d.bh * 0.5);
 
-  // arms reaching forward (the B frame drags one back and thrusts the other)
+  // arms reaching forward (the B frame drags one back and thrusts the other;
+  // the C "gather" frame tucks both in low between strides)
   ctx.strokeStyle = shade(skin, 0.8);
   ctx.lineWidth = L.body === "behemoth" || L.body === "brute" ? 6 : 4;
   ctx.lineCap = "round";
   for (const s of [-1, 1]) {
     const swing = pose === 1 ? (s === -1 ? 1 : -1) : 0;
+    const reach = pose === 2 ? d.armLen * 0.65 : d.armLen;
     ctx.beginPath();
     ctx.moveTo(C + d.bw * 0.3, C + s * d.bh * 0.5);
     ctx.lineTo(
-      C + d.bw * 0.3 + d.armLen + swing * Math.max(2, d.armLen * 0.3),
-      C + s * d.bh * (0.25 - swing * 0.16),
+      C + d.bw * 0.3 + reach + swing * Math.max(2, d.armLen * 0.3),
+      C + s * d.bh * (0.25 - swing * 0.16 + (pose === 2 ? 0.12 : 0)),
     );
     ctx.stroke();
   }
-  // the B frame sways the head a hair off-axis — the lurch reads even at distance
+  // off-axis body shift sells the lurch even at distance: B rises, C drops
   if (pose === 1) ctx.translate(0, -1.2);
+  if (pose === 2) ctx.translate(0, 1.4);
 
   // body
   ctx.fillStyle = hex(skin);
@@ -207,12 +228,17 @@ function drawZombieCanvas(def: ZombieDef, pose: 0 | 1 = 0): HTMLCanvasElement {
   return cv;
 }
 
-/** Generate textures for every zombie type (both shamble frames). Idempotent. */
+/** Generate textures for every zombie type (shamble frames A/B everywhere, the
+ *  C "gather" frame for the expressive movers). Idempotent. */
 export function generateZombieTextures(scene: Phaser.Scene): void {
   for (const def of allZombies()) {
     const key = zombieTextureKey(def.id);
     if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawZombieCanvas(def));
     const kb = zombieFrameBKey(def.id);
     if (!scene.textures.exists(kb)) scene.textures.addCanvas(kb, drawZombieCanvas(def, 1));
+    if (wantsFrameC(def)) {
+      const kc = zombieFrameCKey(def.id);
+      if (!scene.textures.exists(kc)) scene.textures.addCanvas(kc, drawZombieCanvas(def, 2));
+    }
   }
 }

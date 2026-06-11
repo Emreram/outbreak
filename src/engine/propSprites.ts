@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { isGeneratedTexture } from "./generatedKeys";
 
 // Procedural prop textures — the small non-blocking decorations the chunk
 // renderer scatters per biome (trees, cars, rocks, crates, corpses…). CLAUDE.md
@@ -16,7 +17,11 @@ export function propKinds(): string[] {
 
 const SIZE = 30;
 
-type Draw = (g: Phaser.GameObjects.Graphics) => void;
+type Draw = (g: Phaser.GameObjects.Graphics, pose?: number) => void;
+
+/** Prop kinds that get a second stride frame `prop:<kind>_b` (Animation Pass) —
+ *  the wild animals. Their drawers read `pose`; everything else ignores it. */
+export const TWO_FRAME_PROP_KINDS = ["animal_rabbit", "animal_deer", "animal_boar"] as const;
 
 const DRAWERS: Record<string, Draw> = {
   tree: (g) => {
@@ -283,22 +288,26 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x2b2e33, 1).fillRect(15, 14, 7, 2); // wrench
   },
 
-  // --- wild animals (Feature 6), top-down ---
-  animal_rabbit: (g) => {
-    g.fillStyle(0xd8c8b0, 1).fillEllipse(15, 17, 11, 8);
-    g.fillStyle(0xcabfa8, 1).fillRect(18, 8, 2, 7).fillRect(21, 8, 2, 7);
-    g.fillStyle(0xffffff, 1).fillCircle(10, 18, 2);
+  // --- wild animals (Feature 6), top-down; pose 1 = mid-bound stride frame ---
+  animal_rabbit: (g, pose = 0) => {
+    const b = pose === 1 ? 1 : 0;
+    g.fillStyle(0xd8c8b0, 1).fillEllipse(15 + b, 17, 11 + b * 2, 8 - b); // bunched mid-hop
+    g.fillStyle(0xcabfa8, 1).fillRect(18 + b, 8 + b * 2, 2, 7 - b * 2).fillRect(21 + b, 8 + b * 2, 2, 7 - b * 2); // ears swept back
+    g.fillStyle(0xffffff, 1).fillCircle(10 - b, 18, 2);
   },
-  animal_deer: (g) => {
-    g.fillStyle(0xa97a4a, 1).fillEllipse(14, 16, 15, 9);
-    g.fillStyle(0x8a5f38, 1).fillCircle(23, 14, 3);
-    g.fillStyle(0xe8d8c0, 1).fillEllipse(9, 18, 5, 3);
-    g.lineStyle(1, 0x6b4a2a, 1).lineBetween(25, 12, 27, 8).lineBetween(25, 12, 23, 8);
+  animal_deer: (g, pose = 0) => {
+    const b = pose === 1 ? 1 : 0;
+    g.fillStyle(0xa97a4a, 1).fillEllipse(14, 16, 15 + b, 9 - b * 0.5);
+    g.fillStyle(0x8a5f38, 1).fillCircle(23 + b, 14 + b, 3); // head dips mid-stride
+    g.fillStyle(0xe8d8c0, 1).fillEllipse(9 - b, 18, 5, 3);
+    g.lineStyle(1, 0x6b4a2a, 1).lineBetween(25 + b, 12 + b, 27 + b, 8 + b).lineBetween(25 + b, 12 + b, 23 + b, 8 + b);
+    if (b) g.lineStyle(2, 0x8a5f38, 1).lineBetween(9, 20, 6, 22).lineBetween(20, 20, 23, 22); // legs reaching
   },
-  animal_boar: (g) => {
-    g.fillStyle(0x6b5236, 1).fillEllipse(15, 16, 16, 10);
-    g.fillStyle(0x4a3826, 1).fillCircle(24, 15, 4);
-    g.fillStyle(0xe8e8e8, 1).fillRect(27, 13, 2, 1).fillRect(27, 16, 2, 1);
+  animal_boar: (g, pose = 0) => {
+    const b = pose === 1 ? 1 : 0;
+    g.fillStyle(0x6b5236, 1).fillEllipse(15, 16 + b * 0.5, 16, 10 - b);
+    g.fillStyle(0x4a3826, 1).fillCircle(24 + b, 15 + b * 1.5, 4); // head drops into the charge
+    g.fillStyle(0xe8e8e8, 1).fillRect(27 + b, 13 + b, 2, 1).fillRect(27 + b, 16 + b, 2, 1);
   },
 
   // --- shoreline & clearing dressing (Terrain Overhaul PR3) ------------------
@@ -388,6 +397,17 @@ export function generatePropTextures(scene: Phaser.Scene): void {
     if (scene.textures.exists(key)) continue;
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
     draw(g);
+    g.generateTexture(key, SIZE, SIZE);
+    g.destroy();
+  }
+  // Stride B-frames for the animals (Animation Pass) — same fallback chain as
+  // pets: a generated base (e.g. the deer PNG) never pairs with a procedural _b.
+  for (const kind of TWO_FRAME_PROP_KINDS) {
+    const base = propKey(kind);
+    const key = base + "_b";
+    if (scene.textures.exists(key) || isGeneratedTexture(base)) continue;
+    const g = scene.make.graphics({ x: 0, y: 0 }, false);
+    DRAWERS[kind](g, 1);
     g.generateTexture(key, SIZE, SIZE);
     g.destroy();
   }

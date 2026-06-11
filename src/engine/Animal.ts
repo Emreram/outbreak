@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { ZOMBIE_KEY } from "./textures";
 import { propKey } from "./propSprites";
+import { applyFrame, frameFor, resolveFrames, type FrameSet } from "./anim";
 
 // Wild animals (Feature 6): lightweight, NON-infected prey that wander and flee the
 // player — hunt them with melee for meat/hide/bone. Deliberately separate from the
@@ -31,12 +32,15 @@ export class Animal {
   private facing = Math.random() * Math.PI * 2;
   private wanderUntil = 0;
   private alarmed = false; // hit/seen → flees from a wider radius
+  private readonly frames: FrameSet; // stride pair (Animation Pass)
+  private readonly phase = Math.random() * Math.PI * 2;
 
   constructor(scene: Phaser.Scene, x: number, y: number, def: AnimalDef) {
     this.def = def;
     this.hp = def.hp;
     const key = propKey(`animal_${def.kind}`);
     const tex = scene.textures.exists(key) ? key : ZOMBIE_KEY;
+    this.frames = resolveFrames((k) => scene.textures.exists(k), tex, { b: key + "_b" });
     this.sprite = scene.physics.add.sprite(x, y, tex).setScale(def.scale).setDepth(8);
     this.sprite.setCollideWorldBounds(true);
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
@@ -49,7 +53,8 @@ export class Animal {
     const dy = py - this.sprite.y;
     const dist = Math.hypot(dx, dy) || 1;
     const fleeRadius = this.alarmed ? 340 : 190;
-    if (dist < fleeRadius) {
+    const fleeing = dist < fleeRadius;
+    if (fleeing) {
       this.facing = Math.atan2(-dy, -dx); // run directly away
       this.sprite.setVelocity((-dx / dist) * this.def.speed, (-dy / dist) * this.def.speed);
     } else if (now > this.wanderUntil) {
@@ -62,7 +67,10 @@ export class Animal {
         this.facing = a;
       }
     }
-    this.sprite.setRotation(this.facing + Math.sin(now * 0.02) * 0.12);
+    // Bounding stride (Animation Pass): frames swap with the body sway, which
+    // stretches wider in full flight.
+    this.sprite.setRotation(this.facing + Math.sin(now * 0.02) * (fleeing ? 0.14 : 0.12));
+    applyFrame(this.sprite, frameFor(this.frames, (this.sprite.body as Phaser.Physics.Arcade.Body).speed > 4, now * 0.014 + this.phase));
   }
 
   /** Apply melee/ranged damage. Returns true if it dies. */

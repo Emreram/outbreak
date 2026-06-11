@@ -8,6 +8,7 @@
 
 import Phaser from "phaser";
 import { PETS, isRideable, type PetDef, type PetFeature } from "../game/pets";
+import { isGeneratedTexture } from "./generatedKeys";
 import { RARITY_META } from "../game/items/rarity";
 
 const SIZE = 64;
@@ -23,6 +24,11 @@ export function petWingKey(id: string): string {
 }
 export function mountedTexKey(id: string): string {
   return `mounted_${id}`;
+}
+/** The alternate stride frame (Animation Pass): pet_<id>_b. Generated i2i
+ *  variants override it through the AssetManifest exactly like the base. */
+export function petFrameBKey(id: string): string {
+  return `pet_${id}_b`;
 }
 
 /** Every species id a drawer exists for (mirrors propKinds for the tests). */
@@ -47,13 +53,16 @@ function has(def: PetDef, f: PetFeature): boolean {
   return def.look.features?.includes(f) ?? false;
 }
 
-/** Body canvas (no wings — those live on the overlay), facing +x. */
-export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
+/** Body canvas (no wings — those live on the overlay), facing +x.
+ *  pose 1 = the alternate stride frame: legs swapped, tail swung, serpents
+ *  S-mirrored, shells mid-shuffle (Animation Pass). */
+export function drawPetCanvas(def: PetDef, pose: 0 | 1 = 0): HTMLCanvasElement {
   const cv = document.createElement("canvas");
   cv.width = SIZE;
   cv.height = SIZE;
   const x = cv.getContext("2d");
   if (!x) return cv;
+  const b = pose === 1 ? 1 : 0; // stride factor for the B-frame offsets
   const body = def.look.body;
   const accent = def.look.accent ?? body;
 
@@ -67,14 +76,14 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
 
   switch (def.look.archetype) {
     case "quadruped": {
-      leg(x, C - 8, C + 7, body); leg(x, C + 6, C + 7, body);
+      leg(x, C - 8 + b * 3, C + 7 - b, body); leg(x, C + 6 - b * 3, C + 7 + b, body);
       x.fillStyle = shade(body, 1);
       ellipse(x, C - 1, C, 14, 8); // torso
       x.fillStyle = shade(body, 0.82);
       ellipse(x, C - 6, C + 2, 8, 5); // haunch shading
       // tail
       x.strokeStyle = shade(accent, 0.9); x.lineWidth = 3; x.lineCap = "round";
-      x.beginPath(); x.moveTo(C - 14, C - 1); x.quadraticCurveTo(C - 20, C - 7, C - 18, C - 12); x.stroke();
+      x.beginPath(); x.moveTo(C - 14, C - 1); x.quadraticCurveTo(C - 20, C - 7 + b * 6, C - 18, C - 12 + b * 4); x.stroke();
       // head + ears/snout
       x.fillStyle = shade(body, 1.12);
       ellipse(x, C + 12, C - 1, 7, 6);
@@ -84,7 +93,8 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
       break;
     }
     case "equine": {
-      leg(x, C - 10, C + 8, body); leg(x, C - 3, C + 8, body); leg(x, C + 4, C + 8, body); leg(x, C + 10, C + 8, body);
+      leg(x, C - 10 + b * 2.5, C + 8 - b, body); leg(x, C - 3 - b * 2.5, C + 8 + b, body);
+      leg(x, C + 4 + b * 2.5, C + 8 - b, body); leg(x, C + 10 - b * 2.5, C + 8 + b, body);
       x.fillStyle = shade(body, 1);
       ellipse(x, C - 1, C, 16, 7); // long torso
       x.fillStyle = shade(body, 0.85);
@@ -103,7 +113,7 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
       }
       // tail
       x.strokeStyle = shade(accent, 0.7); x.lineWidth = 3;
-      x.beginPath(); x.moveTo(C - 16, C - 2); x.quadraticCurveTo(C - 22, C + 2, C - 21, C + 8); x.stroke();
+      x.beginPath(); x.moveTo(C - 16, C - 2); x.quadraticCurveTo(C - 22, C + 2 + b * 3, C - 21 - b * 2, C + 8 - b * 3); x.stroke();
       if (has(def, "horn")) { // unicorn spiral
         x.strokeStyle = css(0xf4e9c8); x.lineWidth = 2.4;
         x.beginPath(); x.moveTo(C + 21, C - 9); x.lineTo(C + 27, C - 14); x.stroke();
@@ -122,20 +132,21 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
       ellipse(x, C, C, 10, 7); // body
       x.fillStyle = shade(body, 0.85);
       // tail fan
-      x.beginPath(); x.moveTo(C - 8, C); x.lineTo(C - 18, C - 5); x.lineTo(C - 18, C + 5); x.closePath(); x.fill();
+      x.beginPath(); x.moveTo(C - 8, C); x.lineTo(C - 18, C - 5 + b * 2); x.lineTo(C - 18, C + 5 + b * 2); x.closePath(); x.fill();
       x.fillStyle = shade(body, 1.12);
-      ellipse(x, C + 9, C - 2, 5, 4.4); // head
+      ellipse(x, C + 9 + b, C - 2 + b * 0.6, 5, 4.4); // head
       tri(x, C + 14, C - 2, 4, shade(0xffd23f, 1)); // beak
       x.fillStyle = shade(accent, 1);
       ellipse(x, C - 1, C - 2, 6, 3); // back feathers
       break;
     }
     case "drake": {
-      leg(x, C - 7, C + 8, body); leg(x, C + 5, C + 8, body);
+      leg(x, C - 7 + b * 3, C + 8 - b, body); leg(x, C + 5 - b * 3, C + 8 + b, body);
       x.fillStyle = shade(body, 1);
       ellipse(x, C - 1, C, 15, 8); // ridged torso
       // tail spade
-      x.beginPath(); x.moveTo(C - 14, C); x.quadraticCurveTo(C - 22, C + 2, C - 24, C - 3); x.lineTo(C - 27, C - 5); x.lineTo(C - 23, C - 7); x.closePath();
+      const ty = b ? -1 : 1; // tail spade swings to the other flank on the B frame
+      x.beginPath(); x.moveTo(C - 14, C); x.quadraticCurveTo(C - 22, C + 2 * ty, C - 24, C - 3 * ty); x.lineTo(C - 27, C - 5 * ty); x.lineTo(C - 23, C - 7 * ty); x.closePath();
       x.fillStyle = shade(body, 0.9); x.fill();
       // back ridges
       x.fillStyle = shade(accent, 0.95);
@@ -150,8 +161,9 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
     }
     case "serpent": {
       // S-curve segments
+      const sy = b ? -1 : 1; // B frame mirrors the S-curve — the slither phase
       const pts: Array<[number, number]> = [
-        [C - 18, C + 5], [C - 10, C - 3], [C - 2, C + 5], [C + 6, C - 3], [C + 13, C + 2],
+        [C - 18, C + 5 * sy], [C - 10, C - 3 * sy], [C - 2, C + 5 * sy], [C + 6, C - 3 * sy], [C + 13, C + 2 * sy],
       ];
       for (let i = 0; i < pts.length; i++) {
         x.fillStyle = shade(body, 0.9 + (i / pts.length) * 0.25);
@@ -163,18 +175,18 @@ export function drawPetCanvas(def: PetDef): HTMLCanvasElement {
         x.fillStyle = shade(accent, 1);
         tri(x, C + 16, C - 5, 4, shade(accent, 1)); tri(x, C + 20, C - 6, 3.4, shade(accent, 1));
       }
-      // fin tail
-      tri(x, C - 21, C + 4, 5, shade(accent, 0.85));
+      // fin tail (follows the S phase)
+      tri(x, C - 21, C + (b ? -4 : 4), 5, shade(accent, 0.85));
       break;
     }
     case "shelled": {
-      leg(x, C - 9, C + 7, body); leg(x, C + 7, C + 7, body);
+      leg(x, C - 9 + b * 2, C + 7, body); leg(x, C + 7 - b * 2, C + 7, body);
       x.fillStyle = shade(accent, 1);
       ellipse(x, C - 1, C, 13, 9); // shell
       x.strokeStyle = shade(accent, 0.7); x.lineWidth = 1.4;
       for (let i = 0; i < 3; i++) { x.beginPath(); x.ellipse(C - 1, C, 13 - i * 4, 9 - i * 3, 0, 0, Math.PI * 2); x.stroke(); }
       x.fillStyle = shade(body, 1.1);
-      ellipse(x, C + 13, C, 5, 3.6); // head out of the shell
+      ellipse(x, C + 13 + b * 1.5, C, 5 + b * 0.5, 3.6); // head reaches further mid-shuffle
       break;
     }
   }
@@ -261,11 +273,18 @@ export function drawWingCanvas(def: PetDef): HTMLCanvasElement {
   return cv;
 }
 
-/** Boot-time generation. Generated PNGs (AssetManifest) win — skip existing keys. */
+/** Boot-time generation. Generated PNGs (AssetManifest) win — skip existing keys.
+ *  Stride B-frames (Animation Pass) follow the fallback chain: a generated BODY
+ *  only ever cycles against a generated _b (manifest), NEVER a procedural one
+ *  (style flicker) — single-frame generated pets ride the gait layer instead. */
 export function generatePetTextures(scene: Phaser.Scene): void {
   for (const def of Object.values(PETS)) {
     const key = petTexKey(def.id);
     if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawPetCanvas(def));
+    const bk = petFrameBKey(def.id);
+    if (!isGeneratedTexture(key) && !scene.textures.exists(bk)) {
+      scene.textures.addCanvas(bk, drawPetCanvas(def, 1));
+    }
     if (def.look.features?.includes("wings")) {
       const wk = petWingKey(def.id);
       if (!scene.textures.exists(wk)) scene.textures.addCanvas(wk, drawWingCanvas(def));
