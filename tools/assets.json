@@ -274,5 +274,180 @@
     "assetType": "creature",
     "size": 64,
     "fill": 0.7
+  },
+  {
+    "key": "pet_stray_dog_b",
+    "variantOf": "pet_stray_dog",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_cat_b",
+    "variantOf": "pet_cat",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_goat_b",
+    "variantOf": "pet_goat",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_wolf_b",
+    "variantOf": "pet_wolf",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_dire_wolf_b",
+    "variantOf": "pet_dire_wolf",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_shadow_panther_b",
+    "variantOf": "pet_shadow_panther",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_razorback_b",
+    "variantOf": "pet_razorback",
+    "instruction": "the legs in the opposite stride position \u2014 front-left and rear-right legs reaching forward, the other pair trailing back, tail swung slightly the other way",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_pony_b",
+    "variantOf": "pet_pony",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_horse_b",
+    "variantOf": "pet_horse",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_donkey_b",
+    "variantOf": "pet_donkey",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_stag_b",
+    "variantOf": "pet_stag",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_warhorse_b",
+    "variantOf": "pet_warhorse",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_unicorn_b",
+    "variantOf": "pet_unicorn",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_nightmare_b",
+    "variantOf": "pet_nightmare",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_falcon_b",
+    "variantOf": "pet_falcon",
+    "instruction": "the wings at the top of the upbeat, raised higher and slightly folded, tail fan tilted",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_raven_b",
+    "variantOf": "pet_raven",
+    "instruction": "the wings at the top of the upbeat, raised higher and slightly folded, tail fan tilted",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_phoenix_b",
+    "variantOf": "pet_phoenix",
+    "instruction": "the wings at the top of the upbeat, raised higher and slightly folded, tail fan tilted",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_griffin_b",
+    "variantOf": "pet_griffin",
+    "instruction": "the wings caught at the downbeat, pressed lower, tail swung to the opposite flank",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_dragonling_b",
+    "variantOf": "pet_dragonling",
+    "instruction": "the wings caught at the downbeat, pressed lower, tail swung to the opposite flank",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_hippogriff_b",
+    "variantOf": "pet_hippogriff",
+    "instruction": "the wings caught at the downbeat, pressed lower, tail swung to the opposite flank",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_ancient_dragon_b",
+    "variantOf": "pet_ancient_dragon",
+    "instruction": "the wings caught at the downbeat, pressed lower, tail swung to the opposite flank",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_kelpie_b",
+    "variantOf": "pet_kelpie",
+    "instruction": "the body curved in the MIRRORED S-shape \u2014 every bend flipped to the other side, fins trailing",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_tide_serpent_b",
+    "variantOf": "pet_tide_serpent",
+    "instruction": "the body curved in the MIRRORED S-shape \u2014 every bend flipped to the other side, fins trailing",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_snapping_turtle_b",
+    "variantOf": "pet_snapping_turtle",
+    "instruction": "the legs mid-shuffle in opposite positions, head extended further out of the shell",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "animal_deer_b",
+    "variantOf": "animal_deer",
+    "instruction": "mid-gallop with the diagonal leg pairs swapped \u2014 front-left and rear-right legs extended forward, the others tucked under, mane and tail flowing back",
+    "size": 30,
+    "fill": 1
   }
 ]

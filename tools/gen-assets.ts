@@ -27,6 +27,11 @@ interface Spec {
   /** Fraction of the canvas the subject spans (default 1). Pets use ~0.7 so a
    *  generated sprite sits at the same world scale as the procedural 64px art. */
   fill?: number;
+  /** Animation variant (Anim PR 3): redraw the committed PNG of this spec key in
+   *  a new pose via image-to-image. Skipped gracefully when the base is absent. */
+  variantOf?: string;
+  /** The pose change for a variant (appended to VARIANT_STYLE). */
+  instruction?: string;
 }
 
 const OUT = join(process.cwd(), "public", "assets", "generated");
@@ -40,6 +45,13 @@ const STYLE =
   "silhouette, subtle dark outline, single centered subject facing RIGHT, plain solid pure green " +
   "#00FF00 background filling the whole frame, no text, no watermark, no border, no ground shadow. Subject: ";
 
+// Identity-pinning prefix for image-to-image animation frames (Anim PR 3): the
+// model must change NOTHING except the pose, or the frame pair will flicker.
+const VARIANT_STYLE =
+  "Redraw this exact sprite: the SAME creature, same colours and markings, same art style, same " +
+  "top-down orthographic viewing angle, same facing direction (RIGHT), same plain solid green " +
+  "background, same framing and same subject size. Change ONLY the pose, as follows: ";
+
 async function exists(p: string): Promise<boolean> {
   try {
     await access(p);
@@ -52,19 +64,24 @@ async function exists(p: string): Promise<boolean> {
 type Endpoint = "genlang" | "vertex";
 let working: Endpoint | null = null;
 
-/** One generateContent call returning the first inline image as a Buffer. */
-async function callGemini(apiKey: string, prompt: string, ep: Endpoint): Promise<Buffer> {
+/** One generateContent call returning the first inline image as a Buffer.
+ *  `baseImage` switches to image-to-image: the PNG is sent as an inline part
+ *  ahead of the pose instruction (Anim PR 3 stride frames). */
+async function callGemini(apiKey: string, prompt: string, ep: Endpoint, baseImage?: Buffer): Promise<Buffer> {
   const url =
     ep === "genlang"
       ? `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`
       : `https://aiplatform.googleapis.com/v1/publishers/google/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (ep === "genlang") headers["x-goog-api-key"] = apiKey;
+  const parts: object[] = [];
+  if (baseImage) parts.push({ inline_data: { mime_type: "image/png", data: baseImage.toString("base64") } });
+  parts.push({ text: prompt });
   const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts }],
       generationConfig: { responseModalities: ["IMAGE"] },
     }),
   });
@@ -81,13 +98,13 @@ async function callGemini(apiKey: string, prompt: string, ep: Endpoint): Promise
 }
 
 /** Probe endpoints once, then stick with the winner. */
-async function generate(apiKey: string, prompt: string): Promise<Buffer> {
-  if (working) return callGemini(apiKey, prompt, working);
+async function generate(apiKey: string, prompt: string, baseImage?: Buffer): Promise<Buffer> {
+  if (working) return callGemini(apiKey, prompt, working, baseImage);
   const order: Endpoint[] = apiKey.startsWith("AQ.") ? ["vertex", "genlang"] : ["genlang", "vertex"];
   let lastErr: unknown;
   for (const ep of order) {
     try {
-      const buf = await callGemini(apiKey, prompt, ep);
+      const buf = await callGemini(apiKey, prompt, ep, baseImage);
       working = ep;
       console.error(`  (endpoint: ${ep})`);
       return buf;
@@ -100,6 +117,12 @@ async function generate(apiKey: string, prompt: string): Promise<Buffer> {
 }
 
 async function main(): Promise<void> {
+  const specs = JSON.parse(await readFile(join(process.cwd(), "tools", "assets.json"), "utf8")) as Spec[];
+  await mkdir(OUT, { recursive: true });
+  if (process.argv.includes("--sheet")) {
+    await contactSheet(specs); // curation needs no key — it reads what's on disk
+    process.exit(0);
+  }
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     console.error(
@@ -110,25 +133,45 @@ async function main(): Promise<void> {
   }
   const only = process.argv.find((a) => a.startsWith("--only="))?.slice(7);
   const force = process.argv.includes("--force");
-  const specs = JSON.parse(await readFile(join(process.cwd(), "tools", "assets.json"), "utf8")) as Spec[];
-  await mkdir(OUT, { recursive: true });
 
+  const fileFor = (key: string): string => join(OUT, key.replace(/[^a-z0-9]+/gi, "_") + ".png");
   let made = 0;
   let failed = 0;
   for (const s of specs) {
     if (only && s.key !== only) continue;
-    const outPath = join(OUT, s.key.replace(/[^a-z0-9]+/gi, "_") + ".png");
+    const outPath = fileFor(s.key);
     if (!force && (await exists(outPath))) {
       console.error(`skip  ${s.key} (exists)`);
       continue;
     }
+    // Variants (Anim PR 3): image-to-image off the committed base PNG. No base
+    // on disk → skip gracefully (the runtime falls back to single frame + gait).
+    let baseImage: Buffer | undefined;
+    if (s.variantOf) {
+      const basePath = fileFor(s.variantOf);
+      if (!(await exists(basePath))) {
+        console.error(`skip  ${s.key} (no base PNG ${s.variantOf} — run base generation first)`);
+        continue;
+      }
+      baseImage = await readFile(basePath);
+    }
     console.error(`gen   ${s.key} …`);
     try {
-      const raw = await generate(apiKey, STYLE + s.description);
+      const prompt = baseImage ? VARIANT_STYLE + (s.instruction ?? "the alternate walking stride") : STYLE + s.description;
+      const raw = await generate(apiKey, prompt, baseImage);
       const png = await postProcess(raw, s.size ?? 32, s.fill ?? 1);
       await writeFile(outPath, png);
       made++;
       console.error(`  ->  ${outPath}`);
+      // Drift guard: an i2i frame whose subject size strays from its base will
+      // jitter when the pair cycles — flag it loudly for the curation pass.
+      if (baseImage && s.variantOf) {
+        const a = await subjectBox(await readFile(fileFor(s.variantOf)));
+        const b = await subjectBox(png);
+        if (a && b && (Math.abs(a.w - b.w) / a.w > 0.12 || Math.abs(a.h - b.h) / a.h > 0.12)) {
+          console.error(`  WARN drift ${s.key}: base ${a.w}x${a.h} vs variant ${b.w}x${b.h} — eyeball this pair`);
+        }
+      }
     } catch (e) {
       failed++;
       console.error(`  FAILED ${s.key}: ${String(e).slice(0, 200)}`);
@@ -201,6 +244,43 @@ async function keyBackground(buf: Buffer): Promise<Buffer> {
     }
   }
   return sharp(data, { raw: { width: info.width, height: info.height, channels: ch } }).png().toBuffer();
+}
+
+/** Trimmed (non-transparent) subject bounds — the drift guard's measure. */
+async function subjectBox(png: Buffer): Promise<{ w: number; h: number } | null> {
+  try {
+    const t = await sharp(png).trim().toBuffer({ resolveWithObject: true });
+    return { w: t.info.width, h: t.info.height };
+  } catch {
+    return null;
+  }
+}
+
+/** --sheet: composite every base/variant pair side by side for curation. */
+async function contactSheet(specs: Spec[]): Promise<void> {
+  const pairs = specs.filter((s) => s.variantOf);
+  const CELL = 72;
+  const rows: sharp.OverlayOptions[] = [];
+  let row = 0;
+  for (const s of pairs) {
+    const basePath = join(OUT, s.variantOf!.replace(/[^a-z0-9]+/gi, "_") + ".png");
+    const varPath = join(OUT, s.key.replace(/[^a-z0-9]+/gi, "_") + ".png");
+    if (!(await exists(basePath)) || !(await exists(varPath))) continue;
+    const norm = (p: string) =>
+      sharp(p).resize(64, 64, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer();
+    rows.push({ input: await norm(basePath), left: 4, top: row * CELL + 4 });
+    rows.push({ input: await norm(varPath), left: CELL + 4, top: row * CELL + 4 });
+    row++;
+  }
+  if (row === 0) {
+    console.error("no base/variant pairs on disk yet");
+    return;
+  }
+  await sharp({ create: { width: CELL * 2 + 8, height: row * CELL + 8, channels: 4, background: { r: 60, g: 64, b: 70, alpha: 255 } } })
+    .composite(rows)
+    .png()
+    .toFile(join(process.cwd(), "tools", "contact-sheet.png"));
+  console.error(`tools/contact-sheet.png: ${row} pairs (base | variant)`);
 }
 
 void main();
