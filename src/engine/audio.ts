@@ -409,6 +409,71 @@ class Sfx {
   waterWake(): void {
     this.noise(0.2, 800, 0.025);
   }
+
+  // --- loot ceremony (PR-C): risers, flips, stingers, eggs --------------------
+
+  /** Ceremony buildup — a rising filtered sweep under a climbing sine. */
+  riser(): void {
+    this.tone(160, 0.6, "sine", 0.04, 660);
+    this.noise(0.55, 900, 0.025);
+    setTimeout(() => this.noise(0.25, 2200, 0.03), 320);
+  }
+
+  /** The container bursts open. */
+  revealBurst(): void {
+    this.noise(0.18, 1400, 0.06);
+    this.tone(120, 0.16, "sine", 0.06, 60);
+  }
+
+  /** One card turning over. */
+  cardFlip(): void {
+    this.tone(1400, 0.03, "square", 0.022);
+  }
+
+  /** Per-rarity reveal stinger: silence for commons, a fanfare at the top. */
+  rarityStinger(rank: number): void {
+    if (rank <= 0) return;
+    if (rank === 1) {
+      this.tone(523, 0.12, "sine", 0.04);
+      setTimeout(() => this.tone(659, 0.16, "sine", 0.04), 90);
+      return;
+    }
+    if (rank === 2) {
+      this.tone(523, 0.12, "sine", 0.045);
+      setTimeout(() => this.tone(659, 0.12, "sine", 0.045), 90);
+      setTimeout(() => this.tone(784, 0.2, "sine", 0.045), 180);
+      return;
+    }
+    if (rank === 3) {
+      this.tone(523, 0.12, "sine", 0.05);
+      setTimeout(() => this.tone(659, 0.12, "sine", 0.05), 85);
+      setTimeout(() => this.tone(784, 0.12, "sine", 0.05), 170);
+      setTimeout(() => this.tone(1046, 0.26, "sine", 0.05), 255);
+      return;
+    }
+    if (rank === 4) {
+      [392, 523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.tone(f, 0.16, "sine", 0.05), i * 95));
+      return;
+    }
+    // mythic: a low boom under the arpeggio, then shimmer
+    this.tone(65, 0.5, "sine", 0.07, 50);
+    this.noise(0.3, 300, 0.04);
+    [523, 659, 784, 1046, 1318].forEach((f, i) => setTimeout(() => this.tone(f, 0.2, "sine", 0.05), 140 + i * 100));
+    setTimeout(() => {
+      this.tone(2093, 0.5, "sine", 0.02);
+      this.tone(2637, 0.5, "sine", 0.016);
+    }, 700);
+  }
+
+  /** Eggshell giving way — three escalating snaps. */
+  eggCrack(stage: number): void {
+    this.noise(0.05 + stage * 0.02, 1800 - stage * 350, 0.04 + stage * 0.015);
+  }
+
+  /** Confetti burst for a top-tier card. */
+  jackpot(): void {
+    [0, 60, 110, 170, 240].forEach((d, i) => setTimeout(() => this.tone(1600 + i * 180, 0.04, "square", 0.02), d));
+  }
 }
 
 export const sfx = new Sfx();

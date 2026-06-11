@@ -42,6 +42,8 @@ function baseColor(def: ItemDef): number {
     case "grenade": return 0x3a5236;
     case "note": return 0xe8dfc8;
     case "map": return 0xd8c89a;
+    case "cache": return 0xb98a4a;
+    case "egg": return 0xe8e2d0;
     default: return 0x9aa3ad;
   }
 }
@@ -139,6 +141,38 @@ function silhouette(ctx: P2D, def: ItemDef): void {
       ctx.strokeStyle = "#b03030";
       ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.moveTo(5, -6); ctx.lineTo(10, -1); ctx.moveTo(10, -6); ctx.lineTo(5, -1); ctx.stroke(); // X
+      break;
+    }
+    case "cache": { // a strapped supply crate with a stencil band
+      ctx.fillStyle = fill;
+      rrect(ctx, -13, -9, 26, 19, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.fillRect(-13, -3, 26, 3); // lid seam
+      ctx.fillStyle = "#2a2620";
+      ctx.fillRect(-7, -9, 4, 19); // straps
+      ctx.fillRect(3, -9, 4, 19);
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.fillRect(-2, 2, 8, 2); // stencil mark
+      break;
+    }
+    case "egg": { // a speckled egg, lit from above
+      ctx.fillStyle = fill;
+      ctx.beginPath();
+      ctx.ellipse(0, 2, 9, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath();
+      ctx.ellipse(-3, -4, 3, 4.5, -0.4, 0, Math.PI * 2);
+      ctx.fill(); // sheen
+      ctx.fillStyle = "rgba(0,0,0,0.25)";
+      for (const [sx, sy, r] of [[4, -2, 1.4], [-4, 5, 1.2], [2, 7, 1.5], [-1, 0, 1]] as const) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.fill(); // speckles
+      }
       break;
     }
     default: ctx.fillStyle = fill; poly(ctx, [[-10, -6], [2, -12], [12, -2], [6, 10], [-8, 8]]); break; // scrap / material

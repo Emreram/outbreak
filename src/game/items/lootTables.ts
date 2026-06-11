@@ -58,6 +58,7 @@ function categoryOf(d: ItemDef): Category {
 const POOLS: Record<Category, ItemDef[]> = (() => {
   const p = {} as Record<Category, ItemDef[]>;
   for (const d of [...WEAPONS, ...MISC_ITEMS, ...AMMO]) {
+    if (d.kind === "openable") continue; // caches/eggs are granted explicitly, never random-rolled (and a cache must not roll a cache)
     const c = categoryOf(d);
     (p[c] ||= []).push(d);
   }

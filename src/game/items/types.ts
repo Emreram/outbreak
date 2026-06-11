@@ -4,7 +4,7 @@
 
 export type Rarity = "common" | "uncommon" | "rare" | "epic" | "legendary" | "mythic";
 
-export type ItemKind = "weapon" | "consumable" | "ammo" | "material" | "throwable" | "armor" | "readable";
+export type ItemKind = "weapon" | "consumable" | "ammo" | "material" | "throwable" | "armor" | "readable" | "openable";
 
 export type Hand = "melee" | "ranged";
 
@@ -125,7 +125,16 @@ export interface ReadableDef extends BaseDef {
   flavor: "note" | "journal" | "map";
 }
 
-export type ItemDef = WeaponDef | ConsumableDef | AmmoDef | ThrowableDef | MaterialDef | ArmorDef | ReadableDef;
+/** Sealed caches + pet eggs (Companions PR-C) — "Open" from the bag fires the
+ *  loot-reveal ceremony. `opens` names a rollLoot source; eggs instead hatch a
+ *  pet of `eggRarity` (rolled deterministically off the persisted petCounter). */
+export interface OpenableDef extends BaseDef {
+  kind: "openable";
+  opens?: string; // rollLoot source (caches)
+  eggRarity?: Rarity; // hatches a pet of this rarity (eggs)
+}
+
+export type ItemDef = WeaponDef | ConsumableDef | AmmoDef | ThrowableDef | MaterialDef | ArmorDef | ReadableDef | OpenableDef;
 
 export function isWeaponDef(d: ItemDef | undefined): d is WeaponDef {
   return !!d && d.kind === "weapon";
