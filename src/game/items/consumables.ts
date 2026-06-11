@@ -1,4 +1,4 @@
-import type { ArmorDef, ConsumableDef, ItemDef, MaterialDef, Rarity, StatKey, ThrowableDef } from "./types";
+import type { ArmorDef, ConsumableDef, ItemDef, MaterialDef, OpenableDef, Rarity, StatKey, ThrowableDef } from "./types";
 
 // Non-weapon items: medical / food / drink consumables, crafting materials,
 // armor, and throwables — all rarity-graded so loot tables + UI work uniformly.
@@ -130,6 +130,25 @@ const ARMOR: ArmorDef[] = [
   arm("Plate Carrier", "legendary", 52, "body", 0x1a1a1a),
 ];
 
+// Sealed caches + pet eggs (Companions PR-C): "Open" in the bag → reveal ceremony.
+function opn(name: string, rarity: Rarity, icon: string, extra: { opens?: string; eggRarity?: Rarity; tint?: number; desc?: string }): OpenableDef {
+  const d: OpenableDef = { id: slug(name), name, kind: "openable", rarity, icon };
+  if (extra.opens) d.opens = extra.opens;
+  if (extra.eggRarity) d.eggRarity = extra.eggRarity;
+  if (extra.tint !== undefined) d.tint = extra.tint;
+  if (extra.desc) d.desc = extra.desc;
+  return d;
+}
+
+const OPENABLES: OpenableDef[] = [
+  opn("Supply Cache", "rare", "cache", { opens: "chest:3", tint: 0xb98a4a, desc: "Sealed relief supplies. Open it." }),
+  opn("Military Cache", "epic", "cache", { opens: "military", tint: 0x4a5a3a, desc: "Stencilled, strapped, and heavy." }),
+  opn("Spotted Egg", "uncommon", "egg", { eggRarity: "uncommon", tint: 0xd8d2c4, desc: "Something shifts inside." }),
+  opn("Marbled Egg", "rare", "egg", { eggRarity: "rare", tint: 0x8fb8d8, desc: "Veined like river stone — and warm." }),
+  opn("Gilded Egg", "epic", "egg", { eggRarity: "epic", tint: 0xe3bd5f, desc: "It hums against your palm." }),
+  opn("Mythic Egg", "mythic", "egg", { eggRarity: "mythic", tint: 0xff5a6e, desc: "The shell beats like a heart." }),
+];
+
 const THROWABLES: ThrowableDef[] = [
   thr("Rock", "common", 4, 0),
   thr("Road Flare", "common", 2, 0, "burn"),
@@ -148,4 +167,5 @@ export const MISC_ITEMS: readonly ItemDef[] = Object.freeze([
   ...MATERIALS,
   ...ARMOR,
   ...THROWABLES,
+  ...OPENABLES,
 ]);

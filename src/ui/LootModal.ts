@@ -113,6 +113,7 @@ export class LootModal {
   private onChange?: () => void;
   private onCloseCb?: () => void;
   private onRead?: (name: string) => void;
+  private onOpenItem?: (name: string) => void;
   // "NEW" badges (U3): names seen at the last open; first open seeds the set.
   private readonly seen = new Set<string>();
   private seenInit = false;
@@ -191,6 +192,10 @@ export class LootModal {
   /** Reading is scene-owned (flavour vs stash-map pinning) — see WorldScene.readItem. */
   setOnRead(fn: (name: string) => void): void {
     this.onRead = fn;
+  }
+  /** Opening caches/eggs is scene-owned (loot grant + reveal ceremony, PR-C). */
+  setOnOpenItem(fn: (name: string) => void): void {
+    this.onOpenItem = fn;
   }
 
   open(state: GameState, onChange: () => void): void {
@@ -400,6 +405,10 @@ export class LootModal {
       const stat = div("ob-dstat");
       stat.textContent = def.flavor === "map" ? "Reading it pins a buried cache on your map" : "Found writing — read it";
       this.detailEl.append(stat);
+    } else if (def.kind === "openable") {
+      const stat = div("ob-dstat");
+      stat.textContent = def.eggRarity ? "Warm to the touch — it could hatch" : "Sealed supplies — open it";
+      this.detailEl.append(stat);
     }
     if (def.desc) {
       const d = div("ob-dmeta");
@@ -412,6 +421,7 @@ export class LootModal {
     if (def.kind === "armor") actions.append(this.actBtn("Equip", () => this.doEquipArmor(def.name)));
     if (def.kind === "consumable") actions.append(this.actBtn("Use", () => this.doUse(def.name)));
     if (def.kind === "readable") actions.append(this.actBtn("Read", () => this.doRead(def.name)));
+    if (def.kind === "openable") actions.append(this.actBtn(def.eggRarity ? "Hatch" : "Open", () => this.doOpenItem(def.name)));
     actions.append(this.actBtn("Drop", () => this.doDrop(def.name), true));
     this.detailEl.append(actions);
   }
@@ -445,6 +455,12 @@ export class LootModal {
     this.onRead?.(name);
     if (!this.state.inventory.some((i) => i.item === name)) this.selected = undefined; // maps consume
     this.changed();
+  }
+  /** Open a cache / hatch an egg: the bag steps aside, the ceremony takes over. */
+  private doOpenItem(name: string): void {
+    if (!this.state) return;
+    this.close();
+    this.onOpenItem?.(name);
   }
   private doDrop(name: string): void {
     if (!this.state) return;

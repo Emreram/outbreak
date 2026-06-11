@@ -74,6 +74,7 @@ import {
   CHEST_CLOSED,
   CHEST_OPEN,
   heldKey,
+  iconDataUrl,
   iconKey,
   PADLOCK,
   PROJ_ARROW,
@@ -103,10 +104,12 @@ import { Pet } from "../engine/Pet";
 import {
   activePet, addPet, baitFor, bondedSpeed, denFlag, denSpecies, feedPet, getPetDef, getPetState,
   isRideable, mountPassesTile, removePet, rollWildPet, setActivePet, tameChance,
-  FLIGHT_DRAIN_PER_S, FLIGHT_REGEN_PER_S, MAX_WILD_PETS, TAME_MS, TRAMPLE_RANK, type PetDef, type PetState,
+  FLIGHT_DRAIN_PER_S, FLIGHT_REGEN_PER_S, MAX_PET_ROSTER, MAX_WILD_PETS, TAME_MS, TRAMPLE_RANK, type PetDef, type PetState,
 } from "../game/pets";
-import { mountedTexKey, PET_SHADOW } from "../engine/petSprites";
+import { mountedTexKey, petPortraitUrl, PET_SHADOW } from "../engine/petSprites";
 import { PetModal } from "../ui/PetModal";
+import { LootReveal, type RevealCard } from "../ui/LootReveal";
+import { chestEggChance, chestEggName, deservesCeremony, hatchPreview, openableDef } from "../game/openables";
 import type { ZombieDef } from "../game/enemies/types";
 import { rollAmbientUndead, rollZombie, resetSpawnVariety } from "../game/enemies/spawnTable";
 import { getZombie } from "../game/enemies/catalog";
@@ -284,6 +287,8 @@ export class WorldScene extends Phaser.Scene {
   private tame: { pet: Pet; bait: string; done: number; ring: Phaser.GameObjects.Graphics } | null = null;
   private petModal!: PetModal;
   private petOpen = false;
+  private reveal!: LootReveal; // loot-box ceremony overlay (PR-C)
+  private revealOpen = false;
   // Riding (PR-B): like driving, the player BECOMES the mount. Never persisted —
   // every load starts dismounted (the active pet restores as a companion).
   private riding: { def: PetDef; rec: PetState } | null = null;
@@ -716,6 +721,12 @@ export class WorldScene extends Phaser.Scene {
       this.setGameKeys(true);
     });
     this.loot.setOnRead((name) => this.readItem(name));
+    this.loot.setOnOpenItem((name) => this.openOpenable(name));
+    this.revealOpen = false;
+    this.reveal = new LootReveal(() => {
+      this.revealOpen = false;
+      this.setGameKeys(true);
+    });
     this.reader = new ReaderModal();
     this.craftUi = new CraftModal();
     this.craftUi.setHandlers(
@@ -815,6 +826,7 @@ export class WorldScene extends Phaser.Scene {
       this.storeUi.destroy();
       this.tradeUi.destroy();
       this.petModal.destroy();
+      this.reveal.destroy();
       this.touch.destroy();
       this.terrain.destroy();
       this.chunks.destroy();
@@ -839,7 +851,7 @@ export class WorldScene extends Phaser.Scene {
   override update(time: number, delta: number): void {
     // The world pauses during an encounter, while an outcome is playing out, or
     // while the loot/craft/storage/trade screens are open.
-    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen) {
+    if (!this.dead && !this.inEncounter && !this.enacting && !this.lootOpen && !this.craftOpen && !this.storeOpen && !this.tradeOpen && !this.revealOpen) {
       const canSprint = this.state.player.stamina > 5;
       const tv = this.touch.vector();
       // Living World: the tile underfoot slows wading/mud/lava, kicks up contact FX,
@@ -3860,7 +3872,10 @@ export class WorldScene extends Phaser.Scene {
     const spot = this.chunks.walkableNear(tx, ty, 4, 9);
     if (!spot) return;
     const bias = this.chunks.lootBias(spot.x, spot.y) + 0.3;
-    for (const s of rollLoot("military", liveRng, n, bias)) this.spawnDrop(spot.x, spot.y, s.item, s.qty);
+    // The crate's heart is a sealed Supply Cache — its ceremony fires when you
+    // open it from the bag (PR-C) — plus a little loose materiel.
+    this.spawnDrop(spot.x, spot.y, "Supply Cache", 1);
+    for (const s of rollLoot("military", liveRng, Math.max(1, n - 1), bias)) this.spawnDrop(spot.x, spot.y, s.item, s.qty);
     this.revealLocation("Supply drop", "supply_cache", spot.x, spot.y);
   }
 
@@ -4238,7 +4253,7 @@ export class WorldScene extends Phaser.Scene {
 
   /** True while any DOM overlay owns the keyboard. */
   private anyModalOpen(): boolean {
-    return this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.petOpen || this.inEncounter || this.reader.isOpen();
+    return this.lootOpen || this.craftOpen || this.storeOpen || this.tradeOpen || this.petOpen || this.revealOpen || this.inEncounter || this.reader.isOpen();
   }
 
   private onEncounterAction(input: TurnInput): void {
@@ -4865,7 +4880,6 @@ export class WorldScene extends Phaser.Scene {
     chest.badge = undefined;
     if (!this.state.worldFlags.includes(`chest_${chest.gid}`)) this.state.worldFlags.push(`chest_${chest.gid}`);
     sfx.pickup();
-    this.floatText(chest.sprite.x, chest.sprite.y, `${chest.kind.replace(/_/g, " ")} looted`, "#ffd23f");
     // Scarcer + smaller hauls (1+tier); locked containers reward the effort with a bias bump,
     // and specialised kinds route to themed loot (guns/meds/food/tools).
     const host = this.chunks.buildingAt(Math.floor(chest.sprite.x / TILE_SIZE), Math.floor(chest.sprite.y / TILE_SIZE));
@@ -4874,14 +4888,78 @@ export class WorldScene extends Phaser.Scene {
       this.chunks.lootBias(chest.sprite.x, chest.sprite.y) +
       (chest.locked ? 0.4 : 0) +
       priedLootBonus(this.state, host?.gid); // untouched (boarded) stock is richer (U5)
-    for (const s of rollLoot(this.containerLootSource(chest.kind, chest.tier), liveRng, 1 + chest.tier, bias)) {
-      this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
-    }
+    // Pre-roll EVERYTHING up front so the ceremony path can bank it before any UI.
+    const rolls = rollLoot(this.containerLootSource(chest.kind, chest.tier), liveRng, 1 + chest.tier, bias);
     // Set-piece containers tell stories: a decent chance of a note/journal/map (U2).
-    if (chest.gid.includes("_sc") && liveRng.chance(0.35)) {
-      this.spawnDrop(chest.sprite.x, chest.sprite.y, rollReadable(liveRng), 1);
+    if (chest.gid.includes("_sc") && liveRng.chance(0.35)) rolls.push({ item: rollReadable(liveRng), qty: 1 });
+    // The best containers very occasionally hold a pet egg (PR-C).
+    if (liveRng.chance(chestEggChance(chest.tier))) rolls.push({ item: chestEggName(chest.tier, liveRng.next()), qty: 1 });
+
+    // Tiered ceremony (user-approved): tier-2+ / locked stock earns the full
+    // reveal (items banked FIRST — presentation can never eat loot); the common
+    // path keeps the quick physical pop. A running ceremony also drops to quick.
+    if (deservesCeremony(chest.tier, chest.locked) && !this.reveal.isOpen()) {
+      for (const s of rolls) addItem(this.state, s.item, s.qty);
+      this.showReveal(`${chest.kind.replace(/_/g, " ")} · tier ${chest.tier}`, iconDataUrl("Supply Cache"), rolls);
+    } else {
+      this.floatText(chest.sprite.x, chest.sprite.y, `${chest.kind.replace(/_/g, " ")} looted`, "#ffd23f");
+      for (const s of rolls) this.spawnDrop(chest.sprite.x, chest.sprite.y, s.item, s.qty);
     }
     this.objectiveEvent({ kind: "container_searched" }); // opening arc (U3)
+    this.persist();
+  }
+
+  /** Fire the loot ceremony over a banked haul (PR-C). Commons lead, the best
+   *  card lands last — classic reveal pacing. */
+  private showReveal(title: string, icon: string, rolls: { item: string; qty: number }[], egg?: { card: RevealCard }): void {
+    if (this.reveal.isOpen()) return; // never strand revealOpen=true behind a refused open
+    const cards: RevealCard[] = egg
+      ? [egg.card]
+      : rolls
+          .map((s) => {
+            const def = defOf(s.item);
+            return { img: iconDataUrl(s.item), name: s.item, qty: s.qty, rarity: def.rarity };
+          })
+          .sort((a, b) => RARITY_META[a.rarity].rank - RARITY_META[b.rarity].rank);
+    this.revealOpen = true;
+    this.setGameKeys(false);
+    this.firing = false;
+    this.player.sprite.setVelocity(0, 0);
+    this.reveal.open({ title: title.toUpperCase(), icon, cards, egg: !!egg });
+  }
+
+  /** "Open" on a cache / "Hatch" on an egg from the bag (PR-C). Caches bank a
+   *  themed haul; eggs hatch a pet rolled off the PERSISTED counter (no
+   *  save-scum) and join the roster before the shell hits the floor. */
+  private openOpenable(name: string): void {
+    const def = openableDef(name);
+    if (!def || !hasItem(this.state, name) || this.dead) return;
+    if (this.reveal.isOpen()) return; // one ceremony at a time
+    if (def.eggRarity) {
+      if ((this.state.pets ?? []).length >= MAX_PET_ROSTER) {
+        this.showToast("Your pack is full — release a pet first (P)");
+        sfx.ui();
+        return; // the egg keeps — hatch it once there's room
+      }
+      const species = hatchPreview(this.state, def);
+      removeItem(this.state, name, 1);
+      const rec = addPet(this.state, species.id);
+      if (rec) {
+        sfx.petVoice(species.voice);
+        heartBurst(this, this.player.sprite.x, this.player.sprite.y - 10, 6);
+        pushRecentEvent(this.state, `A ${species.name} hatched from the ${name}.`);
+        if (rec.active) this.restorePets(); // first pet: it tumbles out beside you
+        this.showReveal(name, iconDataUrl(name), [], {
+          card: { img: petPortraitUrl(species.id), name: species.name, rarity: species.rarity, sub: species.desc },
+        });
+      }
+    } else if (def.opens) {
+      removeItem(this.state, name, 1);
+      const rolls = rollLoot(def.opens, liveRng, 4 + (rarityRank(def.rarity) >= 3 ? 1 : 0), lootLuck(this.state) + 0.4);
+      for (const s of rolls) addItem(this.state, s.item, s.qty);
+      pushRecentEvent(this.state, `Opened a ${name}.`);
+      this.showReveal(name, iconDataUrl(name), rolls);
+    }
     this.persist();
   }
 
