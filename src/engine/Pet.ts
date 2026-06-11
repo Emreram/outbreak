@@ -29,6 +29,8 @@ export class Pet {
   stateId?: string; // PetState.id when owned
   lastBite = 0; // owned attack cooldown (scene applies the damage)
   hostileUntil = 0; // wild predator: failed tame → turns on you briefly
+  docile = false; // the day-0 stray (PR-D): pads after the player, hoping
+  lastCry = 0; // docile whimper cadence (scene-paced)
   private alarmedUntil = 0;
   private facing = Math.random() * Math.PI * 2;
   private wanderUntil = 0;
@@ -90,6 +92,13 @@ export class Pet {
         else this.followOrIdle(dx, dy, dist, speed);
       } else {
         this.followOrIdle(dx, dy, dist, speed);
+      }
+    } else if (this.docile && !this.isHostile(now)) {
+      // the stray: pads after the player and sits hopeful at arm's length
+      if (dist > 110) this.move(dx / dist, dy / dist, speed * 0.55);
+      else {
+        this.sprite.setVelocity(0, 0);
+        this.facing = Math.atan2(dy, dx);
       }
     } else if (this.isHostile(now)) {
       this.move(dx / dist, dy / dist, speed); // predator: it remembers the insult

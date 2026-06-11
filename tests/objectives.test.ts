@@ -1,8 +1,12 @@
-// Opening arc (Expansion U3): the reducer advances through arm → scavenge →
-// reach → dawn, labels track progress, the safehouse is deterministic + on land,
-// and old saves (no cursor) fall back cleanly.
+// Opening arc (Expansion U3, extended by Companions PR-D): the reducer advances
+// through arm → scavenge → befriend the stray → reach → dawn, labels track
+// progress, the befriend step auto-skips when it can't teach (a pet already on
+// the roster, or a cursor carried past day 0 — including OLD saves whose index
+// predates the step), the safehouse is deterministic + on land, and old saves
+// with no cursor fall back cleanly.
 
-import { OPENING_CHAIN, newObjectives, currentStep, objectiveLabel, notifyObjective, arcSafehouse } from "../src/game/objectives";
+import { OPENING_CHAIN, newObjectives, currentStep, objectiveLabel, notifyObjective, skipSatisfiedSteps, arcSafehouse } from "../src/game/objectives";
+import { addPet } from "../src/game/pets";
 import { biomeAt } from "../src/game/world/biomes";
 import { findSpawnChunk } from "../src/game/world/spawn";
 import { newGame } from "../src/game/GameState";
@@ -25,7 +29,7 @@ function ok(cond: boolean, msg: string): void {
   const s = newGame("arc-seed");
   ok(!!s.objectives && s.objectives.chain === "opening" && s.objectives.step === 0, "newGame seeds the opening chain");
   ok(currentStep(s)?.kind === "equip_weapon", "first step: arm yourself");
-  ok((objectiveLabel(s) ?? "").includes("1/4"), "banner shows step 1/4");
+  ok((objectiveLabel(s) ?? "").includes("1/5"), "banner shows step 1/5");
 
   const old = newGame("old");
   old.objectives = undefined; // simulate a pre-U3 save
@@ -50,15 +54,44 @@ function ok(cond: boolean, msg: string): void {
   const r2 = notifyObjective(s, { kind: "container_searched" });
   ok(r2.stepDone, "4th search completes the scavenge step");
 
+  ok(currentStep(s)?.kind === "tame_pet", "step 3 is befriending the stray (PR-D)");
+  ok(!notifyObjective(s, { kind: "chunk_entered", cx: 0, cy: 0 }).advanced, "reaching chunks doesn't satisfy the stray");
+  const rb = notifyObjective(s, { kind: "pet_tamed" });
+  ok(rb.stepDone, "taming completes the befriend step");
+
   const t = arcSafehouse(s.seed);
   ok(!notifyObjective(s, { kind: "chunk_entered", cx: t.cx + 5, cy: t.cy }).advanced, "wrong chunk doesn't count");
   const r3 = notifyObjective(s, { kind: "chunk_entered", cx: t.cx, cy: t.cy });
-  ok(r3.stepDone, "entering the safehouse chunk completes step 3");
+  ok(r3.stepDone, "entering the safehouse chunk completes step 4");
 
   const r4 = notifyObjective(s, { kind: "dawn" });
   ok(r4.stepDone && r4.chainDone && s.objectives?.done === true, "dawn completes the chain");
   ok(!notifyObjective(s, { kind: "dawn" }).advanced, "finished chains ignore further events");
   ok(objectiveLabel(s) === null, "banner releases back to the run goal when done");
+}
+
+// Befriend auto-skip: a roster pet (tamed during arm/scavenge) skips the step
+// silently as the cursor advances into it.
+{
+  const s = newGame("skip-seed");
+  addPet(s, "cat"); // befriended something before the chain reached the stray
+  notifyObjective(s, { kind: "weapon_equipped" });
+  for (let i = 0; i < 4; i++) notifyObjective(s, { kind: "container_searched" });
+  ok(currentStep(s)?.kind === "reach_marker", "a roster pet auto-skips befriend on advance");
+}
+
+// Stale cursors: skipSatisfiedSteps unblocks saves sitting ON the step.
+{
+  const s = newGame("stale-seed");
+  s.objectives = { chain: "opening", step: 2, progress: 0 }; // parked on befriend
+  s.day = 3; // an old save carried past day 0 — the stray window is gone
+  skipSatisfiedSteps(s);
+  ok(currentStep(s)?.kind === "reach_marker", "day>0 cursors skip befriend (old-save migration)");
+
+  const f = newGame("fresh-day0");
+  f.objectives = { chain: "opening", step: 2, progress: 0 };
+  skipSatisfiedSteps(f);
+  ok(currentStep(f)?.kind === "tame_pet", "a petless day-0 run KEEPS the befriend step (the stray is coming)");
 }
 
 // Safehouse: deterministic, near spawn, on land.
@@ -71,7 +104,8 @@ function ok(cond: boolean, msg: string): void {
   ok(d >= 1 && d <= 4, `safehouse a short expedition out (${d.toFixed(1)} chunks)`);
   const biome = biomeAt("safeh-1", a.cx, a.cy);
   ok(biome.id !== "ocean" && biome.id !== "lake", "safehouse lands on dry ground");
-  ok(OPENING_CHAIN.length === 4, "chain is the designed 4 steps");
+  ok(OPENING_CHAIN.length === 5, "chain is the designed 5 steps");
+  void newObjectives;
 }
 
 console.log(failed === 0 ? "ALL OBJECTIVE CHECKS PASSED" : `${failed} CHECK(S) FAILED`);

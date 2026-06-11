@@ -84,7 +84,7 @@ import {
 } from "../engine/icons";
 import { noteText, parseStashFlag, rollReadable, rollStashSpot, stashCount, stashFlag } from "../game/notes";
 import { ReaderModal } from "../ui/ReaderModal";
-import { arcSafehouse, currentStep, notifyObjective, objectiveLabel, type ObjectiveEvent } from "../game/objectives";
+import { arcSafehouse, currentStep, notifyObjective, objectiveLabel, skipSatisfiedSteps, type ObjectiveEvent } from "../game/objectives";
 import { rarityRank } from "../game/items/rarity";
 import { BIOMES, type BiomeId } from "../game/world/biomes";
 import { applyOutcome, type ApplyResult } from "../game/outcomes";
@@ -151,9 +151,10 @@ interface BuildingFx {
   lastCue: number; // knock/banger cue cooldown
 }
 
-/** A live heartbeat beacon (U4): a distant happening you can go investigate. */
+/** A live heartbeat beacon (U4): a distant happening you can go investigate.
+ *  "convoy" is the scripted day-0 supply-route beacon (PR-D), never random-rolled. */
 interface Beacon {
-  kind: WorldEventKind;
+  kind: WorldEventKind | "convoy";
   x: number;
   y: number;
   until: number;
@@ -668,6 +669,7 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(950)
       .setVisible(false);
     this.uiLayer.add([this.objBanner, this.hintText]);
+    skipSatisfiedSteps(this.state); // old/mid-run cursors skip "befriend" when it can't teach
     this.updateObjective();
 
     this.scale.on("resize", this.onResize, this);
@@ -837,6 +839,18 @@ export class WorldScene extends Phaser.Scene {
     resetSpawnVariety(); // fresh anti-repeat memory for this run
     if (!isDead(this.state)) this.spawnAmbientWalkers(this.ambientStartCount());
     this.ambientDelay = this.scheduleAmbientMs();
+
+    // The scripted opening minutes (PR-D): a stray dog finds YOU half a minute
+    // in (the taming tutorial), and at the minute mark a dead supply convoy
+    // smokes on the horizon. Both re-arm on reload until they've happened.
+    if (!isDead(this.state) && this.state.day === 0) {
+      if ((this.state.pets ?? []).length === 0 && currentStep(this.state)) {
+        this.time.delayedCall(25000, () => this.spawnStray());
+      }
+      if (!this.state.worldFlags.includes("convoy_done")) {
+        this.time.delayedCall(60000, () => this.spawnConvoyBeacon());
+      }
+    }
 
     // A fresh run opens with its AI-authored scenario intro.
     const intro = this.registry.get("intro") as string | undefined;
@@ -1101,8 +1115,23 @@ export class WorldScene extends Phaser.Scene {
     this.updateObjective();
     if (r.toast) this.showToast(r.toast);
     if (r.stepDone) sfx.ui();
+    // Arriving at the safehouse finds it stocked (PR-D): chunk_entered only ever
+    // completes the reach_marker step, so this fires exactly once.
+    if (r.stepDone && ev.kind === "chunk_entered") this.spawnSafehouseKit();
     if (r.chainDone) this.grantArcReward();
     this.persist();
+  }
+
+  /** The safehouse keeps its promise: a Supply Cache stashed by whoever held
+   *  this place before you — dropped at your feet on first arrival (PR-D). */
+  private spawnSafehouseKit(): void {
+    if (this.state.worldFlags.includes("safehouse_kit")) return;
+    this.state.worldFlags.push("safehouse_kit");
+    const { tx, ty } = this.player.tilePos();
+    const spot = this.chunks.walkableNear(tx, ty, 2, 5) ?? { x: this.player.sprite.x + 22, y: this.player.sprite.y + 22 };
+    this.spawnDrop(spot.x, spot.y, "Supply Cache", 1);
+    this.showToast("Someone stocked this place — a Supply Cache is stashed here");
+    pushRecentEvent(this.state, "Found the safehouse kit.");
   }
 
   /** Fires the arm-objective once a real weapon is in hand (any equip path). */
@@ -1112,15 +1141,20 @@ export class WorldScene extends Phaser.Scene {
     if (armed) this.objectiveEvent({ kind: "weapon_equipped" });
   }
 
-  /** Completing the opening arc drops a small supply reward at the player's feet. */
+  /** Completing the opening arc: a Supply Cache + a Spotted Egg, presented
+   *  through the ceremony (PR-D) — each then opens from the bag for two more
+   *  reveals. Banked BEFORE the curtain rises, as always. */
   private grantArcReward(): void {
     pushRecentEvent(this.state, "Saw the first day through — supplies secured.");
-    this.showToast("Opening objective complete — supplies dropped at your feet");
-    for (const s of rollLoot("chest:2", liveRng, 3, 0.3)) {
-      this.spawnDrop(this.player.sprite.x + 10, this.player.sprite.y + 10, s.item, s.qty);
-    }
+    addItem(this.state, "Supply Cache", 1);
+    addItem(this.state, "Spotted Egg", 1);
     this.grantXp("combat", 6);
     this.grantXp("crafting", 6);
+    this.showReveal("opening arc complete", iconDataUrl("Supply Cache"), [
+      { item: "Supply Cache", qty: 1 },
+      { item: "Spotted Egg", qty: 1 },
+    ]);
+    this.showToast("Reward banked — open them from your bag (I)");
   }
 
   /** Soft additive pulse under the current interact target (U3 loot feel). */
@@ -1810,8 +1844,14 @@ export class WorldScene extends Phaser.Scene {
           pet.lastBite = now;
           this.damagePlayer(pet.def.damage, false, `The ${pet.def.name.toLowerCase()} turned on you!`);
         }
-        // wilds wander off like animals do
-        if (Math.hypot(pet.sprite.x - px, pet.sprite.y - py) > 2200) {
+        // the stray whimpers hopefully while it waits to be won (PR-D)
+        if (pet.docile && now - pet.lastCry > 7000) {
+          pet.lastCry = now;
+          const ddx = pet.sprite.x - px;
+          sfx.petVoice(pet.def.voice, Math.max(-1, Math.min(1, ddx / 400)), Math.hypot(ddx, pet.sprite.y - py));
+        }
+        // wilds wander off like animals do (the docile stray stays)
+        if (!pet.docile && Math.hypot(pet.sprite.x - px, pet.sprite.y - py) > 2200) {
           pet.destroy();
           this.pets.splice(i, 1);
         }
@@ -1942,7 +1982,8 @@ export class WorldScene extends Phaser.Scene {
     this.cancelTame();
     const pet = t.pet;
     removeItem(this.state, t.bait, 1); // the offer is eaten either way
-    const p = tameChance(pet.def, t.bait);
+    // The day-0 stray WANTS to be won — double odds make the tutorial a near-promise.
+    const p = Math.min(1, tameChance(pet.def, t.bait) * (pet.docile ? 2 : 1));
     if (liveRng.chance(p)) {
       const rec = addPet(this.state, pet.def.id);
       if (!rec) {
@@ -1969,7 +2010,7 @@ export class WorldScene extends Phaser.Scene {
       this.showToast(`${pet.def.name} tamed! (P to manage your pets)`);
       pushRecentEvent(this.state, `Tamed a ${pet.def.name}.`);
       this.grantXp("crafting", 4);
-      this.objectiveEvent({ kind: "container_searched" }); // counts as field progress pre-D
+      this.objectiveEvent({ kind: "pet_tamed" }); // the opening arc's "befriend" step (PR-D)
     } else {
       sfx.tameFail();
       const predator = pet.def.damage >= 7;
@@ -3552,6 +3593,60 @@ export class WorldScene extends Phaser.Scene {
     this.beacons.push(b);
   }
 
+  /** Day-0 scripted: a stray dog pads up to the player — the taming tutorial
+   *  and the opening arc's "befriend" step (PR-D). Re-arms on reload until a
+   *  pet joins the roster; it never turns hostile and never despawns-by-range
+   *  faster than any other wild (it just follows). */
+  private spawnStray(): void {
+    if (this.dead || (this.state.pets ?? []).length > 0) return;
+    if (this.pets.some((p) => p.mode === "wild" && p.docile)) return;
+    const { tx, ty } = this.player.tilePos();
+    const t = this.chunks.walkableNear(tx, ty, 6, 9);
+    const def = getPetDef("stray_dog");
+    if (!t || !def) return;
+    const pet = this.spawnPetEntity(def, t.x, t.y, "wild");
+    pet.docile = true;
+    sfx.petVoice("dog", Math.sign(t.x - this.player.sprite.x) * 0.5, 280);
+    this.floatText(t.x, t.y - 18, "!", "#ffd23f");
+    this.showToast("A stray dog pads toward you — hold E near it with any food to befriend it");
+    pushRecentEvent(this.state, "A stray dog started following you.");
+  }
+
+  /** Day-0 scripted: the dead supply convoy (PR-D). A smoke column + radio line
+   *  a short walk out; investigating yields a Supply Cache (whose opening is the
+   *  run's second ceremony). Sticks around 10 minutes; re-arms on reload. */
+  private spawnConvoyBeacon(): void {
+    if (this.dead || this.state.worldFlags.includes("convoy_done")) return;
+    if (this.beacons.some((b) => b.kind === "convoy")) return;
+    const { tx, ty } = this.player.tilePos();
+    const spot = this.chunks.walkableNear(tx, ty, 30, 60); // closer than ambient beacons — a day-0 destination
+    if (!spot) return;
+    const b: Beacon = {
+      kind: "convoy",
+      x: spot.x,
+      y: spot.y,
+      until: this.time.now + 600000,
+      pingId: this.minimap.addPing(spot.x, spot.y, 0x9ef0a0, 600000),
+      lastSound: 0,
+    };
+    const smokeTex = fxTexFor(this, FX_DUST, 0x1d1f22);
+    b.emitter = this.add.particles(spot.x, spot.y, smokeTex.key, {
+      speedY: { min: -42, max: -22 },
+      speedX: { min: -7, max: 7 },
+      scale: { start: 1.7, end: 3.4 },
+      alpha: { start: 0.5, end: 0 },
+      lifespan: 2600,
+      frequency: 130,
+      tint: smokeTex.tint,
+    });
+    b.emitter.setDepth(8);
+    this.beacons.push(b);
+    const dir = compassDir(spot.x - this.player.sprite.x, spot.y - this.player.sprite.y);
+    this.showToast(`Radio: "…supply route Bravo went dark…" — smoke to the ${dir} (M)`);
+    sfx.ui();
+    pushRecentEvent(this.state, "Heard a military channel report a lost convoy.");
+  }
+
   /** Per-frame (cheap, ≤2 live): expiry, repeating positional audio, arrival. */
   private tickBeacons(): void {
     if (this.beacons.length === 0) return;
@@ -3610,6 +3705,15 @@ export class WorldScene extends Phaser.Scene {
         for (const s of rollLoot("scav_vehicle", liveRng, 2, bias)) this.spawnDrop(b.x, b.y, s.item, s.qty);
         this.spawnNear([{ type: "zombie", count: Phaser.Math.Between(3, 4) }]);
         this.showToast("The alarm drew them — grab what you can and go");
+        break;
+      }
+      case "convoy": {
+        // the day-0 supply route (PR-D): a sealed cache + loose materiel, lightly guarded
+        if (!this.state.worldFlags.includes("convoy_done")) this.state.worldFlags.push("convoy_done");
+        this.spawnDrop(b.x, b.y, "Supply Cache", 1);
+        for (const s of rollLoot("military", liveRng, 2, bias)) this.spawnDrop(b.x, b.y, s.item, s.qty);
+        this.spawnNear([{ type: "zombie", count: Phaser.Math.Between(2, 3) }]);
+        this.showToast("The convoy never made it — its cargo is still strapped down");
         break;
       }
       default:
