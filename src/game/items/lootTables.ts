@@ -107,6 +107,9 @@ const SOURCES: Record<string, SourceTable> = {
   scav_domestic: { weights: { food: 3, drink: 2, material: 2, medical: 1, melee: 1 }, bias: 0 },
   scav_corpse: { weights: { medical: 2, ammo: 2, material: 2, food: 1, drink: 1 }, bias: 0.05 },
   scav_military: { weights: { ammo: 4, armor: 2, rifle: 1, medical: 1, material: 1 }, bias: 0.3 },
+  // Shoreline fishing spots / rowboats / docks (Terrain Overhaul PR3) — food-leaning,
+  // with the guaranteed-ish Raw Fish coming from the searchable's bonus roll.
+  scav_fishing: { weights: { food: 4, material: 2, drink: 1 }, bias: 0 },
 };
 
 const CHEST_WEIGHTS: Partial<Record<Category, number>> = {

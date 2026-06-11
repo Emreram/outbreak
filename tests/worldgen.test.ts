@@ -170,5 +170,34 @@ if (!varied) failed++;
   if (marshChunks > 0 && marshWalkableOk < marshChunks) { failed++; console.log("FAIL: a marsh/wetland chunk is <70% walkable"); }
 }
 
+// Shore props (`_sh` gids, PR3) sit on LEGAL tiles: lilypads + fishing spots ON
+// shallow water (by design), everything else on dry walkable ground.
+{
+  const ON_WATER = new Set(["lilypad", "fishing_spot"]);
+  let shoreProps = 0;
+  let bad = 0;
+  for (let cy = 10; cy <= 30; cy += 2) {
+    for (let cx = 10; cx <= 30; cx += 2) {
+      const c = generateChunk("alpha", cx, cy);
+      for (const p of c.props) {
+        if (!p.gid?.includes("_sh")) continue;
+        shoreProps++;
+        const lx = Math.floor(p.x / 32) - cx * CHUNK_TILES;
+        const ly = Math.floor(p.y / 32) - cy * CHUNK_TILES;
+        const t = c.grid[ly]?.[lx];
+        if (t === undefined) { bad++; continue; }
+        if (ON_WATER.has(p.kind)) {
+          if (t !== Tile.ShallowWater) bad++;
+        } else if (SOLID.has(t) || isWaterish(t) || t === Tile.Floor) {
+          bad++;
+        }
+      }
+    }
+  }
+  console.log(`shore props: ${shoreProps} placed, ${bad} on illegal tiles`);
+  if (shoreProps === 0) { failed++; console.log("FAIL: no shore props generated at all"); }
+  if (bad > 0) { failed++; console.log("FAIL: shore props on illegal tiles"); }
+}
+
 console.log(failed === 0 ? "ALL WORLDGEN CHECKS PASSED" : `${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

@@ -4287,6 +4287,9 @@ export class WorldScene extends Phaser.Scene {
     } else {
       const bias = lootLuck(this.state) + this.chunks.lootBias(x, y);
       for (const stack of rollLoot(s.def.source, liveRng, 1, bias)) this.spawnDrop(x, y, stack.item, stack.qty);
+      // Themed bonus drop (PR3) — the fish at a fishing spot, planks in driftwood.
+      const b = s.def.bonus;
+      if (b && liveRng.chance(b.p)) this.spawnDrop(x, y, b.item, liveRng.int(b.min, b.max));
       this.grantXp("crafting", 1); // resourcefulness
       sfx.pickup();
     }

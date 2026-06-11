@@ -300,6 +300,71 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x4a3826, 1).fillCircle(24, 15, 4);
     g.fillStyle(0xe8e8e8, 1).fillRect(27, 13, 2, 1).fillRect(27, 16, 2, 1);
   },
+
+  // --- shoreline & clearing dressing (Terrain Overhaul PR3) ------------------
+  reeds: (g) => {
+    g.fillStyle(0x12200f, 0.3).fillEllipse(15, 25, 16, 5); // wet-ground shadow
+    g.lineStyle(2, 0x4f7a36, 1);
+    g.lineBetween(9, 25, 7, 8).lineBetween(13, 25, 12, 5).lineBetween(17, 25, 18, 7).lineBetween(21, 25, 24, 10);
+    g.lineStyle(2, 0x6f9e4a, 1).lineBetween(15, 25, 15, 4).lineBetween(11, 25, 10, 9);
+    g.lineStyle(1, 0x8fbf5e, 0.9).lineBetween(19, 25, 21, 8);
+  },
+  cattail: (g) => {
+    g.fillStyle(0x12200f, 0.3).fillEllipse(15, 25, 14, 5);
+    g.lineStyle(2, 0x57803a, 1).lineBetween(11, 25, 9, 6).lineBetween(19, 25, 21, 5).lineBetween(15, 25, 15, 8);
+    g.fillStyle(0x6b4a2a, 1).fillRoundedRect(7, 4, 4, 9, 2).fillRoundedRect(19, 3, 4, 9, 2); // sausage heads
+    g.fillStyle(0x8a5f38, 1).fillRoundedRect(8, 5, 2, 7, 1).fillRoundedRect(20, 4, 2, 7, 1);
+  },
+  lilypad: (g) => {
+    // Drawn for ON-water placement: flat pads, no drop shadow.
+    g.fillStyle(0x2f6e33, 1).fillEllipse(11, 16, 13, 9);
+    g.fillStyle(0x3f8a3f, 1).fillEllipse(11, 15, 10, 7);
+    g.fillStyle(0x16301a, 1).fillTriangle(11, 15, 18, 12, 18, 18); // pad notch
+    g.fillStyle(0x2f6e33, 1).fillEllipse(22, 22, 9, 6);
+    g.fillStyle(0xe88ab0, 1).fillCircle(9, 12, 2.4); // blossom
+    g.fillStyle(0xffd9e8, 1).fillCircle(9, 12, 1.2);
+  },
+  driftwood: (g) => {
+    g.fillStyle(0x1a1a12, 0.3).fillEllipse(15, 22, 22, 6);
+    g.fillStyle(0x9a8f7a, 1).fillRoundedRect(3, 14, 24, 6, 3); // bleached log
+    g.fillStyle(0xb5ab96, 1).fillRoundedRect(4, 15, 22, 2, 1);
+    g.fillStyle(0x7a7060, 1).fillRect(20, 9, 3, 6); // branch stub
+    g.lineStyle(1, 0x6b6253, 0.8).lineBetween(6, 17, 24, 17);
+  },
+  rowboat: (g) => {
+    g.fillStyle(0x10141a, 0.35).fillEllipse(15, 23, 24, 7);
+    g.fillStyle(0x6e5230, 1).fillEllipse(15, 15, 24, 12); // hull
+    g.fillStyle(0x8a6a3a, 1).fillEllipse(15, 15, 20, 9); // inner
+    g.fillStyle(0x5a4326, 1).fillRect(8, 12, 2, 7).fillRect(15, 12, 2, 7).fillRect(21, 12, 2, 7); // benches
+    g.lineStyle(1, 0x4f3a1f, 1).strokeEllipse(15, 15, 24, 12);
+  },
+  dock: (g) => {
+    g.fillStyle(0x10141a, 0.3).fillEllipse(15, 26, 20, 5);
+    g.fillStyle(0x6e5230, 1).fillRect(6, 2, 18, 24); // pier run
+    g.lineStyle(1, 0x4f3a1f, 1);
+    for (let y = 5; y < 26; y += 4) g.lineBetween(6, y, 24, y); // planks
+    g.fillStyle(0x4a3a22, 1).fillRect(5, 4, 3, 4).fillRect(22, 4, 3, 4).fillRect(5, 20, 3, 4).fillRect(22, 20, 3, 4); // posts
+  },
+  fishing_spot: (g) => {
+    // Drawn for ON-water placement: ripple rings + a bobber, reads as "fish here".
+    g.lineStyle(2, 0xcfe8f4, 0.5).strokeCircle(15, 16, 9);
+    g.lineStyle(1, 0xcfe8f4, 0.35).strokeCircle(15, 16, 5).strokeCircle(15, 16, 13);
+    g.fillStyle(0x1d3a55, 0.5).fillEllipse(18, 19, 8, 3); // fish shadow
+    g.fillStyle(0xd13a2a, 1).fillCircle(12, 13, 2.2); // bobber
+    g.fillStyle(0xe8eef4, 1).fillCircle(12, 12.2, 1);
+  },
+  flowers: (g) => {
+    g.fillStyle(0x2c5a2a, 0.8).fillEllipse(15, 20, 20, 9); // grass tuft
+    const bloom = (x: number, y: number, c: number): void => {
+      g.fillStyle(c, 1);
+      g.fillCircle(x - 2, y, 1.6).fillCircle(x + 2, y, 1.6).fillCircle(x, y - 2, 1.6).fillCircle(x, y + 2, 1.6);
+      g.fillStyle(0xffd23f, 1).fillCircle(x, y, 1.4);
+    };
+    bloom(9, 15, 0xe8eef4);
+    bloom(17, 12, 0xe88ab0);
+    bloom(22, 18, 0xb368ff);
+    bloom(13, 21, 0xe8eef4);
+  },
 };
 
 export function generatePropTextures(scene: Phaser.Scene): void {
