@@ -23,6 +23,8 @@ import { WEAPONS } from "../src/game/items/weapons";
 import { ammoItemForType } from "../src/game/items/catalog";
 import { MockProvider } from "../src/ai/mockProvider";
 import { SCENARIO_THEMES } from "../src/shared/contracts";
+import { generateOffers } from "../src/game/npcs";
+import { createRng } from "../src/game/rng";
 
 const store = new Map<string, string>();
 (globalThis as { localStorage?: unknown }).localStorage = {
@@ -131,7 +133,26 @@ const bad = (names: Iterable<string>): string[] => [...names].filter((n) => !rea
   ok(missing.length === 0, `every referenced prop kind has a drawer${missing.length ? " — MISSING: " + [...new Set(missing)].join(", ") : ""}`);
 }
 
-// 8) The offline GM only hands out REAL items (scenario kits for every theme).
+// 8) Barter: every trade offer asks for AND gives real items. A "give" item that
+//    doesn't exist (the old "Ammo") makes the offer permanently unacceptable —
+//    the player can never hold an item by that name.
+{
+  const missing: string[] = [];
+  for (const faction of ["townsfolk", "wanderers", "scavengers"]) {
+    for (const tier of ["poor", "average", "prime"]) {
+      for (let i = 0; i < 12; i++) {
+        const rng = createRng(`offers:${faction}:${tier}:${i}`);
+        for (const o of generateOffers(rng, faction, tier)) {
+          for (const g of o.give) if (!real(g.item)) missing.push(`give:${g.item}`);
+          if (!real(o.get.item)) missing.push(`get:${o.get.item}`);
+        }
+      }
+    }
+  }
+  ok(missing.length === 0, `barter offers all real${missing.length ? " — MISSING: " + [...new Set(missing)].join(", ") : ""}`);
+}
+
+// 9) The offline GM only hands out REAL items (scenario kits for every theme).
 {
   const mock = new MockProvider();
   void (async () => {

@@ -3785,6 +3785,12 @@ export class WorldScene extends Phaser.Scene {
     // itself closes on ESC is up (its keystroke must not double as "quit").
     kb.on("keydown-ESC", () => {
       if (this.anyModalOpen() || this.dead) return;
+      // A non-blocking narration banner (the run intro / a closing beat) reads as
+      // "something is showing" — ESC dismisses IT; only a bare world quits.
+      if (this.modal.isOpen()) {
+        this.modal.close();
+        return;
+      }
       this.scene.start("MainMenuScene");
     });
 
