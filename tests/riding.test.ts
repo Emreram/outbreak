@@ -9,7 +9,8 @@ import {
 } from "../src/game/pets";
 import { Tile } from "../src/game/world/tiles";
 import { RARITY_META } from "../src/game/items/rarity";
-import { mountableSpriteIds } from "../src/engine/petSprites";
+import { mountableSpriteIds, mountedFrameAKey, mountedFrameBKey, mountedTexKey } from "../src/engine/petSprites";
+import { GAITS, gaitPose } from "../src/engine/anim";
 
 let fail = 0;
 const ok = (cond: boolean, msg: string) => {
@@ -65,6 +66,38 @@ const ok = (cond: boolean, msg: string) => {
   ok(fliers.every((d) => d.staminaMax / FLIGHT_DRAIN_PER_S >= 6), "every rideable flier holds the air ≥6s");
   // scout birds stay perch-pets: not every flier carries a rider
   ok(Object.values(PETS).some((d) => d.move === "fly" && !isRideable(d)), "small birds remain companion-only");
+}
+
+// --- riding animation (Anim PR 2): frames, wings, gait coverage --------------------
+{
+  const rideable = Object.values(PETS).filter((d) => isRideable(d));
+
+  // gallop frame keys follow the established naming so the composer + scene agree
+  ok(
+    rideable.every((d) => {
+      const base = mountedTexKey(d.id);
+      return mountedFrameAKey(d.id) === base + "_a" && mountedFrameBKey(d.id) === base + "_b";
+    }),
+    "mounted gallop frame keys round-trip the naming convention",
+  );
+
+  // every rideable FLIER carries the wings feature — the mounted wing overlay
+  // keys off it, so a wingless flying mount would be the PR-B bug reborn
+  const fliers = rideable.filter((d) => d.move === "fly");
+  const wingless = fliers.filter((d) => !d.look.features?.includes("wings"));
+  ok(fliers.length >= 3 && wingless.length === 0, `every rideable flier has wings for the saddle overlay${wingless.length ? " — MISSING: " + wingless.map((d) => d.id).join(",") : ""}`);
+
+  // the mounted gait must exist and feel heavier than the free gait
+  const archetypes = [...new Set(rideable.map((d) => d.look.archetype))];
+  ok(archetypes.every((a) => GAITS[a] !== undefined), "every rideable archetype has a gait spec");
+  ok(
+    archetypes.every((a) => {
+      const free = gaitPose(GAITS[a], Math.PI / 3, 1, false);
+      const ridden = gaitPose(GAITS[a], Math.PI / 3, 1, true);
+      return Math.abs(ridden.sway) > Math.abs(free.sway);
+    }),
+    "a ridden mount moves with heavier amplitude than a free one",
+  );
 }
 
 // --- trample gate ---------------------------------------------------------------------

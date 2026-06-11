@@ -222,20 +222,23 @@ export function drawPetCanvas(def: PetDef, pose: 0 | 1 = 0): HTMLCanvasElement {
   return cv;
 }
 
-/** Mounted composite (PR-B): the pet canvas with a rider perched on its back —
- *  one baked texture per rideable species, rotated whole by the engine's
- *  rotation-facing exactly like the vehicle sprites. */
-export function drawMountedCanvas(def: PetDef): HTMLCanvasElement {
-  const cv = drawPetCanvas(def);
-  const x = cv.getContext("2d");
-  if (!x) return cv;
+export function mountedFrameAKey(id: string): string {
+  return `mounted_${id}_a`;
+}
+export function mountedFrameBKey(id: string): string {
+  return `mounted_${id}_b`;
+}
+
+/** The rider overlay. `post` shifts them in the saddle (−1 down-beat, 0 mid,
+ *  +1 up-beat) — the visible gallop posting, even on single-frame bodies. */
+function drawRider(x: CanvasRenderingContext2D, post: -1 | 0 | 1): void {
   // The saddle point: just behind the head works for every archetype at 64px.
   const rx = C - 2;
-  const ry = C - 9;
+  const ry = C - 9 - post * 1.2;
   x.fillStyle = "#39536b"; // jacket
   ellipse(x, rx, ry, 5, 6);
   x.fillStyle = "#2c4254"; // arm forward to the reins
-  x.fillRect(rx + 2, ry - 2, 8, 2.6);
+  x.fillRect(rx + 2, ry - 2, 8 + post, 2.6);
   x.fillStyle = "#d9a066"; // head
   x.beginPath();
   x.arc(rx, ry - 8, 3.4, 0, Math.PI * 2);
@@ -244,7 +247,31 @@ export function drawMountedCanvas(def: PetDef): HTMLCanvasElement {
   x.beginPath();
   x.arc(rx - 0.8, ry - 8.8, 3, Math.PI * 0.85, Math.PI * 2.05);
   x.fill();
-  return cv;
+}
+
+/** Mounted composite (PR-B, rebuilt by the Animation Pass): composed from the
+ *  LIVE body texture — the generated PNG when one loaded, else the procedural
+ *  canvas — so mounts finally match the pet's real art. Three frames drive the
+ *  4-step gallop [a, base, b, base]: base = rider mid (the pass beat), _a =
+ *  body A + rider down-beat, _b = stride body (when one exists) + rider up-beat.
+ *  Must run in create(), after the manifest's PNGs have loaded. */
+export function composeMountedTexture(scene: Phaser.Scene, def: PetDef, frame: "base" | "a" | "b"): void {
+  const key = frame === "base" ? mountedTexKey(def.id) : frame === "a" ? mountedFrameAKey(def.id) : mountedFrameBKey(def.id);
+  if (scene.textures.exists(key)) return;
+  const bKey = petFrameBKey(def.id);
+  const bodyKey = frame === "b" && scene.textures.exists(bKey) ? bKey : petTexKey(def.id);
+  const cv = document.createElement("canvas");
+  cv.width = SIZE;
+  cv.height = SIZE;
+  const x = cv.getContext("2d");
+  if (!x) return;
+  if (scene.textures.exists(bodyKey)) {
+    x.drawImage(scene.textures.get(bodyKey).getSourceImage() as CanvasImageSource, 0, 0, SIZE, SIZE);
+  } else {
+    x.drawImage(drawPetCanvas(def, frame === "b" ? 1 : 0), 0, 0);
+  }
+  drawRider(x, frame === "a" ? -1 : frame === "b" ? 1 : 0);
+  scene.textures.addCanvas(key, cv);
 }
 
 /** Wing overlay (flap-animated by scaling): two spread wings, transparent centre. */
@@ -290,8 +317,9 @@ export function generatePetTextures(scene: Phaser.Scene): void {
       if (!scene.textures.exists(wk)) scene.textures.addCanvas(wk, drawWingCanvas(def));
     }
     if (isRideable(def)) {
-      const mk = mountedTexKey(def.id);
-      if (!scene.textures.exists(mk)) scene.textures.addCanvas(mk, drawMountedCanvas(def));
+      composeMountedTexture(scene, def, "base");
+      composeMountedTexture(scene, def, "a");
+      composeMountedTexture(scene, def, "b");
     }
   }
   if (!scene.textures.exists(PET_SHADOW)) {

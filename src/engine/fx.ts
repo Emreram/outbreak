@@ -510,6 +510,24 @@ export function dustPuff(scene: Phaser.Scene, x: number, y: number, count = 4): 
   scene.time.delayedCall(700, () => e.destroy());
 }
 
+/** A cone of dust kicked along a trample/shove direction (Anim PR 2). */
+export function kickPuff(scene: Phaser.Scene, x: number, y: number, dir: { x: number; y: number }): void {
+  const t = fxTexFor(scene, FX_DUST, 0x8a7f6a);
+  const deg = (Math.atan2(dir.y, dir.x) * 180) / Math.PI;
+  const e = scene.add.particles(x, y, t.key, {
+    speed: { min: 40, max: 110 },
+    angle: { min: deg - 24, max: deg + 24 },
+    lifespan: { min: 220, max: 420 },
+    scale: { start: 1.1, end: 0 },
+    alpha: { start: 0.8, end: 0 },
+    tint: t.tint,
+    emitting: false,
+  });
+  e.setDepth(7);
+  e.explode(4, x, y);
+  scene.time.delayedCall(500, () => e.destroy());
+}
+
 /** Rising hearts — tame success / feeding a pet (PR-A). Baked pink (canvas parity). */
 export function heartBurst(scene: Phaser.Scene, x: number, y: number, count = 5): void {
   if (!scene.textures.exists(FX_HEART)) {
