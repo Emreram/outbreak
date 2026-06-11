@@ -125,7 +125,7 @@ import { TradeModal } from "../ui/TradeModal";
 import { craft } from "../game/crafting";
 import { TouchControls } from "../ui/TouchControls";
 import { sfx } from "../engine/audio";
-import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, FX_DUST, FX_GLOW, FX_VIGNETTE } from "../engine/fx";
+import { bloodBurst, bloodDecal, splatHit, bloodTrail, gibs, resetFx, dustPuff, deathFade, spawnPopIn, meleeArc, makeGlow, makeDropGlow, fxTexFor, type DropGlow, startBurning, stopBurning, steamPuff, splashPuff, emberPuff, heartBurst, FX_CLOUD, FX_DUST, FX_GLOW, FX_LEAF, FX_VIGNETTE } from "../engine/fx";
 import { TILE_SIZE, CHUNK_TILES, CHUNK_LOAD_RADIUS, WORLD_CHUNKS_X, WORLD_CHUNKS_Y } from "../game/constants";
 
 /** A fallen zombie left on the ground — searchable once, fades after a while. */
@@ -290,6 +290,11 @@ export class WorldScene extends Phaser.Scene {
   private petOpen = false;
   private reveal!: LootReveal; // loot-box ceremony overlay (PR-C)
   private revealOpen = false;
+  // Atmosphere (PR-E): drifting cloud shadows + biome/phase-gated emitters.
+  private shadowClouds: Phaser.GameObjects.Image[] = [];
+  private fireflies?: Phaser.GameObjects.Particles.ParticleEmitter;
+  private leaves?: Phaser.GameObjects.Particles.ParticleEmitter;
+  private atmosAcc = 0;
   // Riding (PR-B): like driving, the player BECOMES the mount. Never persisted —
   // every load starts dismounted (the active pet restores as a companion).
   private riding: { def: PetDef; rec: PetState } | null = null;
@@ -642,6 +647,52 @@ export class WorldScene extends Phaser.Scene {
       .setAlpha(0);
     this.hurtVignette.setDisplaySize(this.scale.width, this.scale.height);
     this.uiLayer.add([this.vignette, this.hurtVignette]);
+
+    // Atmosphere (PR-E): two big cloud shadows drift over the world (above props
+    // at depth 4, below entities at 8 — soft enough to read as sky), fireflies
+    // wander near the player on natural-biome nights, leaves fall in forests by
+    // day. Emitters follow the player and are gated by tickAtmosphere (1s).
+    this.shadowClouds = [];
+    for (let i = 0; i < 2; i++) {
+      this.shadowClouds.push(
+        this.add
+          .image(startX + (i === 0 ? -500 : 700), startY + (i === 0 ? -300 : 420), FX_CLOUD)
+          .setDepth(7.5)
+          .setAlpha(0.17)
+          .setScale(2.6 + i * 1.1),
+      );
+    }
+    this.fireflies = this.add
+      .particles(0, 0, FX_GLOW, {
+        scale: { start: 0.09, end: 0.01 },
+        alpha: { start: 0.85, end: 0 },
+        tint: 0xb8ff6a,
+        blendMode: Phaser.BlendModes.ADD,
+        lifespan: 3600,
+        speed: { min: 4, max: 16 },
+        frequency: 380,
+        quantity: 1,
+        x: { min: -380, max: 380 }, // offsets ride the followed player
+        y: { min: -270, max: 270 },
+      })
+      .setDepth(9);
+    this.fireflies.startFollow(this.player.sprite);
+    this.fireflies.stop();
+    this.leaves = this.add
+      .particles(0, 0, FX_LEAF, {
+        speedY: { min: 16, max: 34 },
+        speedX: { min: -24, max: 24 },
+        rotate: { start: 0, end: 360 },
+        alpha: { start: 0.9, end: 0 },
+        lifespan: 2800,
+        frequency: 520,
+        quantity: 1,
+        x: { min: -420, max: 420 },
+        y: { min: -320, max: 240 },
+      })
+      .setDepth(9);
+    this.leaves.startFollow(this.player.sprite);
+    this.leaves.stop();
 
     // Minimal guides: a persistent objective banner + a contextual "Press E" hint.
     this.objBanner = this.add
@@ -1022,6 +1073,7 @@ export class WorldScene extends Phaser.Scene {
 
     // The flashlight glow tracks the player even while paused.
     this.glow.setPosition(this.player.sprite.x, this.player.sprite.y);
+    this.tickAtmosphere(time, delta);
     this.updateBurningFx(time);
     this.terrain.update(delta); // animate water/lava shimmer + shoreline FX
     this.applyLighting(this.dayFraction()); // continuous day/night easing (frozen while paused)
@@ -1458,6 +1510,34 @@ export class WorldScene extends Phaser.Scene {
       stopBurning(this, this.burnFx);
       this.burnFx = undefined;
       steamPuff(this, this.player.sprite.x, this.player.sprite.y);
+    }
+  }
+
+  /** Atmosphere (PR-E): clouds drift + wrap around the camera every frame; the
+   *  firefly/leaf emitters re-check biome + phase once a second. */
+  private tickAtmosphere(_time: number, delta: number): void {
+    const cam = this.cameras.main;
+    for (let i = 0; i < this.shadowClouds.length; i++) {
+      const c = this.shadowClouds[i];
+      c.x += delta * (0.014 + i * 0.008);
+      c.y += delta * 0.006;
+      if (c.x - cam.midPoint.x > 1500) c.x = cam.midPoint.x - 1500;
+      if (c.y - cam.midPoint.y > 1100) c.y = cam.midPoint.y - 1100;
+    }
+    this.atmosAcc += delta;
+    if (this.atmosAcc < 1000) return;
+    this.atmosAcc = 0;
+    const biome = this.chunks.biomeAtPx(this.player.sprite.x, this.player.sprite.y);
+    const woods = biome === "forest" || biome === "dense_woods" || biome === "parkland";
+    const ffOn = !this.dead && this.isNight() && (woods || biome === "marsh" || biome === "grassland");
+    if (this.fireflies) {
+      if (ffOn && !this.fireflies.emitting) this.fireflies.start();
+      else if (!ffOn && this.fireflies.emitting) this.fireflies.stop();
+    }
+    const leafOn = !this.dead && !this.isNight() && woods;
+    if (this.leaves) {
+      if (leafOn && !this.leaves.emitting) this.leaves.start();
+      else if (!leafOn && this.leaves.emitting) this.leaves.stop();
     }
   }
 
@@ -2565,6 +2645,7 @@ export class WorldScene extends Phaser.Scene {
     this.vehicleSprites.delete(av.gid);
     const def = vehicleDef(av.type);
     const t = fxTexFor(this, propKey(`veh_${av.type}`), def.tint);
+    this.player.artLocked = true; // the car owns the sprite — no walk frames
     if (this.textures.exists(t.key)) this.player.sprite.setTexture(t.key);
     this.player.sprite.setScale(def.scale).setTint(t.tint);
     this.player.speedMult = def.speedMult;
@@ -2584,6 +2665,7 @@ export class WorldScene extends Phaser.Scene {
     upsertVehicle(this.state, av.data);
     this.driving = null;
     this.player.speedMult = 1;
+    this.player.artLocked = false;
     this.player.sprite.setTexture(PLAYER_KEY).setScale(1);
     this.player.setAppearance(this.state.appearance?.color);
     this.spawnVehicleSprite(av.data); // re-show it where you parked
@@ -2643,6 +2725,7 @@ export class WorldScene extends Phaser.Scene {
     if (i >= 0) this.pets.splice(i, 1);
     pet.destroy();
     const key = mountedTexKey(pet.def.id);
+    this.player.artLocked = true; // the mount owns the sprite — no walk frames
     if (this.textures.exists(key)) this.player.sprite.setTexture(key);
     this.player.sprite.setScale(1.05);
     this.recenterPlayerBody();
@@ -2684,6 +2767,7 @@ export class WorldScene extends Phaser.Scene {
     }
     this.riding = null;
     this.player.speedMult = 1;
+    this.player.artLocked = false;
     this.player.sprite.setScale(1);
     this.player.sprite.setTexture(PLAYER_KEY);
     this.player.setAppearance(this.state.appearance?.color);
@@ -4712,6 +4796,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.driving) {
       this.driving = null; // step out of the wreck; the run is over
       this.player.speedMult = 1;
+      this.player.artLocked = false;
     }
     if (this.riding) {
       this.riding = null; // thrown from the saddle; the run is over
@@ -4719,6 +4804,7 @@ export class WorldScene extends Phaser.Scene {
       this.mountShadow?.destroy();
       this.mountShadow = undefined;
       this.player.speedMult = 1;
+      this.player.artLocked = false;
     }
     this.buildMode = false;
     this.buildGhost?.setVisible(false);

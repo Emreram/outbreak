@@ -16,6 +16,8 @@ export const FX_MIST = "fx_mist"; // soft atomised spray haze
 export const FX_SMEAR = "fx_smear"; // directional spatter streak (decal)
 export const FX_BEAM = "fx_beam"; // vertical light shaft (rare loot marker)
 export const FX_HEART = "fx_heart"; // tame/feed affection burst (PR-A; lazily generated)
+export const FX_CLOUD = "fx_cloud"; // drifting cloud-shadow blotch (PR-E atmosphere)
+export const FX_LEAF = "fx_leaf"; // falling forest leaf (PR-E atmosphere)
 
 // --- colour helpers ------------------------------------------------------------
 function scaleColor(c: number, f: number): number {
@@ -75,6 +77,45 @@ function quickProfile(color: number): BloodProfile {
 /** Generate the small textures the FX below draw with. Idempotent. */
 export function generateFxTextures(scene: Phaser.Scene): void {
   canvasRenderer = scene.game.renderer.type === Phaser.CANVAS;
+  // Cloud shadow: a loose cluster of soft dark blobs; two of these drift over
+  // the world at low alpha and sell a moving sky (PR-E).
+  if (!scene.textures.exists(FX_CLOUD)) {
+    const S = 256;
+    const canvas = scene.textures.createCanvas(FX_CLOUD, S, S);
+    const ctx = canvas?.getContext();
+    if (ctx) {
+      for (const [bx, by, r] of [[92, 112, 72], [152, 92, 62], [172, 152, 56], [112, 162, 50], [62, 76, 42]] as const) {
+        const g = ctx.createRadialGradient(bx, by, 0, bx, by, r);
+        g.addColorStop(0, "rgba(6,10,14,0.55)");
+        g.addColorStop(1, "rgba(6,10,14,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(bx, by, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      canvas?.refresh();
+    }
+  }
+  // A little gold leaf (rotated by the particle) for forest days (PR-E).
+  if (!scene.textures.exists(FX_LEAF)) {
+    const cv = document.createElement("canvas");
+    cv.width = 6;
+    cv.height = 8;
+    const x = cv.getContext("2d");
+    if (x) {
+      x.fillStyle = "#b8862f";
+      x.beginPath();
+      x.ellipse(3, 4, 2.2, 3.6, 0.4, 0, Math.PI * 2);
+      x.fill();
+      x.strokeStyle = "rgba(90,60,20,0.8)";
+      x.lineWidth = 0.8;
+      x.beginPath();
+      x.moveTo(3, 1);
+      x.lineTo(3, 7);
+      x.stroke();
+    }
+    scene.textures.addCanvas(FX_LEAF, cv);
+  }
   if (!scene.textures.exists(FX_BLOOD)) {
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
     g.fillStyle(0xffffff, 1).fillCircle(4, 4, 4);

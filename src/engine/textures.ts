@@ -11,6 +11,10 @@ export const TILESET_KEY = "tiles";
 export const PLAYER_KEY = "player";
 export const ZOMBIE_KEY = "zombie";
 export const SURVIVOR_NPC_KEY = "survivor_npc";
+// Two-frame walk cycle for the player (PR-E): arms swing alternately; the
+// Player entity swaps frames off its walk phase (idle returns to PLAYER_KEY).
+export const PLAYER_WALK_A = "player_wa";
+export const PLAYER_WALK_B = "player_wb";
 
 // CC0 character assets served from /public (loaded in BootScene). If a load
 // fails, the generators below provide a placeholder for that key. The terrain
@@ -322,7 +326,8 @@ function oval(ctx: CanvasRenderingContext2D, x: number, y: number, rx: number, r
   ctx.fill();
 }
 
-function drawSurvivorCanvas(p: SurvivorPalette): HTMLCanvasElement {
+/** pose: 0 = idle (arms even), ±1 = walk frames (arms swing alternately). */
+function drawSurvivorCanvas(p: SurvivorPalette, pose = 0): HTMLCanvasElement {
   const S = CHAR_SIZE;
   const C = S / 2;
   const cv = document.createElement("canvas");
@@ -346,18 +351,19 @@ function drawSurvivorCanvas(p: SurvivorPalette): HTMLCanvasElement {
   ctx.fill();
   ctx.stroke();
 
-  // arms reaching forward (+x)
+  // arms reaching forward (+x); walk frames swing them alternately
   ctx.strokeStyle = rgbf(p.jacket, 0.82);
   ctx.lineWidth = 5;
+  const reach = (s: number): number => 9 + pose * (s === -1 ? 1 : -1) * 3;
   for (const s of [-1, 1]) {
     ctx.beginPath();
     ctx.moveTo(C - 2, C + s * 7);
-    ctx.lineTo(C + 9, C + s * 5);
+    ctx.lineTo(C + reach(s), C + s * 5);
     ctx.stroke();
   }
   // hands
   ctx.fillStyle = hx(p.skin);
-  for (const s of [-1, 1]) disc(ctx, C + 9, C + s * 5, 2.2);
+  for (const s of [-1, 1]) disc(ctx, C + reach(s), C + s * 5, 2.2);
 
   // torso / jacket (broad shoulders perpendicular to facing)
   ctx.fillStyle = hx(p.jacket);
@@ -397,10 +403,13 @@ function drawSurvivorCanvas(p: SurvivorPalette): HTMLCanvasElement {
   return cv;
 }
 
-/** The player survivor — olive jacket, no slung rifle (a live weapon overlays it). */
+/** The player survivor — olive jacket, no slung rifle (a live weapon overlays it).
+ *  Generates the idle frame plus the two walk frames (PR-E). */
 export function generatePlayerTexture(scene: Phaser.Scene, _size: number): void {
-  if (scene.textures.exists(PLAYER_KEY)) return;
-  scene.textures.addCanvas(PLAYER_KEY, drawSurvivorCanvas({ jacket: 0x5b6b52, skin: 0xc89a6a, hair: 0x3a2c1e, pack: 0x6e5a3a }));
+  const pal = { jacket: 0x5b6b52, skin: 0xc89a6a, hair: 0x3a2c1e, pack: 0x6e5a3a };
+  if (!scene.textures.exists(PLAYER_KEY)) scene.textures.addCanvas(PLAYER_KEY, drawSurvivorCanvas(pal));
+  if (!scene.textures.exists(PLAYER_WALK_A)) scene.textures.addCanvas(PLAYER_WALK_A, drawSurvivorCanvas(pal, 1));
+  if (!scene.textures.exists(PLAYER_WALK_B)) scene.textures.addCanvas(PLAYER_WALK_B, drawSurvivorCanvas(pal, -1));
 }
 
 /** Survivor NPC — light neutral so the scene's faction tint (cyan/green) reads;
@@ -408,4 +417,60 @@ export function generatePlayerTexture(scene: Phaser.Scene, _size: number): void 
 export function generateSurvivorNpcTexture(scene: Phaser.Scene): void {
   if (scene.textures.exists(SURVIVOR_NPC_KEY)) return;
   scene.textures.addCanvas(SURVIVOR_NPC_KEY, drawSurvivorCanvas({ jacket: 0x9aa0a8, skin: 0xd0a878, hair: 0x2e2722, pack: 0x4a4f57, armed: true }));
+}
+
+// --- ground micro-decor (PR-E): pebbles / grass tufts / pavement cracks ---------
+// Tiny hash-scattered detail sprites ChunkRenderer lays over plain ground so big
+// fields stop reading as flat colour. Pure cosmetics — never collide, never save.
+
+export const DECOR_PEBBLE = "decor_pebble";
+export const DECOR_TUFT = "decor_tuft";
+export const DECOR_CRACK = "decor_crack";
+
+export function generateDecorTextures(scene: Phaser.Scene): void {
+  if (!scene.textures.exists(DECOR_PEBBLE)) {
+    const cv = document.createElement("canvas");
+    cv.width = 8;
+    cv.height = 8;
+    const x = cv.getContext("2d");
+    if (x) {
+      x.fillStyle = "rgba(40,36,30,0.55)";
+      x.beginPath(); x.ellipse(3, 5, 2.2, 1.6, 0.3, 0, 7); x.fill();
+      x.fillStyle = "rgba(90,82,70,0.6)";
+      x.beginPath(); x.ellipse(5.5, 3.5, 1.5, 1.1, -0.2, 0, 7); x.fill();
+      x.fillStyle = "rgba(255,255,255,0.14)";
+      x.fillRect(5, 3, 1, 1);
+    }
+    scene.textures.addCanvas(DECOR_PEBBLE, cv);
+  }
+  if (!scene.textures.exists(DECOR_TUFT)) {
+    const cv = document.createElement("canvas");
+    cv.width = 8;
+    cv.height = 8;
+    const x = cv.getContext("2d");
+    if (x) {
+      x.strokeStyle = "rgba(28,44,26,0.7)";
+      x.lineWidth = 1;
+      for (const [bx, lean] of [[2, -1.4], [4, 0], [6, 1.4]] as const) {
+        x.beginPath(); x.moveTo(bx, 7); x.quadraticCurveTo(bx + lean, 4, bx + lean, 2); x.stroke();
+      }
+      x.strokeStyle = "rgba(70,98,58,0.65)";
+      x.beginPath(); x.moveTo(3, 7); x.quadraticCurveTo(3.4, 4.5, 4.4, 3); x.stroke();
+    }
+    scene.textures.addCanvas(DECOR_TUFT, cv);
+  }
+  if (!scene.textures.exists(DECOR_CRACK)) {
+    const cv = document.createElement("canvas");
+    cv.width = 10;
+    cv.height = 10;
+    const x = cv.getContext("2d");
+    if (x) {
+      x.strokeStyle = "rgba(10,12,14,0.5)";
+      x.lineWidth = 1;
+      x.beginPath();
+      x.moveTo(1, 8); x.lineTo(4, 5); x.lineTo(3, 3); x.moveTo(4, 5); x.lineTo(8, 4); x.lineTo(9, 1);
+      x.stroke();
+    }
+    scene.textures.addCanvas(DECOR_CRACK, cv);
+  }
 }

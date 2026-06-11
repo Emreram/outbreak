@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { TILE_SIZE } from "../game/constants";
-import { ASSET_PATHS, generatePlayerTexture, generateSurvivorNpcTexture, generateTileTexture } from "../engine/textures";
+import { ASSET_PATHS, generateDecorTextures, generatePlayerTexture, generateSurvivorNpcTexture, generateTileTexture } from "../engine/textures";
 import { loadGeneratedAssets } from "../engine/assets";
 import { generatePropTextures } from "../engine/propSprites";
 import { generatePetTextures } from "../engine/petSprites";
@@ -36,6 +36,7 @@ export class BootScene extends Phaser.Scene {
     generateAllIcons(this);
     generateLootWorldTextures(this);
     generateZombieTextures(this);
+    generateDecorTextures(this);
 
     const urlSeed = new URLSearchParams(window.location.search).get("seed");
     if (urlSeed !== null) {

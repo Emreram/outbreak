@@ -1,7 +1,7 @@
 import Phaser from "phaser";
 import type { EnemyFamily, LootFamily, ZombieDef, ZombieTrait } from "../game/enemies/types";
 import { bloodProfileFor, type BloodProfile } from "../game/enemies/blood";
-import { zombieTextureKey } from "./zombieSprites";
+import { zombieFrameBKey, zombieTextureKey } from "./zombieSprites";
 import { ZOMBIE_KEY, PLAYER_KEY } from "./textures";
 import { RARITY_META, rarityRank } from "../game/items/rarity";
 
@@ -31,6 +31,8 @@ export class Enemy {
   private wanderUntil = 0;
   private facing = 0;
   private phase = Math.random() * 6.28;
+  private readonly texA: string;
+  private readonly texB?: string; // alternate shamble frame (PR-E)
   private knockedUntil = 0;
   private bleedDps = 0;
   private dotUntil = 0;
@@ -61,6 +63,9 @@ export class Enemy {
 
     const key = zombieTextureKey(def.id);
     const tex = scene.textures.exists(key) ? key : scene.textures.exists(ZOMBIE_KEY) ? ZOMBIE_KEY : PLAYER_KEY;
+    this.texA = tex;
+    const kb = zombieFrameBKey(def.id);
+    this.texB = tex === key && scene.textures.exists(kb) ? kb : undefined; // 2-frame shamble (PR-E)
     this.sprite = scene.physics.add.sprite(x, y, tex);
     this.sprite.setOrigin(0.5, 0.5);
     this.sprite.setScale(def.scale);
@@ -176,7 +181,14 @@ export class Enemy {
     const wide = this.def.movement === "crawler";
     const amp = wide ? 0.2 : fast ? 0.22 : 0.12;
     const freq = fast ? 0.022 : 0.008;
-    this.sprite.setRotation(this.facing + Math.sin(now * freq + this.phase) * amp);
+    const sway = Math.sin(now * freq + this.phase);
+    this.sprite.setRotation(this.facing + sway * amp);
+    // 2-frame shamble (PR-E): the arms swing in time with the body sway.
+    if (this.texB) {
+      const moving = (this.sprite.body as Phaser.Physics.Arcade.Body).speed > 4;
+      const want = moving && sway < 0 ? this.texB : this.texA;
+      if (this.sprite.texture.key !== want) this.sprite.setTexture(want);
+    }
   }
 
   private drawUi(): void {

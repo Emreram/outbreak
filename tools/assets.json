@@ -1,28 +1,278 @@
 [
-  { "key": "player", "description": "lone human survivor in a worn jacket holding a weapon", "assetType": "character", "size": 30 },
-  { "key": "zombie", "description": "rotting shambling zombie, torn bloody clothes, grey-green skin", "assetType": "character", "size": 30 },
-  { "key": "survivor_npc", "description": "wary armed survivor NPC in a hood", "assetType": "character", "size": 30 },
-
-  { "key": "prop_car", "description": "abandoned rusty sedan car wreck", "assetType": "vehicle", "size": 30 },
-  { "key": "prop_tree", "description": "leafy green tree", "assetType": "prop", "size": 32 },
-  { "key": "prop_crate", "description": "wooden supply crate", "assetType": "prop", "size": 28 },
-  { "key": "prop_barrel", "description": "rusty oil barrel", "assetType": "prop", "size": 26 },
-  { "key": "prop_corpse", "description": "bloody dead body on the ground", "assetType": "prop", "size": 28 },
-
-  { "key": "vehicle_sedan", "description": "drivable four-door sedan car, faded paint", "assetType": "vehicle", "size": 44 },
-  { "key": "vehicle_pickup", "description": "old pickup truck with an open cargo bed", "assetType": "vehicle", "size": 48 },
-  { "key": "vehicle_van", "description": "battered cargo van", "assetType": "vehicle", "size": 48 },
-
-  { "key": "building_house", "description": "small suburban house rooftop with a chimney", "assetType": "building", "size": 64 },
-  { "key": "building_pharmacy", "description": "pharmacy store rooftop with a green cross sign", "assetType": "building", "size": 64 },
-  { "key": "building_hospital", "description": "hospital rooftop with a red cross and a helipad", "assetType": "building", "size": 64 },
-  { "key": "building_police_station", "description": "police station rooftop, blue accents", "assetType": "building", "size": 64 },
-  { "key": "building_gas_station", "description": "gas station rooftop with fuel pump canopy", "assetType": "building", "size": 64 },
-
-  { "key": "animal_deer", "description": "brown deer", "assetType": "animal", "size": 30 },
-  { "key": "animal_chicken", "description": "white farm chicken", "assetType": "animal", "size": 20 },
-  { "key": "animal_cow", "description": "black and white dairy cow", "assetType": "animal", "size": 34 },
-
-  { "key": "crop_wheat_ripe", "description": "ripe golden wheat plant", "assetType": "prop", "size": 24 },
-  { "key": "crop_tomato_ripe", "description": "tomato plant heavy with red tomatoes", "assetType": "prop", "size": 24 }
+  {
+    "key": "prop_car",
+    "description": "abandoned rusty sedan car wreck",
+    "assetType": "vehicle",
+    "size": 30
+  },
+  {
+    "key": "prop_tree",
+    "description": "leafy green tree",
+    "assetType": "prop",
+    "size": 32
+  },
+  {
+    "key": "prop_crate",
+    "description": "wooden supply crate",
+    "assetType": "prop",
+    "size": 28
+  },
+  {
+    "key": "prop_barrel",
+    "description": "rusty oil barrel",
+    "assetType": "prop",
+    "size": 26
+  },
+  {
+    "key": "prop_corpse",
+    "description": "bloody dead body on the ground",
+    "assetType": "prop",
+    "size": 28
+  },
+  {
+    "key": "vehicle_sedan",
+    "description": "drivable four-door sedan car, faded paint",
+    "assetType": "vehicle",
+    "size": 44
+  },
+  {
+    "key": "vehicle_pickup",
+    "description": "old pickup truck with an open cargo bed",
+    "assetType": "vehicle",
+    "size": 48
+  },
+  {
+    "key": "vehicle_van",
+    "description": "battered cargo van",
+    "assetType": "vehicle",
+    "size": 48
+  },
+  {
+    "key": "building_house",
+    "description": "small suburban house rooftop with a chimney",
+    "assetType": "building",
+    "size": 64
+  },
+  {
+    "key": "building_pharmacy",
+    "description": "pharmacy store rooftop with a green cross sign",
+    "assetType": "building",
+    "size": 64
+  },
+  {
+    "key": "building_hospital",
+    "description": "hospital rooftop with a red cross and a helipad",
+    "assetType": "building",
+    "size": 64
+  },
+  {
+    "key": "building_police_station",
+    "description": "police station rooftop, blue accents",
+    "assetType": "building",
+    "size": 64
+  },
+  {
+    "key": "building_gas_station",
+    "description": "gas station rooftop with fuel pump canopy",
+    "assetType": "building",
+    "size": 64
+  },
+  {
+    "key": "animal_deer",
+    "description": "brown deer",
+    "assetType": "animal",
+    "size": 30
+  },
+  {
+    "key": "animal_chicken",
+    "description": "white farm chicken",
+    "assetType": "animal",
+    "size": 20
+  },
+  {
+    "key": "animal_cow",
+    "description": "black and white dairy cow",
+    "assetType": "animal",
+    "size": 34
+  },
+  {
+    "key": "crop_wheat_ripe",
+    "description": "ripe golden wheat plant",
+    "assetType": "prop",
+    "size": 24
+  },
+  {
+    "key": "crop_tomato_ripe",
+    "description": "tomato plant heavy with red tomatoes",
+    "assetType": "prop",
+    "size": 24
+  },
+  {
+    "key": "pet_stray_dog",
+    "description": "scruffy loyal stray dog, sandy brown fur, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_cat",
+    "description": "sleek grey house cat, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_goat",
+    "description": "white goat with small curved horns, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_pony",
+    "description": "small sturdy tan pony, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_horse",
+    "description": "brown riding horse with dark mane, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_wolf",
+    "description": "grey timber wolf, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_falcon",
+    "description": "brown peregrine falcon with spread wings, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_donkey",
+    "description": "grey pack donkey, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_dire_wolf",
+    "description": "huge black dire wolf with glowing green eyes, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_stag",
+    "description": "majestic red-brown stag with great antlers, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_raven",
+    "description": "black raven with spread wings, glowing eyes, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_snapping_turtle",
+    "description": "giant snapping turtle with ridged shell, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_warhorse",
+    "description": "armored black warhorse, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_griffin",
+    "description": "golden griffin, eagle head and wings, lion body, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_kelpie",
+    "description": "translucent blue-green water-horse kelpie with fin mane, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_shadow_panther",
+    "description": "jet-black panther wreathed in purple shadow, glowing eyes, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_razorback",
+    "description": "massive bristling wild boar with huge tusks, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_unicorn",
+    "description": "white unicorn with silver spiral horn and flowing mane, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_dragonling",
+    "description": "young red dragon with ember-orange wing membranes, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_hippogriff",
+    "description": "storm-grey hippogriff, eagle foreparts and horse hindquarters, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_phoenix",
+    "description": "blazing orange-gold phoenix with flame-tipped wings, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_ancient_dragon",
+    "description": "huge ancient green dragon, scarred scales, vast wings, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_tide_serpent",
+    "description": "deep-blue sea serpent with luminous fins, S-curved body, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  },
+  {
+    "key": "pet_nightmare",
+    "description": "coal-black demonic horse with a mane of fire, fantasy creature game sprite seen from directly above",
+    "assetType": "creature",
+    "size": 64,
+    "fill": 0.7
+  }
 ]
