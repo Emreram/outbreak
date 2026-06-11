@@ -1284,7 +1284,9 @@ export class WorldScene extends Phaser.Scene {
     const styles: Record<string, { c: number; a: number }> = {
       clear: { c: 0x000000, a: 0 },
       cloudy: { c: 0x2a3038, a: 0.12 },
-      rain: { c: 0x3a4a60, a: 0.26 },
+      // Neutral grey-blue, lighter — rain used to stack a heavy cyan wash on top
+      // of the water shader and read as "the whole world is underwater".
+      rain: { c: 0x39424d, a: 0.2 },
       fog: { c: 0xb8c0c8, a: 0.3 },
       storm: { c: 0x141c2a, a: 0.42 },
     };

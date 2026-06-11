@@ -38,11 +38,13 @@ void main(void){
   vec3 deep    = vec3(0.07, 0.19, 0.33);
   vec3 col = mix(shallow, deep, depth);
 
-  float caustic = smoothstep(0.70, 0.96, n);
-  col += caustic * vec3(0.45, 0.65, 0.75);            // bright moving glints
-  col += 0.05 * sin((uv.x + uv.y) * 38.0 + time * 2.0); // fine surface shimmer
+  // Sparse, soft caustic glints only. (A sine "shimmer" term used to stretch
+  // into screen-wide diagonal light bands on large quads — the screenshot bug;
+  // any regular sine over a big body reads as banding, so it's gone for good.)
+  float caustic = smoothstep(0.78, 0.97, n) * 0.55;
+  col += caustic * vec3(0.45, 0.65, 0.75);
 
-  float alpha = mix(0.5, 0.8, depth);
+  float alpha = mix(0.32, 0.7, depth);                  // shallow water shows ground
   gl_FragColor = vec4(col, alpha);
 }
 `;
