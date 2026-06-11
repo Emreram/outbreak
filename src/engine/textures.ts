@@ -32,8 +32,9 @@ export const TILE_COLORS: Record<Tile, { fill: number; line: number }> = {
   [Tile.Door]: { fill: 0xb5651d, line: 0x854a14 },
   [Tile.Grass]: { fill: 0x3a5236, line: 0x32482f },
   [Tile.Water]: { fill: 0x274b6d, line: 0x1d3a55 },
-  [Tile.ShallowWater]: { fill: 0x3f6f93, line: 0x335c7a },
-  [Tile.Sand]: { fill: 0xcdb482, line: 0xb89f6e },
+  [Tile.ShallowWater]: { fill: 0x4d7fa3, line: 0x40688a }, // lighter — the depth ramp reads under the (subtler) shader
+  [Tile.Sand]: { fill: 0xd8c08c, line: 0xc0a875 }, // brighter beach
+
   [Tile.Dirt]: { fill: 0x6b5638, line: 0x5a472e },
   [Tile.Trail]: { fill: 0x8a7350, line: 0x6f5c40 },
   // Tree/Bush tiles sit on visible ground (the canopy is drawn raised on top in
@@ -49,8 +50,8 @@ export const TILE_COLORS: Record<Tile, { fill: number; line: number }> = {
   // Living-world terrain. Water/Lava are the STATIC underlay beneath the animated
   // overlay (AnimatedTerrain) — kept readable but quiet so the animation reads.
   [Tile.DeepWater]: { fill: 0x183349, line: 0x102434 },
-  [Tile.Mud]: { fill: 0x4a3d2a, line: 0x3a2f20 },
-  [Tile.Foam]: { fill: 0xa9c4d6, line: 0x8fb0c4 },
+  [Tile.Mud]: { fill: 0x423624, line: 0x322817 }, // darker wet earth — clearly not grass
+  [Tile.Foam]: { fill: 0xc9bd9a, line: 0xb0a584 }, // WET SAND w/ a surf line (was pale cyan — read as ocean speckle)
   [Tile.Scorched]: { fill: 0x2a241f, line: 0x1d1814 },
   [Tile.Ash]: { fill: 0x4a463f, line: 0x35322c },
   [Tile.Basalt]: { fill: 0x2b2622, line: 0x18140f },
@@ -188,11 +189,20 @@ function drawTileMotif(
       break;
     }
     case Tile.Foam: {
-      // Bright wet-sand fringe: foam dabs over a light base.
-      g.fillStyle(0xffffff, 0.4);
-      for (let s = 0; s < 6; s++) g.fillCircle(ox + rng.int(3, size - 3), rng.int(3, size - 3), rng.range(1, 2.4));
-      g.lineStyle(1, 0xffffff, 0.3);
-      g.lineBetween(ox + 3, mid, ox + size - 3, mid + rng.int(-3, 3));
+      // Wet sand at the surf line: a single thin foam arc + a couple of bubbles —
+      // it only ever appears where a beach meets the water (shoreline pass), so it
+      // reads as surf, not as scattered ocean speckle.
+      const fy = 6 + rng.int(0, 4);
+      g.lineStyle(2, 0xffffff, 0.55);
+      g.beginPath();
+      g.moveTo(ox + 2, fy);
+      g.lineTo(ox + mid, fy + rng.int(2, 4));
+      g.lineTo(ox + size - 2, fy + rng.int(-1, 1));
+      g.strokePath();
+      g.fillStyle(0xffffff, 0.4).fillCircle(ox + rng.int(6, size - 6), fy + rng.int(3, 6), 1.4);
+      g.fillStyle(0xffffff, 0.3).fillCircle(ox + rng.int(6, size - 6), fy + rng.int(4, 8), 1);
+      g.fillStyle(0x8a7a58, 0.3); // darker wet-sand mottling below the surf
+      for (let s = 0; s < 3; s++) g.fillCircle(ox + rng.int(4, size - 4), rng.int(mid, size - 3), rng.int(1, 2));
       break;
     }
     case Tile.Stump: {
