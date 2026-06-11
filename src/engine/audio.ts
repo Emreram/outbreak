@@ -379,6 +379,36 @@ class Sfx {
     this.tone(440, 0.12, "sine", 0.045, 415);
     setTimeout(() => this.tone(415, 0.18, "sine", 0.04, 392), 120);
   }
+
+  // --- riding (PR-B): saddle, hooves, wings, water ---------------------------
+
+  /** Swing into (or out of) the saddle — leather creak + a low settle. */
+  mountUp(): void {
+    this.noise(0.09, 900, 0.045);
+    this.tone(180, 0.1, "sine", 0.05, 140);
+  }
+
+  /** Take-off — a rising whoosh under the first downstroke. */
+  mountWhoosh(): void {
+    this.noise(0.3, 600, 0.05);
+    this.tone(220, 0.28, "sine", 0.04, 540);
+  }
+
+  /** One soft wingbeat (the scene paces these while airborne). */
+  wingbeat(): void {
+    this.noise(0.16, 480, 0.034);
+  }
+
+  /** One hoof-fall of a galloping mount. */
+  hoofbeat(): void {
+    this.noise(0.045, 300, 0.045);
+    this.tone(150, 0.05, "triangle", 0.035, 110);
+  }
+
+  /** A swimming mount's wake slapping past. */
+  waterWake(): void {
+    this.noise(0.2, 800, 0.025);
+  }
 }
 
 export const sfx = new Sfx();

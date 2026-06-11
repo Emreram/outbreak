@@ -8,6 +8,7 @@
 import type { Rarity } from "./items/types";
 import type { GameState, PetState } from "../shared/contracts";
 import { RARITY_META } from "./items/rarity";
+import { Tile } from "./world/tiles";
 import type { Rng } from "./rng";
 
 // The persisted instance shape lives beside the other entity contracts.
@@ -50,6 +51,20 @@ export const RIDE_MIN_SPEED = 1.4; // defs at/above this are mountable (PR-B)
 export const TAME_MS = 2000; // hold-E channel duration
 export const FEED_HP = 25;
 export const FEED_BOND = 0.25;
+// Riding (PR-B): wings tire at 1 stamina/s aloft and rest twice as fast down;
+// the heaviest ground mounts (epic+) shoulder the dead aside at a run.
+export const FLIGHT_DRAIN_PER_S = 1;
+export const FLIGHT_REGEN_PER_S = 2;
+export const TRAMPLE_RANK = 3;
+
+/** Collision gate while mounted (the Phaser processCallback rule, kept pure for
+ *  tests): TRUE = the mount passes through this tile. Wings clear everything; a
+ *  swimmer crosses open water but walls/trees still stop it; everything else —
+ *  including on foot — collides normally. */
+export function mountPassesTile(move: PetMove | undefined, airborne: boolean, tile: number): boolean {
+  if (airborne) return true;
+  return move === "swim" && (tile === Tile.Water || tile === Tile.DeepWater);
+}
 
 const MEAT = ["Raw Meat", "Cooked Meat"];
 const FISH = ["Raw Fish", "Cooked Fish"];

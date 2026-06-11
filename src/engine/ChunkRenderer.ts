@@ -11,6 +11,10 @@ import { propKey } from "./propSprites";
 export interface ColliderSpec {
   target: Phaser.Types.Physics.Arcade.ArcadeColliderType;
   callback?: (obj: Phaser.GameObjects.GameObject) => void;
+  /** Optional per-contact gate (Phaser processCallback): return false to pass
+   *  through. Receives the colliding object + the tilemap TILE, so a mount can
+   *  fly over everything or swim across water tiles only (PR-B). */
+  process?: (obj: Phaser.GameObjects.GameObject, tile: Phaser.Tilemaps.Tile) => boolean;
 }
 
 export class ChunkView {
@@ -37,7 +41,14 @@ export class ChunkView {
     this.layer.setDepth(0);
 
     for (const s of specs) {
-      this.colliders.push(scene.physics.add.collider(s.target, this.layer, s.callback ? (a) => s.callback!(a as Phaser.GameObjects.GameObject) : undefined));
+      this.colliders.push(
+        scene.physics.add.collider(
+          s.target,
+          this.layer,
+          s.callback ? (a) => s.callback!(a as Phaser.GameObjects.GameObject) : undefined,
+          s.process ? (a, b) => s.process!(a as Phaser.GameObjects.GameObject, b as unknown as Phaser.Tilemaps.Tile) : undefined,
+        ),
+      );
     }
 
     // Decorative props (below the player/enemies, above terrain). Searchable props
