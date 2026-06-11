@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import type { BloodProfile } from "../game/enemies/blood";
+import type { MeleeStyle } from "./anim";
 
 // Procedural visual FX (CLAUDE.md §9 keeps art CC0/placeholder). The character
 // sprites are single-frame, so "animation" here is motion + particles + lighting
@@ -18,6 +19,7 @@ export const FX_BEAM = "fx_beam"; // vertical light shaft (rare loot marker)
 export const FX_HEART = "fx_heart"; // tame/feed affection burst (PR-A; lazily generated)
 export const FX_CLOUD = "fx_cloud"; // drifting cloud-shadow blotch (PR-E atmosphere)
 export const FX_LEAF = "fx_leaf"; // falling forest leaf (PR-E atmosphere)
+export const FX_CASING = "fx_casing"; // ejected brass (Anim PR 4)
 
 // --- colour helpers ------------------------------------------------------------
 function scaleColor(c: number, f: number): number {
@@ -115,6 +117,22 @@ export function generateFxTextures(scene: Phaser.Scene): void {
       x.stroke();
     }
     scene.textures.addCanvas(FX_LEAF, cv);
+  }
+  // Ejected brass: a tiny tumbling casing with a glint (Anim PR 4).
+  if (!scene.textures.exists(FX_CASING)) {
+    const cv = document.createElement("canvas");
+    cv.width = 4;
+    cv.height = 7;
+    const x = cv.getContext("2d");
+    if (x) {
+      x.fillStyle = "#b8923a";
+      x.fillRect(0, 0, 4, 7);
+      x.fillStyle = "#8a6a26";
+      x.fillRect(0, 5, 4, 2); // rim
+      x.fillStyle = "rgba(255,240,200,0.9)";
+      x.fillRect(1, 1, 1, 3); // glint
+    }
+    scene.textures.addCanvas(FX_CASING, cv);
   }
   if (!scene.textures.exists(FX_BLOOD)) {
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
@@ -354,13 +372,15 @@ export function splatHit(
 
 const decalPool = new Map<Phaser.Scene, Phaser.GameObjects.Image[]>();
 const trailPool = new Map<Phaser.Scene, Phaser.GameObjects.Image[]>();
+const casingPool = new Map<Phaser.Scene, Phaser.GameObjects.Image[]>();
+const CASING_CAP = 40;
 const DECAL_CAP = 80; // pools, splats + smears
 const TRAIL_CAP = 110; // small drips left by wounded enemies (cheaper, faster fade)
 
 /** Reset the decal pools — call from the scene's create() so a fresh run starts
  *  clean and stale (destroyed) references from the previous run are dropped. */
 export function resetFx(scene: Phaser.Scene): void {
-  for (const map of [decalPool, trailPool]) {
+  for (const map of [decalPool, trailPool, casingPool]) {
     const pool = map.get(scene);
     if (pool) for (const im of pool) im.destroy();
     map.set(scene, []);
@@ -510,6 +530,69 @@ export function dustPuff(scene: Phaser.Scene, x: number, y: number, count = 4): 
   scene.time.delayedCall(700, () => e.destroy());
 }
 
+/** Eject a brass casing perpendicular-right of the muzzle: it tumbles, lands,
+ *  and fades — pooled with a hard cap so autofire can't flood the scene. */
+export function ejectCasing(scene: Phaser.Scene, x: number, y: number, facing: number): void {
+  let pool = casingPool.get(scene);
+  if (!pool) {
+    pool = [];
+    casingPool.set(scene, pool);
+  }
+  if (pool.length >= CASING_CAP) {
+    const oldest = pool.shift();
+    scene.tweens.killTweensOf(oldest!);
+    oldest?.destroy();
+  }
+  const side = facing + Math.PI / 2 + (Math.random() - 0.5) * 0.5; // out the right side
+  const dist = 14 + Math.random() * 10;
+  const img = scene.add
+    .image(x, y, FX_CASING)
+    .setDepth(6)
+    .setRotation(Math.random() * Math.PI * 2);
+  pool.push(img);
+  scene.tweens.add({
+    targets: img,
+    x: x + Math.cos(side) * dist,
+    y: y + Math.sin(side) * dist + 4, // a little gravity settle
+    angle: img.angle + 540,
+    scaleX: 0.7,
+    scaleY: 0.7,
+    duration: 280,
+    ease: "Quad.easeOut",
+    onComplete: () => {
+      scene.tweens.add({
+        targets: img,
+        alpha: 0,
+        delay: 3200,
+        duration: 800,
+        onComplete: () => {
+          const p = casingPool.get(scene);
+          const i = p ? p.indexOf(img) : -1;
+          if (i >= 0) p!.splice(i, 1);
+          img.destroy();
+        },
+      });
+    },
+  });
+}
+
+/** Engine exhaust: a small dark puff at the vehicle's tail (Anim PR 4). */
+export function exhaustPuff(scene: Phaser.Scene, x: number, y: number, count = 2): void {
+  const t = fxTexFor(scene, FX_MIST, 0x6a6f76);
+  const e = scene.add.particles(x, y, t.key, {
+    speed: { min: 6, max: 22 },
+    angle: { min: 0, max: 360 },
+    lifespan: { min: 400, max: 800 },
+    scale: { start: 0.5, end: 1.3 },
+    alpha: { start: 0.4, end: 0 },
+    tint: t.tint,
+    emitting: false,
+  });
+  e.setDepth(7);
+  e.explode(count, x, y);
+  scene.time.delayedCall(900, () => e.destroy());
+}
+
 /** A cone of dust kicked along a trample/shove direction (Anim PR 2). */
 export function kickPuff(scene: Phaser.Scene, x: number, y: number, dir: { x: number; y: number }): void {
   const t = fxTexFor(scene, FX_DUST, 0x8a7f6a);
@@ -577,16 +660,46 @@ export function spawnPopIn(scene: Phaser.Scene, sprite: Phaser.GameObjects.Sprit
   scene.tweens.add({ targets: sprite, scaleX: fx, scaleY: fy, alpha: 1, duration: 240, ease: "Back.easeOut" });
 }
 
-/** A quick swing arc + trailing blade streak in front of the attacker. */
-export function meleeArc(scene: Phaser.Scene, x: number, y: number, facing: number): void {
+/** A weapon swing in front of the attacker — slash / thrust / smash (the
+ *  class → style routing lives in anim.ts so tests stay Phaser-free). */
+export function meleeArc(scene: Phaser.Scene, x: number, y: number, facing: number, style: MeleeStyle = "slash"): void {
   const g = scene.add.graphics({ x, y });
   g.setDepth(11);
-  // bright leading edge
+  if (style === "thrust") {
+    // two converging lines + a bright tip, lunged forward along the facing
+    const c = Math.cos(facing);
+    const sn = Math.sin(facing);
+    g.lineStyle(3, 0xffd9a8, 0.9);
+    for (const side of [-1, 1]) {
+      const ox = Math.cos(facing + side * 0.45) * 10;
+      const oy = Math.sin(facing + side * 0.45) * 10;
+      g.beginPath();
+      g.moveTo(ox, oy);
+      g.lineTo(c * 34, sn * 34);
+      g.strokePath();
+    }
+    g.fillStyle(0xffffff, 0.95).fillCircle(c * 34, sn * 34, 3);
+    scene.tweens.add({ targets: g, x: x + c * 14, y: y + sn * 14, alpha: 0, duration: 160, ease: "Quad.easeOut", onComplete: () => g.destroy() });
+    return;
+  }
+  if (style === "smash") {
+    // a heavy half-disc shock with a thick rim, slower fade, dust at the rim
+    g.fillStyle(0xcfd4da, 0.22);
+    g.slice(0, 0, 30, facing - 0.95, facing + 0.95, false);
+    g.fillPath();
+    g.lineStyle(6, 0xe8eef4, 0.7);
+    g.beginPath();
+    g.arc(0, 0, 30, facing - 0.95, facing + 0.95, false);
+    g.strokePath();
+    dustPuff(scene, x + Math.cos(facing) * 26, y + Math.sin(facing) * 26, 5);
+    scene.tweens.add({ targets: g, alpha: 0, scaleX: 1.25, scaleY: 1.25, duration: 310, ease: "Quad.easeOut", onComplete: () => g.destroy() });
+    return;
+  }
+  // slash: bright leading edge + softer wide trail
   g.lineStyle(4, 0xffffff, 0.95);
   g.beginPath();
   g.arc(0, 0, 32, facing - 0.85, facing + 0.85, false);
   g.strokePath();
-  // softer wide trail behind it
   g.lineStyle(8, 0xbfe9ff, 0.35);
   g.beginPath();
   g.arc(0, 0, 30, facing - 1.0, facing + 1.0, false);

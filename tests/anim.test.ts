@@ -5,11 +5,13 @@
 // archetype), and the prop-sway field.
 
 import {
-  frameFor, resolveFrames, gaitPose, swayAngle, posPhase,
+  frameFor, resolveFrames, gaitPose, swayAngle, posPhase, meleeStyleFor,
   GAITS, SWAY_SPECS, type FrameSet,
 } from "../src/engine/anim";
 import { PETS, type PetArchetype } from "../src/game/pets";
 import { wantsFrameC } from "../src/engine/zombieSprites";
+import { BALLISTIC_CLASSES } from "../src/game/combat";
+import { WEAPONS } from "../src/game/items/weapons";
 import { allZombies } from "../src/game/enemies/catalog";
 
 let fail = 0;
@@ -117,6 +119,19 @@ const TAU = Math.PI * 2;
   ok(c.length > 0 && c.length < all.length, `frame C is selective (${c.length}/${all.length} types)`);
   ok(c.length === all.filter((d) => wantsFrameC(d)).length, "wantsFrameC is deterministic");
   ok(all.filter((d) => d.family === "zombie_runner").every((d) => wantsFrameC(d)), "every runner earns the 4-step");
+}
+
+// --- combat FX routing (Anim PR 4) -------------------------------------------------
+{
+  const meleeClasses = [...new Set(WEAPONS.filter((w) => w.hand === "melee").map((w) => w.wclass))];
+  const styles = new Set(meleeClasses.map((c) => meleeStyleFor(c)));
+  ok(meleeClasses.every((c) => ["slash", "thrust", "smash"].includes(meleeStyleFor(c))), `every melee class routes to a swing style (${meleeClasses.length} classes)`);
+  ok(styles.size === 3, `all three swing styles are actually used (${[...styles].join(", ")})`);
+  ok(meleeStyleFor("spear") === "thrust" && meleeStyleFor("blunt") === "smash" && meleeStyleFor("blade") === "slash", "the marquee mappings hold");
+
+  const ranged = WEAPONS.filter((w) => w.hand === "ranged");
+  ok(ranged.some((w) => BALLISTIC_CLASSES.has(w.wclass)) && ranged.some((w) => !BALLISTIC_CLASSES.has(w.wclass)), "casings eject from some guns and never from bows/energy");
+  ok(!BALLISTIC_CLASSES.has("bow") && !BALLISTIC_CLASSES.has("launcher") && !BALLISTIC_CLASSES.has("flame") && !BALLISTIC_CLASSES.has("energy"), "the no-brass classes are excluded");
 }
 
 console.log(fail === 0 ? "ALL ANIM CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
