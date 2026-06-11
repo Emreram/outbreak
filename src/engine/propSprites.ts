@@ -288,26 +288,49 @@ const DRAWERS: Record<string, Draw> = {
     g.fillStyle(0x2b2e33, 1).fillRect(15, 14, 7, 2); // wrench
   },
 
-  // --- wild animals (Feature 6), top-down; pose 1 = mid-bound stride frame ---
+  // --- wild animals (Feature 6), top-down facing +x; pose 1 = mid-bound stride ---
   animal_rabbit: (g, pose = 0) => {
     const b = pose === 1 ? 1 : 0;
-    g.fillStyle(0xd8c8b0, 1).fillEllipse(15 + b, 17, 11 + b * 2, 8 - b); // bunched mid-hop
-    g.fillStyle(0xcabfa8, 1).fillRect(18 + b, 8 + b * 2, 2, 7 - b * 2).fillRect(21 + b, 8 + b * 2, 2, 7 - b * 2); // ears swept back
-    g.fillStyle(0xffffff, 1).fillCircle(10 - b, 18, 2);
+    g.fillStyle(0x0c0f0a, 0.28).fillEllipse(15, 21, 12, 4); // ground shadow
+    // bunched legs splayed for the hop (swap fore/hind on the stride frame)
+    g.fillStyle(0xb6a88f, 1);
+    g.fillEllipse(10 + b * 2, 20, 2.2, 3).fillEllipse(20 - b * 2, 20, 2.2, 3);
+    g.fillStyle(0xd8c8b0, 1).fillEllipse(14, 16, 9, 7); // body
+    g.fillStyle(0xe8ddca, 1).fillEllipse(12, 14, 5, 3.4); // back highlight
+    g.fillStyle(0xffffff, 1).fillCircle(7, 17, 2.2); // cotton tail
+    g.fillStyle(0xd8c8b0, 1).fillCircle(20, 15, 3.4); // head
+    g.fillStyle(0xcabfa8, 1) // long ears, swept back on the bound
+      .fillEllipse(20 + b, 10 + b, 1.4, 4).fillEllipse(22 + b, 10 + b, 1.4, 4);
+    g.fillStyle(0x2a2420, 1).fillCircle(22, 14, 0.8); // eye
   },
   animal_deer: (g, pose = 0) => {
     const b = pose === 1 ? 1 : 0;
-    g.fillStyle(0xa97a4a, 1).fillEllipse(14, 16, 15 + b, 9 - b * 0.5);
-    g.fillStyle(0x8a5f38, 1).fillCircle(23 + b, 14 + b, 3); // head dips mid-stride
-    g.fillStyle(0xe8d8c0, 1).fillEllipse(9 - b, 18, 5, 3);
-    g.lineStyle(1, 0x6b4a2a, 1).lineBetween(25 + b, 12 + b, 27 + b, 8 + b).lineBetween(25 + b, 12 + b, 23 + b, 8 + b);
-    if (b) g.lineStyle(2, 0x8a5f38, 1).lineBetween(9, 20, 6, 22).lineBetween(20, 20, 23, 22); // legs reaching
+    g.fillStyle(0x0c0f0a, 0.28).fillEllipse(15, 22, 15, 4); // ground shadow
+    // four slim legs; the stride frame reaches the diagonal pair
+    g.lineStyle(1.6, 0x6b4a2a, 1);
+    g.lineBetween(9, 18, 8 - b * 2, 23).lineBetween(12, 19, 13 + b * 2, 24);
+    g.lineBetween(18, 19, 17 - b * 2, 24).lineBetween(21, 18, 22 + b * 2, 23);
+    g.fillStyle(0xa97a4a, 1).fillEllipse(14, 16, 13, 6.5); // slender body
+    g.fillStyle(0xbf8c56, 1).fillEllipse(12, 14, 7, 3.2); // dappled back highlight
+    g.fillStyle(0xe8d8c0, 1).fillEllipse(7, 17, 3, 2.4); // white rump
+    g.fillStyle(0x8a5f38, 1).fillEllipse(22 + b, 14 + b, 3.2, 2.8); // head dips mid-stride
+    g.lineStyle(1.3, 0x6b4a2a, 1) // antlers
+      .lineBetween(23 + b, 12 + b, 26 + b, 8 + b).lineBetween(24 + b, 10 + b, 22 + b, 8 + b)
+      .lineBetween(24 + b, 12 + b, 21 + b, 9 + b);
+    g.fillStyle(0x2a2018, 1).fillCircle(24 + b, 14 + b, 0.8); // eye
   },
   animal_boar: (g, pose = 0) => {
     const b = pose === 1 ? 1 : 0;
-    g.fillStyle(0x6b5236, 1).fillEllipse(15, 16 + b * 0.5, 16, 10 - b);
-    g.fillStyle(0x4a3826, 1).fillCircle(24 + b, 15 + b * 1.5, 4); // head drops into the charge
-    g.fillStyle(0xe8e8e8, 1).fillRect(27 + b, 13 + b, 2, 1).fillRect(27 + b, 16 + b, 2, 1);
+    g.fillStyle(0x0c0f0a, 0.3).fillEllipse(15, 22, 16, 4); // ground shadow
+    g.fillStyle(0x3a2c1e, 1); // stubby legs
+    g.fillEllipse(10 + b, 21, 2.4, 3).fillEllipse(19 - b, 21, 2.4, 3);
+    g.fillStyle(0x6b5236, 1).fillEllipse(14, 16, 14, 8); // bulky body
+    g.fillStyle(0x4a3826, 1); // bristle ridge along the spine (−x → +x)
+    for (let i = 0; i < 6; i++) g.fillTriangle(7 + i * 2.6, 11, 8.4 + i * 2.6, 11, 7.7 + i * 2.6, 8);
+    g.fillStyle(0x5a4632, 1).fillEllipse(24, 16 + b, 4, 3.4); // low head
+    g.fillStyle(0x3a2c1e, 1).fillEllipse(8, 16, 2, 4); // tufted tail
+    g.fillStyle(0xe8e8e8, 1).fillTriangle(27, 14, 28.5, 12.5, 28, 15).fillTriangle(27, 18, 28.5, 19.5, 28, 17); // tusks
+    g.fillStyle(0x201a14, 1).fillCircle(25, 15 + b, 0.9); // eye
   },
 
   // --- shoreline & clearing dressing (Terrain Overhaul PR3) ------------------

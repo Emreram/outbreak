@@ -1,7 +1,6 @@
 import Phaser from "phaser";
 import { propKey } from "./propSprites";
 import { generatedTextureKeys } from "./generatedKeys";
-import { PET_IDS } from "../game/pets";
 
 // AssetManifest (Feature 3): the single swap-point between AI-generated PNGs and the
 // always-on procedural art. The asset pipeline (tools/gen-assets.ts) writes
@@ -10,36 +9,26 @@ import { PET_IDS } from "../game/pets";
 // so the matching procedural generator — which skips keys whose texture already exists —
 // is bypassed. With no token / no generated assets the manifest is simply absent and the
 // game runs entirely on procedural art: zero behavioural change, no hard dependency.
+//
+// ROTATION-FACING ART IS PROCEDURAL ONLY. The engine draws every actor facing +x and
+// ROTATES it to face movement; the generated creature/vehicle PNGs were side-view
+// illustrations with imperfect alpha — they spun like paper cutouts and left chroma
+// halos. So nothing the engine rotates (player, zombies, NPCs, pets, animals, drivable
+// vehicles) is mapped here — the purpose-built procedural top-down sprites win. Only
+// STATIC decor props (placed un-rotated) may carry a generated override.
 
 export const GENERATED_DIR = "assets/generated";
 export const GEN_MANIFEST_KEY = "__gen_manifest";
 
-/** asset-spec key (tools/assets.json) → runtime texture key used in-engine. */
+/** asset-spec key (tools/assets.json) → runtime texture key used in-engine.
+ *  STATIC, NON-ROTATING props only (see the note above). */
 export const GENERATED_KEY_MAP: Record<string, string> = {
-  player: "player",
-  zombie: "zombie",
-  survivor_npc: "survivor_npc",
   prop_car: propKey("car"),
   prop_tree: propKey("tree"),
   prop_crate: propKey("crate"),
   prop_barrel: propKey("barrel"),
   prop_corpse: propKey("corpse"),
-  vehicle_sedan: propKey("veh_sedan"),
-  vehicle_pickup: propKey("veh_pickup"),
-  vehicle_van: propKey("veh_van"),
-  animal_deer: propKey("animal_deer"),
-  animal_chicken: propKey("animal_chicken"),
-  animal_cow: propKey("animal_cow"),
 };
-
-// Every pet species can be art-overridden too (PR-E): spec key pet_<id> maps to
-// the live texture key petSprites uses (the same string by construction). The _b
-// stride frames (Animation Pass) ride the same convention.
-for (const id of PET_IDS) {
-  GENERATED_KEY_MAP[`pet_${id}`] = `pet_${id}`;
-  GENERATED_KEY_MAP[`pet_${id}_b`] = `pet_${id}_b`;
-}
-GENERATED_KEY_MAP.animal_deer_b = propKey("animal_deer") + "_b";
 
 // The generated-key registry lives in ./generatedKeys (a zero-import leaf) so
 // the procedural generators can consult it without import cycles.

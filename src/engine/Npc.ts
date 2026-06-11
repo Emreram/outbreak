@@ -1,7 +1,6 @@
 import Phaser from "phaser";
-import { SURVIVOR_NPC_KEY, SURVIVOR_NPC_WALK_A, SURVIVOR_NPC_WALK_B, PLAYER_KEY } from "./textures";
+import { npcJacketFrames, SURVIVOR_NPC_KEY, SURVIVOR_NPC_WALK_A, SURVIVOR_NPC_WALK_B, PLAYER_KEY } from "./textures";
 import { applyFrame, frameFor, type FrameSet } from "./anim";
-import { fxTexFor } from "./fx";
 
 // Survivor NPC entity (Feature 10b): a lightweight, non-infected actor. Ambient
 // survivors wander; recruited COMPANIONS follow the player and lunge at nearby
@@ -41,9 +40,8 @@ export class Npc {
   lastHurt = 0; // companion damage-taken cooldown
   private facing = 0;
   private wanderUntil = 0;
-  private baseTint?: number; // tier/kind tint, re-applied after a hurt flash
   private tag?: Phaser.GameObjects.Text; // floating quality name-tag
-  private frames: FrameSet; // walk cycle, tint baked PER FRAME (Animation Pass)
+  private frames: FrameSet; // walk cycle — the faction colour is baked into the JACKET
   private readonly phase = Math.random() * Math.PI * 2; // desync the crowd
 
   constructor(scene: Phaser.Scene, x: number, y: number, opts: NpcOpts) {
@@ -55,20 +53,14 @@ export class Npc {
     this.home = opts.home;
     this.hp = opts.hp;
     this.maxHp = opts.maxHp;
-    const base = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
-    // fxTexFor bakes the kind/tier colour into a texture copy on the Canvas
-    // renderer (which ignores live tints); WebGL keeps the runtime tint. Each
-    // walk frame needs its own baked copy (done ONCE here, never per-frame).
-    const t = opts.color !== undefined ? fxTexFor(scene, base, opts.color) : { key: base, tint: 0xffffff };
-    this.frames = this.bakeFrames(scene, base, opts.color);
-    this.sprite = scene.physics.add.sprite(x, y, scene.textures.exists(t.key) ? t.key : base).setDepth(9);
+    // The faction/tier colour recolours the JACKET only (npcJacketFrames) — the
+    // survivor keeps its face/hair/pack instead of flattening under a whole-
+    // sprite multiply.
+    this.frames = this.colorFrames(scene, opts.color);
+    this.sprite = scene.physics.add.sprite(x, y, this.frames.idle).setDepth(9);
     this.sprite.setCollideWorldBounds(true);
     const body = this.sprite.body as Phaser.Physics.Arcade.Body;
     body.setSize(20, 20);
-    if (opts.color !== undefined) {
-      this.baseTint = t.tint;
-      this.sprite.setTint(t.tint);
-    }
     if (opts.tagPrefix) {
       this.tag = scene.add
         .text(x, y - 24, opts.tagPrefix, {
@@ -83,15 +75,15 @@ export class Npc {
     }
   }
 
-  /** Bake the (optionally tinted) walk-cycle frames — constructor/setTint only. */
-  private bakeFrames(scene: Phaser.Scene, base: string, color?: number): FrameSet {
-    const wa = scene.textures.exists(SURVIVOR_NPC_WALK_A) ? SURVIVOR_NPC_WALK_A : base;
-    const wb = scene.textures.exists(SURVIVOR_NPC_WALK_B) ? SURVIVOR_NPC_WALK_B : base;
-    if (color === undefined) return { idle: base, a: wa, b: wb };
+  /** Resolve the walk-cycle frames: a jacket-coloured set when a faction colour
+   *  is given, else the default neutral survivor (constructor/setTint only). */
+  private colorFrames(scene: Phaser.Scene, color?: number): FrameSet {
+    if (color !== undefined) return npcJacketFrames(scene, color);
+    const base = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
     return {
-      idle: fxTexFor(scene, base, color).key,
-      a: fxTexFor(scene, wa, color).key,
-      b: fxTexFor(scene, wb, color).key,
+      idle: base,
+      a: scene.textures.exists(SURVIVOR_NPC_WALK_A) ? SURVIVOR_NPC_WALK_A : base,
+      b: scene.textures.exists(SURVIVOR_NPC_WALK_B) ? SURVIVOR_NPC_WALK_B : base,
     };
   }
 
@@ -155,25 +147,18 @@ export class Npc {
 
   takeDamage(n: number): boolean {
     this.hp -= n;
-    this.sprite.setTintFill(0xffffff);
+    this.sprite.setTintFill(0xffffff); // full-white hurt flash; jacket colour is baked
     this.sprite.scene.time.delayedCall(70, () => {
-      if (!this.sprite.active) return;
-      if (this.baseTint !== undefined) this.sprite.setTint(this.baseTint); // keep the tier/kind tint
-      else this.sprite.clearTint();
+      if (this.sprite.active) this.sprite.clearTint();
     });
     return this.hp <= 0;
   }
 
-  /** Re-tint (e.g. survivor → companion on recruit) and keep it through hurt
-   *  flashes — re-bakes the whole walk cycle in the new colour. */
+  /** Recolour the jacket (e.g. survivor → companion green on recruit) — rebuilds
+   *  the cycle in the new colour; no whole-sprite tint to carry through flashes. */
   setTint(color: number): void {
-    const scene = this.sprite.scene;
-    const base = scene.textures.exists(SURVIVOR_NPC_KEY) ? SURVIVOR_NPC_KEY : PLAYER_KEY;
-    const t = fxTexFor(scene, base, color);
-    this.frames = this.bakeFrames(scene, base, color);
-    if (scene.textures.exists(t.key)) this.sprite.setTexture(t.key);
-    this.baseTint = t.tint;
-    this.sprite.setTint(t.tint);
+    this.frames = npcJacketFrames(this.sprite.scene, color);
+    this.sprite.setTexture(this.frames.idle).clearTint();
   }
 
   destroy(): void {

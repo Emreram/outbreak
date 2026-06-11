@@ -418,11 +418,19 @@ function drawSurvivorCanvas(p: SurvivorPalette, pose = 0, opts?: { tuck?: boolea
   return cv;
 }
 
+// Default survivor body palette (natural skin/hair/pack). The appearance/faction
+// colour recolours the JACKET ONLY — baked at draw time so the character keeps
+// its face, hair and pack instead of flattening under a whole-sprite tint.
+const PLAYER_BODY = { skin: 0xc89a6a, hair: 0x3a2c1e, pack: 0x6e5a3a };
+const NPC_BODY = { skin: 0xd0a878, hair: 0x2e2722, pack: 0x4a4f57 };
+export const DEFAULT_PLAYER_JACKET = 0x5b6b52; // olive
+
 /** The player survivor — olive jacket, no slung rifle (a live weapon overlays it).
  *  Generates the idle frame, the 4-step walk cycle (contact A · pass · contact B),
- *  and the sprint contact pair (Animation Pass). */
+ *  and the sprint contact pair (Animation Pass). The DEFAULT-jacket textures;
+ *  a chosen appearance colour rebuilds them via playerJacketFrames. */
 export function generatePlayerTexture(scene: Phaser.Scene, _size: number): void {
-  const pal = { jacket: 0x5b6b52, skin: 0xc89a6a, hair: 0x3a2c1e, pack: 0x6e5a3a };
+  const pal = { jacket: DEFAULT_PLAYER_JACKET, ...PLAYER_BODY };
   const add = (key: string, pose: number, opts?: { tuck?: boolean; lean?: number }) => {
     if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawSurvivorCanvas(pal, pose, opts));
   };
@@ -434,13 +442,55 @@ export function generatePlayerTexture(scene: Phaser.Scene, _size: number): void 
   add(PLAYER_SPRINT_B, -2, { lean: 1.5 });
 }
 
+/** The six player frame keys for a chosen JACKET colour — drawn once and cached
+ *  per colour (the default olive reuses the boot textures). Natural skin/hair/
+ *  pack survive, so the survivor reads as a character in a coloured jacket
+ *  rather than a flat tinted blob. */
+export function playerJacketFrames(
+  scene: Phaser.Scene,
+  jacket: number,
+): { idle: string; a: string; b: string; pass: string; sa: string; sb: string } {
+  if (jacket === DEFAULT_PLAYER_JACKET) {
+    return { idle: PLAYER_KEY, a: PLAYER_WALK_A, b: PLAYER_WALK_B, pass: PLAYER_WALK_PASS, sa: PLAYER_SPRINT_A, sb: PLAYER_SPRINT_B };
+  }
+  const tag = (jacket & 0xffffff).toString(16).padStart(6, "0");
+  const pal = { jacket, ...PLAYER_BODY };
+  const make = (suffix: string, pose: number, opts?: { tuck?: boolean; lean?: number }) => {
+    const key = `player_j${tag}_${suffix}`;
+    if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawSurvivorCanvas(pal, pose, opts));
+    return key;
+  };
+  return {
+    idle: make("i", 0),
+    a: make("wa", 1),
+    b: make("wb", -1),
+    pass: make("wp", 0, { tuck: true, lean: 0.8 }),
+    sa: make("sa", 2, { lean: 1.5 }),
+    sb: make("sb", -2, { lean: 1.5 }),
+  };
+}
+
 /** Survivor NPC — light neutral so the scene's faction tint (cyan/green) reads;
  *  armed so they look like fighters. Walk pair added in the Animation Pass. */
 export function generateSurvivorNpcTexture(scene: Phaser.Scene): void {
-  const pal = { jacket: 0x9aa0a8, skin: 0xd0a878, hair: 0x2e2722, pack: 0x4a4f57, armed: true };
+  const pal = { jacket: 0x9aa0a8, ...NPC_BODY, armed: true };
   if (!scene.textures.exists(SURVIVOR_NPC_KEY)) scene.textures.addCanvas(SURVIVOR_NPC_KEY, drawSurvivorCanvas(pal));
   if (!scene.textures.exists(SURVIVOR_NPC_WALK_A)) scene.textures.addCanvas(SURVIVOR_NPC_WALK_A, drawSurvivorCanvas(pal, 1));
   if (!scene.textures.exists(SURVIVOR_NPC_WALK_B)) scene.textures.addCanvas(SURVIVOR_NPC_WALK_B, drawSurvivorCanvas(pal, -1));
+}
+
+/** The three NPC frame keys for a faction/tier JACKET colour — drawn once and
+ *  cached per colour (armed survivor body). The hurt flash is a full-white
+ *  setTintFill that clears back to no tint, so the jacket colour stays baked. */
+export function npcJacketFrames(scene: Phaser.Scene, jacket: number): { idle: string; a: string; b: string } {
+  const tag = (jacket & 0xffffff).toString(16).padStart(6, "0");
+  const pal = { jacket, ...NPC_BODY, armed: true };
+  const make = (suffix: string, pose: number) => {
+    const key = `npc_j${tag}_${suffix}`;
+    if (!scene.textures.exists(key)) scene.textures.addCanvas(key, drawSurvivorCanvas(pal, pose));
+    return key;
+  };
+  return { idle: make("i", 0), a: make("wa", 1), b: make("wb", -1) };
 }
 
 // --- ground micro-decor (PR-E): pebbles / grass tufts / pavement cracks ---------
