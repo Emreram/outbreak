@@ -58,6 +58,7 @@ export class CombatFx {
   private readonly flashes: Flash[] = [];
   private readonly bloodMats = new Map<number, StandardMaterial>();
   private readonly brassMat: StandardMaterial;
+  private readonly dustMat: StandardMaterial;
   private readonly muzzleLight: PointLight;
   private muzzleOffAt = 0;
   private readonly tmp = new Vector3();
@@ -69,6 +70,7 @@ export class CombatFx {
     private readonly fxTex?: FxTextures,
   ) {
     this.brassMat = unlitMat(scene, "#b8923a");
+    this.dustMat = unlitMat(scene, "#8a7f6a", 0.55);
     this.muzzleLight = new PointLight("muzzle", new Vector3(0, -10, 0), scene);
     this.muzzleLight.diffuse = Color3.FromHexString("#ffe08a");
     this.muzzleLight.intensity = 0;
@@ -189,6 +191,24 @@ export class CombatFx {
       f.mesh.position.set(wp.x, wp.y, wp.z);
       f.mesh.scaling.setAll(2.4);
     });
+  }
+
+  /** Footstep/landing dust puff at a sim position (animation plan WS3). */
+  dust(xPx: number, yPx: number, n = 2): void {
+    for (let i = 0; i < n; i++) {
+      const p = this.alloc(this.sprays, 40, 0.05, this.dustMat);
+      const wp = simToWorld(xPx, yPx, 0.06 + groundHeightAt(xPx, yPx), this.tmp);
+      p.mesh.position.set(wp.x, wp.y, wp.z);
+      const a = Math.random() * Math.PI * 2;
+      const sp = 0.3 + Math.random() * 0.5;
+      p.vx = Math.cos(a) * sp;
+      p.vz = Math.sin(a) * sp;
+      p.vy = 0.5 + Math.random() * 0.5;
+      p.life = 280 + Math.random() * 140;
+      p.born = performance.now();
+      p.settleY = 0.02 + groundHeightAt(xPx, yPx);
+      p.live = true;
+    }
   }
 
   private alloc(pool: Particle[], cap: number, size: number, m: StandardMaterial): Particle {

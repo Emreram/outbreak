@@ -27,11 +27,23 @@ import { groundHeightAt, simToWorld } from "./space";
 import { Labels } from "./Labels";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { FxTextures } from "./fx/FxTextures";
-import { buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, poseHumanoid, type HumanoidRig, type QuadRig } from "./actors/Blockout";
+import { applyPose, buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, type HumanoidRig, type QuadRig } from "./actors/Blockout";
+import { AnimController, newLocoInput, type Pose } from "./anim/AnimController";
+import { HUMANOID_REGISTRY } from "./anim/actions";
+import { footPlants, phaseFor } from "./anim/locomotion";
 import { CombatFx } from "./fx/CombatFx";
 
 const FLOAT_POOL = 18;
 const DECAL_POOL = 48;
+
+/** Per-enemy view: rig + its animation controller (animation plan WS3). */
+interface EnemyView {
+  rig: HumanoidRig;
+  ctrl: AnimController;
+  /** The controller's reused pose object (re-applied on skipped LOD ticks). */
+  pose: Readonly<Pose>;
+  prevPhase: number;
+}
 
 export class WorldView {
   readonly ui: AdvancedDynamicTexture;
@@ -40,8 +52,11 @@ export class WorldView {
   /** Optional shadow hookup (WS4): actor body meshes cast. */
   shadows: import("./env/ShadowDirector").ShadowDirector | null = null;
   private readonly labels: Labels;
-  private readonly enemies = new Map<number, HumanoidRig>();
+  private readonly enemies = new Map<number, EnemyView>();
   private readonly animals = new Map<number, QuadRig>();
+  private readonly locoInp = newLocoInput();
+  private lastSimNow = 0;
+  private lodFlip = false;
   /** Fallen rigs reposed in place (WS7) — keyed by corpse record id. */
   private readonly corpses = new Map<number, HumanoidRig>();
   /** Hit-flash expiry per enemy id (WS7). */
@@ -103,13 +118,25 @@ export class WorldView {
       if (!e) return;
       const rig = buildHumanoid(this.scene, `enemy${id}`, lookOfZombie(e.def));
       this.shadows?.addActorCaster(rig.body);
-      this.enemies.set(id, rig);
+      const ctrl = new AnimController(
+        {
+          kind: "humanoid",
+          archetype: e.def.look.body,
+          movement: e.def.movement,
+          fast: e.family === "zombie_runner" || e.hasTrait("fast"),
+          scale: e.def.scale,
+          hash: e.phase / (Math.PI * 2),
+        },
+        HUMANOID_REGISTRY,
+      );
+      this.enemies.set(id, { rig, ctrl, pose: ctrl.tick(0, this.locoInp), prevPhase: 0 });
     });
     ev.on("enemyRemoved", ({ id, corpse }) => {
-      const rig = this.enemies.get(id);
+      const v = this.enemies.get(id);
       this.enemies.delete(id);
       this.flashes.delete(id);
-      if (!rig) return;
+      if (!v) return;
+      const rig = v.rig;
       this.shadows?.removeActorCaster(rig.body);
       if (corpse) {
         // The matching record is the newest one (kill-pipeline order): repose
@@ -260,40 +287,51 @@ export class WorldView {
   /** Per-render-frame: poll sim arrays, interpolate, animate pools. */
   update(alpha: number, nowMs: number, px: number, py: number): void {
     const a = alpha;
+    const simDt = this.sim.now - this.lastSimNow;
+    this.lastSimNow = this.sim.now;
+    this.lodFlip = !this.lodFlip;
     for (const e of this.hostiles.enemies) {
-      const rig = this.enemies.get(e.id);
-      if (!rig) continue;
+      const v = this.enemies.get(e.id);
+      if (!v) continue;
       const ix = e.prevX + (e.x - e.prevX) * a;
       const iy = e.prevY + (e.y - e.prevY) * a;
       const wp = simToWorld(ix, iy, groundHeightAt(ix, iy), this.tmp);
-      rig.root.position.set(wp.x, wp.y, wp.z);
-      // Enemy.applySway port — per-class motion identity, verbatim numbers.
-      const fast = e.family === "zombie_runner" || e.hasTrait("fast");
-      const wide = e.def.movement === "crawler";
-      let amp = wide ? 0.2 : fast ? 0.22 : 0.12;
-      const freq = wide ? 0.006 : fast ? 0.022 : 0.008;
-      if (e.def.movement === "stalker" && e.lastDist < 170) amp *= 0.5; // the creep
-      const phaseRad = this.sim.now * freq + e.phase;
-      const moving = e.speed() > 4;
-      const lurchPause = e.def.movement === "lurcher" && this.sim.now % 850 >= 450;
-      poseHumanoid(rig, e.facing, lurchPause ? 0 : phaseRad, moving && !lurchPause, Math.sin(phaseRad) * amp, 0, 0.55);
-      rig.root.scaling.y = e.isStunned(this.sim.now) ? 0.85 : rig.root.scaling.y;
+      // Locomotion inputs from the public sim surface (parity table lives in
+      // anim/locomotion.ts). Far rigs tick at half rate and reuse their pose.
+      const inp = this.locoInp;
+      inp.timeMs = this.sim.now;
+      inp.phaseRad = phaseFor(v.ctrl.spec, this.sim.now);
+      inp.moving = e.speed() > 4;
+      inp.speedFrac = Math.min(1.2, e.speed() / Math.max(1, e.def.speed));
+      inp.sprintFrac = 0;
+      inp.stunned = e.isStunned(this.sim.now);
+      inp.creep = e.def.movement === "stalker" && e.lastDist < 170;
+      inp.pauseGather = e.def.movement === "lurcher" && this.sim.now % 850 >= 450;
+      v.ctrl.setStance(inp.stunned ? "dizzy" : null);
+      const far = Math.hypot(ix - px, iy - py) > 900;
+      if (!far || this.lodFlip) v.pose = v.ctrl.tick(far ? simDt * 2 : simDt, inp);
+      v.rig.root.position.set(wp.x, wp.y, wp.z);
+      applyPose(v.rig, v.pose, e.facing);
+      // footstep dust at plant moments (near, actually striding)
+      const plant = footPlants(v.prevPhase, inp.phaseRad);
+      v.prevPhase = inp.phaseRad;
+      if (plant !== 0 && inp.moving && inp.speedFrac > 0.5 && !far) this.fx.dust(ix, iy, 1);
     }
     // hit-flash decay (WS7)
     if (this.flashes.size > 0) {
       for (const [id, until] of this.flashes) {
-        const rig = this.enemies.get(id);
-        if (!rig) {
+        const v = this.enemies.get(id);
+        if (!v) {
           this.flashes.delete(id);
           continue;
         }
         const left = until - nowMs;
         if (left <= 0) {
-          rig.bodyMat.emissiveColor.set(0, 0, 0);
+          v.rig.bodyMat.emissiveColor.set(0, 0, 0);
           this.flashes.delete(id);
         } else {
           const k = (left / 90) * 0.85;
-          rig.bodyMat.emissiveColor.set(k, k, k);
+          v.rig.bodyMat.emissiveColor.set(k, k, k);
         }
       }
     }

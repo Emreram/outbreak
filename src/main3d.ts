@@ -28,7 +28,10 @@ import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
 import { groundHeightAt, setGroundHeightFn, simToWorld, worldToSim } from "./render3d/space";
 import { createHeightField } from "./render3d/env/heightField";
 import { get as idbGet, set as idbSet } from "idb-keyval";
-import { buildHumanoid, poseHumanoid, setBlockoutMaxLights } from "./render3d/actors/Blockout";
+import { applyPose, buildHumanoid, setBlockoutMaxLights } from "./render3d/actors/Blockout";
+import { AnimController, newLocoInput } from "./render3d/anim/AnimController";
+import { HUMANOID_REGISTRY } from "./render3d/anim/actions";
+import { playerPhase } from "./render3d/anim/locomotion";
 import { createGameSim } from "./sim/createGameSim";
 import type { PersistenceSystem } from "./sim/systems/persistence";
 import { clearSave, loadGame, newGame, saveGame } from "./game/GameState";
@@ -150,6 +153,12 @@ async function boot(): Promise<void> {
   });
   const player = playerRig.root;
   shadows.addActorCaster(playerRig.body);
+  const playerCtrl = new AnimController(
+    { kind: "humanoid", archetype: "survivor", movement: "survivor", scale: 1.05, hash: 0.42 },
+    HUMANOID_REGISTRY,
+  );
+  const playerInp = newLocoInput();
+  let lastSimNow = 0;
 
   // --- loot ceremony (the DOM LootReveal survives untouched — plan §6.3) -----
   const reveal = new LootReveal(() => {
@@ -495,13 +504,16 @@ async function boot(): Promise<void> {
     const ix = sim.player.prevX + (sim.player.x - sim.player.prevX) * a;
     const iy = sim.player.prevY + (sim.player.y - sim.player.prevY) * a;
     player.position.set(...vec3(ix, iy, 0));
-    // Player.update visual parity: walk sway ±0.07 (±0.1 sprint) on the
-    // walkT·0.35 phase; idle micro-breathe 1+sin(t·0.0045)·0.015.
-    const moving = sim.player.moving;
-    const phase = sim.now * (sim.player.sprinting ? 0.042 : 0.021);
-    const sway = moving ? Math.sin(phase) * (sim.player.sprinting ? 0.1 : 0.07) : 0;
-    const breathe = moving ? 0 : Math.sin(sim.now * 0.0045) * 0.015;
-    poseHumanoid(playerRig, sim.player.facing, phase, moving, sway, breathe, 0.7);
+    // Player locomotion via the AnimController (parity numbers live in
+    // anim/locomotion.ts; breathe in the additive layer).
+    const simDt = sim.now - lastSimNow;
+    lastSimNow = sim.now;
+    playerInp.timeMs = sim.now;
+    playerInp.phaseRad = playerPhase(sim.now, sim.player.sprinting);
+    playerInp.moving = sim.player.moving;
+    playerInp.speedFrac = sim.player.moving ? 1 : 0;
+    playerInp.sprintFrac = sim.player.sprinting ? 1 : 0;
+    applyPose(playerRig, playerCtrl.tick(simDt, playerInp), sim.player.facing);
     camTarget.set(player.position.x, player.position.y + 0.9, player.position.z);
     rig.update(camTarget, dtMs);
 

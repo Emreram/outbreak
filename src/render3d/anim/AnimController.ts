@@ -118,6 +118,8 @@ export interface ActorAnimSpec {
   /** BodyArchetype / animal kind / "survivor" — locomotion picks layers by it. */
   archetype: string;
   movement?: string; // ZombieDef.movement for archetype layers
+  /** Runner family / fast trait (the .22/.022 parity class + arm pump). */
+  fast?: boolean;
   scale: number;
   /** Deterministic per-rig 0..1 (twitch phasing). */
   hash: number;

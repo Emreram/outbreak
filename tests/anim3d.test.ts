@@ -202,5 +202,59 @@ const ok = (cond: boolean, msg: string) => {
   ok(rig.armL.rotation.z === -0.08, "idle keeps the reach droop");
 }
 
+
+// --- WS3 locomotion --------------------------------------------------------------------
+{
+  const { HUMANOID_PARITY, footPlants, phaseFor, playerPhase, sampleHumanoidLocomotion, swayAmpFor } = await import(
+    "../src/render3d/anim/locomotion"
+  );
+  const { newLocoInput, newPose, resetPose } = await import("../src/render3d/anim/AnimController");
+
+  // Arrange: a standard walker spec mid-stride.
+  const spec = { kind: "humanoid" as const, archetype: "humanoid", movement: "walker", fast: false, scale: 1, hash: 0 };
+  const inp = newLocoInput();
+  inp.moving = true;
+  inp.speedFrac = 1;
+  inp.timeMs = 5000;
+  inp.phaseRad = phaseFor(spec, 5000);
+
+  // Assert: parity — phase frequency and sway amplitude match the table.
+  ok(Math.abs(inp.phaseRad - 5000 * HUMANOID_PARITY.standard.freq) < 1e-9, "standard phase uses the .008 parity frequency");
+  ok(swayAmpFor(spec, inp) === HUMANOID_PARITY.standard.amp, "standard sway amp = .12");
+  const fastSpec = { ...spec, fast: true };
+  ok(swayAmpFor(fastSpec, inp) === HUMANOID_PARITY.fast.amp, "runner sway amp = .22");
+  const creepInp = { ...inp, creep: true };
+  ok(swayAmpFor(spec, creepInp) === HUMANOID_PARITY.standard.amp * 0.5, "stalker creep halves the amp");
+  ok(playerPhase(1000, false) === 1000 * 0.021 && playerPhase(1000, true) === 1000 * 0.042, "player phase parity .021/.042");
+
+  // Knees never bend negative across a stride; limbs rest at idle.
+  const pose = newPose();
+  let kneeMin = 9;
+  for (let i = 0; i < 64; i++) {
+    inp.phaseRad = (i / 64) * Math.PI * 2;
+    sampleHumanoidLocomotion(spec, inp, resetPose(pose));
+    kneeMin = Math.min(kneeMin, pose.kneeL, pose.kneeR);
+  }
+  ok(kneeMin >= 0, "knees never hyperextend (bend >= 0)");
+  const idle = newLocoInput();
+  sampleHumanoidLocomotion(spec, idle, resetPose(pose));
+  ok(pose.armL.swingY === 0 && pose.hipL === 0 && pose.kneeL === 0, "idle zeroes the stride channels");
+
+  // Foot plants: exactly two per stride, alternating feet.
+  let plants = 0;
+  let prev = 0;
+  const seen: number[] = [];
+  for (let i = 1; i <= 200; i++) {
+    const p = (i / 200) * Math.PI * 2;
+    const f = footPlants(prev, p);
+    if (f !== 0) {
+      plants++;
+      seen.push(f);
+    }
+    prev = p;
+  }
+  ok(plants === 2 && seen[0] !== seen[1], `exactly 2 alternating plants per stride (${plants})`);
+}
+
 console.log(fail === 0 ? "ALL ANIM3D CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);
