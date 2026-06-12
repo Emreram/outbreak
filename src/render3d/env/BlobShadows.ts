@@ -13,6 +13,7 @@ import { Matrix, Quaternion, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import type { Scene } from "@babylonjs/core/scene";
 import type { Sim } from "../../sim/Sim";
 import type { HostilesSystem } from "../../sim/systems/hostiles";
+import type { FxTextures } from "../fx/FxTextures";
 import { groundHeightAt, simToWorld } from "../space";
 
 const CAP = 72;
@@ -26,13 +27,18 @@ export class BlobShadows {
   private readonly s = new Vector3();
   private readonly tmp = { x: 0, y: 0, z: 0 };
 
-  constructor(scene: Scene) {
+  constructor(scene: Scene, fxTex?: FxTextures) {
     this.mesh = CreateDisc("blobShadow", { radius: 0.5, tessellation: 14 }, scene);
-    const mat = new StandardMaterial("blobShadowMat", scene);
-    mat.diffuseColor = Color3.Black();
-    mat.emissiveColor = Color3.FromHexString("#05080c");
-    mat.disableLighting = true;
-    mat.alpha = 0.34;
+    let mat: StandardMaterial;
+    if (fxTex) {
+      mat = fxTex.decal("soft", 0x05080c, 0.4); // soft-edged radial (WS8)
+    } else {
+      mat = new StandardMaterial("blobShadowMat", scene);
+      mat.diffuseColor = Color3.Black();
+      mat.emissiveColor = Color3.FromHexString("#05080c");
+      mat.disableLighting = true;
+      mat.alpha = 0.34;
+    }
     this.mesh.material = mat;
     this.mesh.isPickable = false;
     this.mesh.alwaysSelectAsActiveMesh = true;

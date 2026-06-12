@@ -9,7 +9,6 @@
 
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
-import { CreateDisc } from "@babylonjs/core/Meshes/Builders/discBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { AdvancedDynamicTexture } from "@babylonjs/gui/2D/advancedDynamicTexture";
@@ -23,8 +22,11 @@ import type { DropsSystem } from "../sim/systems/drops";
 import { sfx } from "../engine/audio";
 import { defOf } from "../game/items/catalog";
 import { RARITY_META } from "../game/items/rarity";
+import { bloodProfileFor } from "../game/enemies/blood";
 import { groundHeightAt, simToWorld } from "./space";
 import { Labels } from "./Labels";
+import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
+import { FxTextures } from "./fx/FxTextures";
 import { buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, poseHumanoid, type HumanoidRig, type QuadRig } from "./actors/Blockout";
 import { CombatFx } from "./fx/CombatFx";
 
@@ -34,6 +36,7 @@ const DECAL_POOL = 48;
 export class WorldView {
   readonly ui: AdvancedDynamicTexture;
   readonly fx: CombatFx;
+  readonly fxTex: FxTextures;
   /** Optional shadow hookup (WS4): actor body meshes cast. */
   shadows: import("./env/ShadowDirector").ShadowDirector | null = null;
   private readonly labels: Labels;
@@ -43,7 +46,7 @@ export class WorldView {
   private readonly corpses = new Map<number, HumanoidRig>();
   /** Hit-flash expiry per enemy id (WS7). */
   private readonly flashes = new Map<number, number>();
-  private readonly drops = new Map<number, { mesh: Mesh; born: number }>();
+  private readonly drops = new Map<number, { mesh: Mesh; born: number; glow: Mesh; beam: Mesh | null; rank: number }>();
   private readonly projectiles = new Map<number, Mesh>();
   private readonly floats: { block: TextBlock; x: number; y: number; born: number; live: boolean }[] = [];
   private readonly decals: { mesh: Mesh; born: number }[] = [];
@@ -52,7 +55,6 @@ export class WorldView {
   private readonly tmp = new Vector3();
   private projMat: StandardMaterial;
   private acidMat: StandardMaterial;
-  private decalMat: StandardMaterial;
 
   constructor(
     private readonly scene: Scene,
@@ -87,11 +89,9 @@ export class WorldView {
     this.acidMat = new StandardMaterial("acidMat", scene);
     this.acidMat.emissiveColor = Color3.FromHexString("#8fd14a");
     this.acidMat.disableLighting = true;
-    this.decalMat = new StandardMaterial("decalMat", scene);
-    this.decalMat.diffuseColor = Color3.FromHexString("#3a0e10");
-    this.decalMat.specularColor = Color3.Black();
 
-    this.fx = new CombatFx(scene, sim, hostiles);
+    this.fxTex = new FxTextures(scene);
+    this.fx = new CombatFx(scene, sim, hostiles, this.fxTex);
     this.bind();
   }
 
@@ -156,21 +156,36 @@ export class WorldView {
     ev.on("dropSpawned", ({ id }) => {
       const d = this.dropsSys.drops.find((x) => x.id === id);
       if (!d) return;
+      const meta = RARITY_META[defOf(d.item).rarity];
       const mesh = CreateBox(`drop${id}`, { size: 0.22 }, this.scene);
-      const rar = defOf(d.item).rarity;
       const mat = new StandardMaterial(`drop${id}m`, this.scene);
       mat.diffuseColor = Color3.FromHexString("#d8d2c4");
-      mat.emissiveColor = Color3.FromHexString(RARITY_META[rar].css).scale(0.55);
+      mat.emissiveColor = Color3.FromHexString(meta.css).scale(0.55);
       mat.specularColor = Color3.Black();
       mesh.material = mat;
       mesh.isPickable = false;
-      this.drops.set(id, { mesh, born: performance.now() });
+      // rarity glow pool under the drop (WS8) — bloom carries it at night
+      const glow = CreatePlane(`drop${id}g`, { size: 1 }, this.scene);
+      glow.rotation.x = Math.PI / 2;
+      glow.material = this.fxTex.additive("glow", meta.css, 0.4 + meta.rank * 0.06);
+      glow.isPickable = false;
+      // epic+ earns the vertical beacon beam
+      let beam: Mesh | null = null;
+      if (meta.rank >= 3) {
+        beam = CreatePlane(`drop${id}b`, { width: 0.5, height: 2.2 }, this.scene);
+        beam.material = this.fxTex.additive("beam", meta.css, 0.4);
+        beam.billboardMode = Mesh.BILLBOARDMODE_Y;
+        beam.isPickable = false;
+      }
+      this.drops.set(id, { mesh, born: performance.now(), glow, beam, rank: meta.rank });
     });
     ev.on("dropRemoved", ({ id }) => {
       const d = this.drops.get(id);
       if (d) {
         d.mesh.material?.dispose();
         d.mesh.dispose();
+        d.glow.dispose();
+        d.beam?.dispose();
       }
       this.drops.delete(id);
     });
@@ -197,25 +212,27 @@ export class WorldView {
       f.block.isVisible = true;
     });
 
-    ev.on("decal", ({ x, y, scale }) => {
+    ev.on("decal", ({ x, y, scale, enemyId }) => {
       let d = this.decals[this.decalIdx % DECAL_POOL];
       if (!d) {
-        const mesh = CreateDisc(`decal${this.decalIdx}`, { radius: 0.3, tessellation: 10 }, this.scene);
+        const mesh = CreatePlane(`decal${this.decalIdx}`, { size: 1 }, this.scene);
         mesh.rotation.x = Math.PI / 2;
-        mesh.material = this.decalMat;
         mesh.isPickable = false;
         d = { mesh, born: 0 };
         this.decals.push(d);
       }
       this.decalIdx++;
       d.born = performance.now();
-      const wp = simToWorld(x, y, 0.015 + groundHeightAt(x, y));
-      d.mesh.unfreezeWorldMatrix();
+      // the SPLAT texture in the striker's blood colour (gore identity, WS8)
+      const e = enemyId !== undefined ? this.hostiles.enemies.find((q) => q.id === enemyId) : undefined;
+      const pool = e ? bloodProfileFor(e.def).pool : 0x4a1114;
+      d.mesh.material = this.fxTex.decal("splat", pool, 0.82);
+      const wp = simToWorld(x, y, 0.02 + groundHeightAt(x, y));
       d.mesh.position.set(wp.x, wp.y, wp.z);
-      d.mesh.scaling.setAll(Math.max(0.4, scale));
+      d.mesh.scaling.setAll(Math.max(0.5, scale) * (0.85 + Math.random() * 0.5));
       d.mesh.rotation.y = Math.random() * Math.PI * 2;
+      d.mesh.visibility = 1;
       d.mesh.setEnabled(true);
-      d.mesh.freezeWorldMatrix();
     });
 
     ev.on("banner", ({ text, color }) => this.toast(text, color));
@@ -309,10 +326,15 @@ export class WorldView {
     for (const [id, d] of this.drops) {
       const rec = this.dropsSys.drops.find((x) => x.id === id);
       if (!rec) continue;
+      const g = groundHeightAt(rec.x, rec.y);
       const bob = Math.sin((nowMs - d.born) * 0.004) * 0.06;
-      const wp = simToWorld(rec.x, rec.y, 0.28 + bob + groundHeightAt(rec.x, rec.y), this.tmp);
+      const wp = simToWorld(rec.x, rec.y, 0.28 + bob + g, this.tmp);
       d.mesh.position.set(wp.x, wp.y, wp.z);
       d.mesh.rotation.y = (nowMs - d.born) * 0.0012;
+      d.glow.position.set(wp.x, g + 0.03, wp.z);
+      const pulse = (0.55 + d.rank * 0.22) * (1 + Math.sin((nowMs - d.born) * 0.003) * 0.12);
+      d.glow.scaling.setAll(pulse);
+      if (d.beam) d.beam.position.set(wp.x, g + 1.1, wp.z);
     }
 
     // float text rise + fade (800ms)
@@ -336,10 +358,11 @@ export class WorldView {
       f.block.alpha = 1 - t * t;
     }
 
-    // decals fade out over 26s (cap recycles oldest)
+    // decals: hold 9s, fade to nothing by 26s (Phaser decal-pool timings)
     for (const d of this.decals) {
       const age = nowMs - d.born;
       if (age > 26000) d.mesh.setEnabled(false);
+      else if (age > 9000) d.mesh.visibility = 1 - (age - 9000) / 17000;
     }
 
     this.labels.update(px, py);

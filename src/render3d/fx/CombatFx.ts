@@ -19,6 +19,7 @@ import type { Sim } from "../../sim/Sim";
 import type { HostilesSystem } from "../../sim/systems/hostiles";
 import { bloodProfileFor } from "../../game/enemies/blood";
 import { groundHeightAt, simToWorld } from "../space";
+import type { FxTextures } from "./FxTextures";
 
 interface Particle {
   mesh: Mesh;
@@ -37,6 +38,8 @@ interface Flash {
   life: number;
   grow: number;
   live: boolean;
+  /** False when the material is a shared FxTextures cache entry. */
+  ownsMat: boolean;
 }
 
 function unlitMat(scene: Scene, color: string, alpha = 1): StandardMaterial {
@@ -63,6 +66,7 @@ export class CombatFx {
     private readonly scene: Scene,
     sim: Sim,
     hostiles: HostilesSystem,
+    private readonly fxTex?: FxTextures,
   ) {
     this.brassMat = unlitMat(scene, "#b8923a");
     this.muzzleLight = new PointLight("muzzle", new Vector3(0, -10, 0), scene);
@@ -139,7 +143,7 @@ export class CombatFx {
       this.muzzleLight.position.set(wp.x, wp.y + 0.3, wp.z);
       this.muzzleLight.intensity = 18;
       this.muzzleOffAt = performance.now() + 90;
-      const f = this.flash("#ffe08a", 0.22, 90, 1.6);
+      const f = this.flash("#ffe08a", 0.5, 90, 1.6, false, undefined, this.fxTex?.additive("soft", "#ffe08a", 0.7));
       f.mesh.position.set(wp.x, wp.y, wp.z);
     });
 
@@ -173,14 +177,14 @@ export class CombatFx {
     });
 
     sim.events.on("explosion", ({ x, y, radius }) => {
-      const f = this.flash("#ffa23f", 0.85, 220, 2.5);
+      const f = this.flash("#ffa23f", 0.85, 220, 2.5, false, undefined, this.fxTex?.additive("glow", "#ffa23f", 0.85));
       const wp = simToWorld(x, y, 0.6, this.tmp);
       f.mesh.position.set(wp.x, wp.y, wp.z);
       f.mesh.scaling.setAll(Math.max(1, (radius / 32) * 0.8));
     });
 
     sim.events.on("toxicCloud", ({ x, y }) => {
-      const f = this.flash("#8fd14a", 0.18, 4000, 1.3);
+      const f = this.flash("#8fd14a", 0.18, 4000, 1.3, false, undefined, this.fxTex?.additive("soft", "#8fd14a", 0.2));
       const wp = simToWorld(x, y, 0.6, this.tmp);
       f.mesh.position.set(wp.x, wp.y, wp.z);
       f.mesh.scaling.setAll(2.4);
@@ -201,12 +205,21 @@ export class CombatFx {
     return p;
   }
 
-  private flash(color: string, alpha: number, life: number, grow: number, keepMesh = false, mesh?: Mesh): Flash {
+  private flash(
+    color: string,
+    alpha: number,
+    life: number,
+    grow: number,
+    keepMesh = false,
+    mesh?: Mesh,
+    sharedMat?: StandardMaterial,
+  ): Flash {
     const m = mesh ?? CreateDisc(`flash${performance.now()}_${Math.random()}`, { radius: 0.5, tessellation: 18 }, this.scene);
     if (!mesh) m.rotation.x = Math.PI / 2;
-    m.material = unlitMat(this.scene, color, alpha);
+    m.material = sharedMat ?? unlitMat(this.scene, color, alpha);
     m.isPickable = false;
-    const f: Flash = { mesh: m, born: performance.now(), life, grow, live: true };
+    m.visibility = 1;
+    const f: Flash = { mesh: m, born: performance.now(), life, grow, live: true, ownsMat: !sharedMat };
     this.flashes.push(f);
     void keepMesh;
     return f;
@@ -241,15 +254,14 @@ export class CombatFx {
       const f = this.flashes[i];
       const t = (now - f.born) / f.life;
       if (t >= 1) {
-        f.mesh.material?.dispose();
+        if (f.ownsMat) f.mesh.material?.dispose(); // shared FxTextures mats stay cached
         f.mesh.dispose();
         this.flashes.splice(i, 1);
         continue;
       }
-      const mat = f.mesh.material as StandardMaterial;
-      mat.alpha *= 0.93;
-      const k = 1 + (f.grow - 1) * t;
-      f.mesh.scaling.x = f.mesh.scaling.x === 0 ? k : f.mesh.scaling.x * (1 + (f.grow - 1) * 0.02);
+      // per-mesh fade (visibility) so shared materials never mutate
+      f.mesh.visibility *= 0.93;
+      f.mesh.scaling.x = f.mesh.scaling.x * (1 + (f.grow - 1) * 0.02);
       f.mesh.scaling.y = f.mesh.scaling.y * (1 + (f.grow - 1) * 0.02);
       f.mesh.scaling.z = f.mesh.scaling.z * (1 + (f.grow - 1) * 0.02);
     }

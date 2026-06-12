@@ -81,7 +81,6 @@ async function boot(): Promise<void> {
   const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.55), scene);
   const tod = new TimeOfDayDirector();
   const shadows = new ShadowDirector(sun, caps);
-  const blobs = caps.shadows === "blob" ? new BlobShadows(scene) : null;
 
   // --- state + sim (same save key, same flags as the Phaser build) ----------
   // Load order (plan §4.3): localStorage v4 (the frozen oracle path) first;
@@ -132,6 +131,7 @@ async function boot(): Promise<void> {
   };
   const view = new WorldView(scene, sim, hostiles, combat, drops);
   view.shadows = shadows;
+  const blobs = caps.shadows === "blob" ? new BlobShadows(scene, view.fxTex) : null;
   const weather = new WeatherFx(scene);
   const minimap = new MinimapOverlay(document.body);
 
