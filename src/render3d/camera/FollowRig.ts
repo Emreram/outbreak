@@ -26,6 +26,9 @@ export class FollowRig {
   private punch = 0;
   private baseRadius = CAMERA_RADIUS_DEFAULT;
   private t = 0;
+  /** Persistent 6% push-in while the encounter modal is open (cinematic beat). */
+  private pushIn = 0;
+  private pushTarget = 0;
 
   constructor(scene: Scene, canvas: HTMLCanvasElement) {
     this.proxy = new TransformNode("camTargetProxy", scene);
@@ -71,6 +74,11 @@ export class FollowRig {
     this.punch = Math.min(1.5, this.punch + amount);
   }
 
+  /** Slow 6% dolly-in while an encounter plays (plan §6.1), eased both ways. */
+  encounterPush(on: boolean): void {
+    this.pushTarget = on ? 1 : 0;
+  }
+
   /** Per-render-frame: lerp the proxy toward the target visual position. */
   update(target: Vector3, dtMs: number): void {
     this.t += dtMs;
@@ -90,8 +98,9 @@ export class FollowRig {
       this.shakeTrauma = Math.max(0, this.shakeTrauma - dtMs / 450);
     }
     if (this.punch > 0.001) this.punch = Math.max(0, this.punch - dtMs / 220);
+    this.pushIn += (this.pushTarget - this.pushIn) * Math.min(1, dtMs / 600);
 
     this.camera.target.set(this.proxy.position.x + ox, this.proxy.position.y, this.proxy.position.z + oz);
-    this.camera.radius = this.baseRadius - this.punch * 1.6;
+    this.camera.radius = this.baseRadius * (1 - this.pushIn * 0.06) - this.punch * 1.6;
   }
 }

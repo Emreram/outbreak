@@ -16,6 +16,7 @@ import { FollowRig } from "./render3d/camera/FollowRig";
 import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
 import { PropInstancer } from "./render3d/chunks/PropInstancer";
 import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
+import { PostFxDirector } from "./render3d/env/PostFxDirector";
 import { WeatherFx } from "./render3d/env/WeatherFx";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
@@ -189,6 +190,8 @@ async function boot(): Promise<void> {
   const endEncounter = (): void => {
     modal.close();
     sim.paused = false;
+    postFx.setEncounterDof(false);
+    rig.encounterPush(false);
   };
 
   const resolveTurn = async (input: TurnInput): Promise<void> => {
@@ -251,6 +254,8 @@ async function boot(): Promise<void> {
     encounterTurns = 0;
     encounterLoc = sim.world.biomeAtPx(sim.player.x, sim.player.y);
     sfx.ui();
+    postFx.setEncounterDof(true); // the cinematic beat (plan §6.1)
+    rig.encounterPush(true);
     modal.openPrompt(title, situation, choices);
   });
 
@@ -292,6 +297,8 @@ async function boot(): Promise<void> {
   const rig = new FollowRig(scene, canvas);
   rig.snapTo(new Vector3(...vec3(sim.player.x, sim.player.y, 0.85)));
   const camTarget = new Vector3();
+  const postFx = new PostFxDirector(scene, rig.camera, caps, sim.events);
+  let biomeCached = sim.world.biomeAtPx(sim.player.x, sim.player.y);
   sim.events.on("impulse", ({ kind, amount }) => {
     if (kind === "shake") rig.shake(amount);
     else if (kind === "zoomPunch") rig.zoomPunch(amount);
@@ -485,6 +492,7 @@ async function boot(): Promise<void> {
     const bloodEff = bloodOv || !!state.bloodMoon;
     const weatherEff = weatherOv ?? state.weather;
     tod.apply(scene, sun, hemi, dayT, bloodEff, weatherEff);
+    postFx.update(dayT, biomeCached, bloodEff, weatherEff, dtMs, rig.camera.radius);
     const indoor = sim.world.buildingAt(Math.floor(ix / TILE_SIZE), Math.floor(iy / TILE_SIZE)) !== null;
     chunkView.materials.update({
       timeS: performance.now() / 1000,
@@ -508,9 +516,10 @@ async function boot(): Promise<void> {
     if (uiAcc > 200) {
       uiAcc = 0;
       hudRender();
+      biomeCached = sim.world.biomeAtPx(ix, iy);
       overlay.textContent =
         `${engine.getFps().toFixed(0)} fps · ${backend} · ${caps.tier} · ${Math.round(ix)},${Math.round(iy)}px · ` +
-        `${sim.world.biomeAtPx(ix, iy)} · enemies ${hostiles.enemies.length}`;
+        `${biomeCached} · enemies ${hostiles.enemies.length}`;
     }
 
     scene.render();

@@ -43,9 +43,11 @@ async function waitForServer(url, ms = 15000) {
 
 const screenshotIdx = process.argv.indexOf("--screenshot");
 const screenshotPath = screenshotIdx > 0 ? process.argv[screenshotIdx + 1] : null;
-// Extra query params for screenshot baselines, e.g. --params "tod=night&weather=storm&tier=medium"
+// Query params for the primary 3D boot. Default pins tier=low (SwiftShader
+// floor); --params REPLACES it for screenshot baselines, e.g.
+//   --params "tier=medium&tod=night&weather=storm"
 const paramsIdx = process.argv.indexOf("--params");
-const extraParams = paramsIdx > 0 ? `&${process.argv[paramsIdx + 1]}` : "";
+const primaryQs = paramsIdx > 0 ? process.argv[paramsIdx + 1] : "tier=low";
 
 const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
   stdio: "ignore",
@@ -80,7 +82,7 @@ try {
 
   // --- 3D page (Low tier: SwiftShader-friendly, the always-works floor) -----
   {
-    const { page, errors } = await bootCheck("3d", `http://localhost:${PORT}/play3d.html?seed=smoke3d&tier=low${extraParams}`, 9000);
+    const { page, errors } = await bootCheck("3d", `http://localhost:${PORT}/play3d.html?seed=smoke3d&${primaryQs}`, 9000);
     const hasCanvas = await page.evaluate(() => {
       const c = document.querySelector("canvas#game3d");
       return !!c && c.width > 0;
