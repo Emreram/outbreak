@@ -69,7 +69,7 @@ export interface SimChunkStoreOpts {
 
 export class SimChunkStore implements TileGrid {
   readonly start: { x: number; y: number };
-  private readonly seed: string;
+  readonly seed: string;
   private readonly opts: SimChunkStoreOpts;
   private readonly loaded = new Map<string, LoadedChunk>();
   private lastCenter = { cx: NaN, cy: NaN };

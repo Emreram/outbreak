@@ -11,6 +11,7 @@ import type { EventBus } from "../../sim/events";
 import type { SimChunkStore } from "../../sim/world";
 import type { ShadowDirector } from "../env/ShadowDirector";
 import { meshChunk } from "./ChunkMesher";
+import { seedHash } from "./groundShade";
 import { createTileAtlas } from "./TileAtlas";
 import { createChunkMaterials, type FluidMaterials } from "./materials";
 
@@ -23,6 +24,8 @@ export class ChunkViewManager {
   /** Shadow hookup (WS4) — chunk walls/trees cast, ground receives. Passed at
    *  construction because the initial ring meshes immediately. */
   private readonly shadows: ShadowDirector | null;
+  /** Per-run hash seed for the WS5 vertex-shade jitter. */
+  private readonly seedNum: number;
 
   constructor(
     private readonly scene: Scene,
@@ -31,6 +34,7 @@ export class ChunkViewManager {
     shadows?: ShadowDirector,
   ) {
     this.shadows = shadows ?? null;
+    this.seedNum = seedHash(store.seed, "vjit");
     const atlas = createTileAtlas(scene);
     this.atlasMat = new StandardMaterial("chunkAtlasMat", scene);
     this.atlasMat.diffuseTexture = atlas;
@@ -58,7 +62,7 @@ export class ChunkViewManager {
     if (this.views.has(k)) this.drop(cx, cy);
     const data = this.store.chunkData(cx, cy);
     if (!data) return; // unloaded again before its turn in the queue
-    const m = meshChunk(this.scene, data);
+    const m = meshChunk(this.scene, data, this.seedNum);
     const meshes: Mesh[] = [];
     const bind = (mesh: Mesh | null, mat: StandardMaterial | FluidMaterials["water"]): void => {
       if (!mesh) return;
@@ -68,6 +72,7 @@ export class ChunkViewManager {
     bind(m.ground, this.atlasMat);
     bind(m.walls, this.atlasMat);
     bind(m.trees, this.colorMat);
+    bind(m.detail, this.colorMat);
     bind(m.water, this.materials.water);
     bind(m.lava, this.materials.lava);
     bind(m.roofs, this.materials.roof);

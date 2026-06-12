@@ -82,7 +82,10 @@ try {
 
   // --- 3D page (Low tier: SwiftShader-friendly, the always-works floor) -----
   {
-    const { page, errors } = await bootCheck("3d", `http://localhost:${PORT}/play3d.html?seed=smoke3d&${primaryQs}`, 9000);
+    const primaryUrl = primaryQs.includes("seed=")
+      ? `http://localhost:${PORT}/play3d.html?${primaryQs}`
+      : `http://localhost:${PORT}/play3d.html?seed=smoke3d&${primaryQs}`;
+    const { page, errors } = await bootCheck("3d", primaryUrl, 9000);
     const hasCanvas = await page.evaluate(() => {
       const c = document.querySelector("canvas#game3d");
       return !!c && c.width > 0;
