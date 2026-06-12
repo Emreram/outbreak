@@ -74,6 +74,15 @@ export interface HumanoidRig {
   armR: TransformNode;
   hipL: TransformNode | null;
   hipR: TransformNode | null;
+  /** Rig v3 joints (animation plan WS2). */
+  torso: TransformNode;
+  neck: TransformNode;
+  elbowL: TransformNode;
+  elbowR: TransformNode;
+  kneeL: TransformNode | null;
+  kneeR: TransformNode | null;
+  handL: TransformNode;
+  handR: TransformNode;
   baseY: number;
   dispose(): void;
 }
@@ -91,7 +100,18 @@ export interface HumanoidLook {
   features?: readonly string[];
 }
 
-/** Build a humanoid figure facing +X (sim convention), origin at the feet. */
+/** Darken a packed RGB (boot tints on shins). */
+function dim(hex: number, f: number): number {
+  const r = Math.round(((hex >> 16) & 255) * f);
+  const g = Math.round(((hex >> 8) & 255) * f);
+  const b = Math.round((hex & 255) * f);
+  return (r << 16) | (g << 8) | b;
+}
+
+/** Build a humanoid figure facing +X (sim convention), origin at the feet.
+ *  Rig v3 (animation plan WS2): root → torso pivot (body/band/shoulders/neck —
+ *  lean ≠ feet) with two-segment arms (shoulder→elbow→hand socket), and root →
+ *  hip pivots with thigh/knee/shin splits. ~25 nodes, ≤13 meshes. */
 export function buildHumanoid(scene: Scene, name: string, look: HumanoidLook): HumanoidRig {
   const d = DIMS[look.archetype ?? "humanoid"] ?? DIMS.humanoid;
   const s = (look.scale ?? 1) * PX;
@@ -106,11 +126,17 @@ export function buildHumanoid(scene: Scene, name: string, look: HumanoidLook): H
   const bodyH = crawler ? 0.5 * sc : 0.92 * sc;
   const bodyY = crawler ? bodyH / 2 + 0.05 : legH + bodyH / 2 - 0.04;
 
+  // torso pivot at the waist: body, shoulders and neck lean from here
+  const torsoY = crawler ? 0.05 : legH - 0.04;
+  const torso = new TransformNode(`${name}_torso`, scene);
+  torso.parent = root;
+  torso.position.y = torsoY;
+
   const body = CreateBox(`${name}_body`, { width: bodyD, height: bodyH, depth: bodyW }, scene);
   const bodyMat = mat(scene, look.skin).clone(`${name}_bodyMat`);
   body.material = bodyMat;
-  body.parent = root;
-  body.position.y = bodyY;
+  body.parent = torso;
+  body.position.y = bodyY - torsoY;
 
   // accent: a torso band (the torn-clothing accent colour)
   if (look.accent !== undefined) {
@@ -121,13 +147,16 @@ export function buildHumanoid(scene: Scene, name: string, look: HumanoidLook): H
     band.isPickable = false;
   }
 
+  // neck pivot at the collar; head + eyes ride it
   const headSize = headR * s * 2.4;
   const headY = crawler ? bodyH + 0.12 : bodyY + bodyH / 2 + headSize / 2 - 0.02;
+  const neck = new TransformNode(`${name}_neck`, scene);
+  neck.parent = torso;
+  neck.position.set(crawler ? bodyD * 0.5 : bodyD * 0.15, headY - headSize / 2 - torsoY + 0.01, 0);
   const head = CreateBox(`${name}_head`, { size: headSize }, scene);
   head.material = mat(scene, look.headColor ?? look.skin);
-  head.parent = root;
-  head.position.y = headY;
-  head.position.x = crawler ? bodyD * 0.5 : bodyD * 0.15;
+  head.parent = neck;
+  head.position.y = headSize / 2;
 
   // emissive eye strip on the face (+x) — reads at 20m, replaces head glow
   const eyeColor = look.eyes && look.eyes !== 0x140d0d ? look.eyes : 0;
@@ -139,42 +168,72 @@ export function buildHumanoid(scene: Scene, name: string, look: HumanoidLook): H
     eyes.isPickable = false;
   }
 
-  // arms on shoulder pivots (swing from the shoulder, not the centre)
+  // two-segment arms: shoulder pivot → upper arm → elbow pivot → forearm →
+  // hand socket (weapon attach)
   const armW = 0.09 * sc + 0.03;
   const armL3 = armLen * s * 1.7;
+  const segLen = armL3 / 2;
   const shoulderY = crawler ? bodyH * 0.6 : bodyY + bodyH * 0.36;
-  const mkArm = (side: 1 | -1): TransformNode => {
-    const pivot = new TransformNode(`${name}_sh${side}`, scene);
-    pivot.parent = root;
-    pivot.position.set(bodyD * 0.3, shoulderY, side * bodyW * 0.45);
-    const arm = CreateBox(`${name}_arm${side}`, { width: armL3, height: armW, depth: armW }, scene);
-    arm.material = mat(scene, look.skin);
-    arm.parent = pivot;
-    arm.position.x = armL3 / 2;
-    arm.isPickable = false;
-    return pivot;
+  const mkArm = (side: 1 | -1): { shoulder: TransformNode; elbow: TransformNode; hand: TransformNode } => {
+    const shoulder = new TransformNode(`${name}_sh${side}`, scene);
+    shoulder.parent = torso;
+    shoulder.position.set(bodyD * 0.3, shoulderY - torsoY, side * bodyW * 0.45);
+    const upper = CreateBox(`${name}_uarm${side}`, { width: segLen, height: armW, depth: armW }, scene);
+    upper.material = mat(scene, look.skin);
+    upper.parent = shoulder;
+    upper.position.x = segLen / 2;
+    upper.isPickable = false;
+    const elbow = new TransformNode(`${name}_el${side}`, scene);
+    elbow.parent = shoulder;
+    elbow.position.x = segLen;
+    const fore = CreateBox(`${name}_farm${side}`, { width: segLen, height: armW * 0.9, depth: armW * 0.9 }, scene);
+    fore.material = mat(scene, look.skin);
+    fore.parent = elbow;
+    fore.position.x = segLen / 2;
+    fore.isPickable = false;
+    const hand = new TransformNode(`${name}_hand${side}`, scene);
+    hand.parent = elbow;
+    hand.position.x = segLen;
+    return { shoulder, elbow, hand };
   };
-  const armL = mkArm(1);
-  const armR = mkArm(-1);
+  const aL = mkArm(1);
+  const aR = mkArm(-1);
 
-  // legs on hip pivots (crawlers drag — no legs)
+  // two-segment legs: hip pivot → thigh → knee pivot → shin (boot-tinted tip)
   let hipL: TransformNode | null = null;
   let hipR: TransformNode | null = null;
+  let kneeL: TransformNode | null = null;
+  let kneeR: TransformNode | null = null;
   if (!crawler) {
     const legW = Math.max(0.07, bodyW * 0.26);
-    const mkLeg = (side: 1 | -1): TransformNode => {
+    const legColor = look.accent !== undefined ? look.accent : look.skin;
+    const thighLen = legH * 0.52;
+    const shinLen = legH - thighLen + 0.04;
+    const mkLeg = (side: 1 | -1): { hip: TransformNode; knee: TransformNode } => {
       const hip = new TransformNode(`${name}_hip${side}`, scene);
       hip.parent = root;
       hip.position.set(0, legH + 0.02, side * bodyW * 0.22);
-      const leg = CreateBox(`${name}_leg${side}`, { width: legW * 1.1, height: legH + 0.04, depth: legW }, scene);
-      leg.material = mat(scene, look.accent !== undefined ? look.accent : look.skin);
-      leg.parent = hip;
-      leg.position.y = -(legH + 0.04) / 2;
-      leg.isPickable = false;
-      return hip;
+      const thigh = CreateBox(`${name}_thigh${side}`, { width: legW * 1.1, height: thighLen, depth: legW }, scene);
+      thigh.material = mat(scene, legColor);
+      thigh.parent = hip;
+      thigh.position.y = -thighLen / 2;
+      thigh.isPickable = false;
+      const knee = new TransformNode(`${name}_knee${side}`, scene);
+      knee.parent = hip;
+      knee.position.y = -thighLen;
+      const shin = CreateBox(`${name}_shin${side}`, { width: legW, height: shinLen, depth: legW * 0.95 }, scene);
+      shin.material = mat(scene, dim(legColor, 0.6)); // darker "boot" read
+      shin.parent = knee;
+      shin.position.y = -shinLen / 2;
+      shin.isPickable = false;
+      return { hip, knee };
     };
-    hipL = mkLeg(1);
-    hipR = mkLeg(-1);
+    const lL = mkLeg(1);
+    const lR = mkLeg(-1);
+    hipL = lL.hip;
+    hipR = lR.hip;
+    kneeL = lL.knee;
+    kneeR = lR.knee;
   }
 
   // feature add-ons from the catalog LookSpec
@@ -204,10 +263,18 @@ export function buildHumanoid(scene: Scene, name: string, look: HumanoidLook): H
     body,
     head,
     bodyMat,
-    armL,
-    armR,
+    armL: aL.shoulder,
+    armR: aR.shoulder,
     hipL,
     hipR,
+    torso,
+    neck,
+    elbowL: aL.elbow,
+    elbowR: aR.elbow,
+    kneeL,
+    kneeR,
+    handL: aL.hand,
+    handR: aR.hand,
     baseY: 0,
     dispose() {
       bodyMat.dispose();
@@ -343,7 +410,9 @@ export function poseHumanoid(
   applyPose(rig, p, facing);
 }
 
-/** Repose a rig as a fallen corpse (WS7): rolled flat, sunk to the ground. */
+/** Repose a rig as a fallen corpse: rolled flat, sunk to the ground. The
+ *  death tweens (WS6) end EXACTLY on these channel values — keep in sync with
+ *  anim/deathTweens.ts DEATH_END. */
 export function poseCorpse(rig: HumanoidRig, xM: number, yM: number, zM: number, side: 1 | -1, yaw: number): void {
   rig.root.rotation.set(0, yaw, (side * Math.PI) / 2);
   rig.root.scaling.y = 1;
@@ -352,6 +421,13 @@ export function poseCorpse(rig: HumanoidRig, xM: number, yM: number, zM: number,
   rig.armR.rotation.set(0, -0.4, 0);
   if (rig.hipL) rig.hipL.rotation.set(0, 0, 0.25);
   if (rig.hipR) rig.hipR.rotation.set(0, 0, -0.2);
+  // v3 joints rest at zero so the sprawl reads clean
+  rig.torso.rotation.set(0, 0, 0);
+  rig.neck.rotation.set(0, 0, 0);
+  rig.elbowL.rotation.set(0, 0.3, 0);
+  rig.elbowR.rotation.set(0, -0.25, 0);
+  if (rig.kneeL) rig.kneeL.rotation.set(0, 0, -0.2);
+  if (rig.kneeR) rig.kneeR.rotation.set(0, 0, -0.15);
   rig.bodyMat.emissiveColor.set(0, 0, 0);
 }
 
@@ -359,37 +435,87 @@ export interface QuadRig {
   root: TransformNode;
   body: Mesh;
   head: Mesh;
+  /** Leg pivots: [frontL, frontR, hindL, hindR] (animation plan WS2). */
+  legs: TransformNode[];
+  neck: TransformNode;
+  tail: TransformNode;
   dispose(): void;
 }
 
-/** Small quadruped blockout (rabbit/deer/boar + ground pets), facing +X. */
+/** Small quadruped blockout (rabbit/deer/boar + ground pets), facing +X —
+ *  v2 with hip-height leg pivots, a neck node and a tail wag node. */
 export function buildQuadruped(scene: Scene, name: string, color: number, scale: number, accent?: number): QuadRig {
   const root = new TransformNode(name, scene);
   const L = 0.7 * scale + 0.2;
   const H = 0.32 * scale + 0.12;
+  const legLen = 0.14 + H * 0.2;
+  const bodyY = legLen + H / 2 - 0.02;
   const body = CreateBox(`${name}_body`, { width: L, height: H, depth: L * 0.45 }, scene);
   body.material = mat(scene, color);
   body.parent = root;
-  body.position.y = H / 2 + 0.12;
+  body.position.y = bodyY;
+
+  const neck = new TransformNode(`${name}_neck`, scene);
+  neck.parent = root;
+  neck.position.set(L * 0.42, bodyY + H * 0.3, 0);
   const head = CreateBox(`${name}_head`, { size: H * 0.8 }, scene);
   head.material = mat(scene, accent ?? color);
-  head.parent = root;
-  head.position.set(L * 0.55, H + 0.1, 0);
+  head.parent = neck;
+  head.position.set(L * 0.16, H * 0.22, 0);
+
+  const legs: TransformNode[] = [];
   for (let i = 0; i < 4; i++) {
-    const leg = CreateBox(`${name}_leg${i}`, { width: 0.07, height: 0.14, depth: 0.07 }, scene);
-    leg.material = mat(scene, color);
-    leg.parent = root;
-    leg.position.set((i < 2 ? 1 : -1) * L * 0.32, 0.07, (i % 2 ? 1 : -1) * L * 0.18);
+    const pivot = new TransformNode(`${name}_legp${i}`, scene);
+    pivot.parent = root;
+    pivot.position.set((i < 2 ? 1 : -1) * L * 0.32, legLen + 0.02, (i % 2 ? 1 : -1) * L * 0.18);
+    const leg = CreateBox(`${name}_leg${i}`, { width: 0.07, height: legLen + 0.04, depth: 0.07 }, scene);
+    leg.material = mat(scene, dim(color, 0.78));
+    leg.parent = pivot;
+    leg.position.y = -(legLen + 0.04) / 2;
     leg.isPickable = false;
+    legs.push(pivot);
   }
+
+  const tail = new TransformNode(`${name}_tail`, scene);
+  tail.parent = root;
+  tail.position.set(-L * 0.5, bodyY + H * 0.25, 0);
+  const tailMesh = CreateBox(`${name}_tailm`, { width: L * 0.22, height: 0.05, depth: 0.05 }, scene);
+  tailMesh.material = mat(scene, dim(color, 0.85));
+  tailMesh.parent = tail;
+  tailMesh.position.x = -L * 0.11;
+  tailMesh.isPickable = false;
+
   body.isPickable = false;
   head.isPickable = false;
   return {
     root,
     body,
     head,
+    legs,
+    neck,
+    tail,
     dispose() {
       root.dispose(false, true);
     },
   };
+}
+
+/** Write a Pose onto a quadruped (channel mapping: armL/armR = front legs,
+ *  hipL/hipR = hind legs, headPitch/Yaw = neck, torsoTwist = tail wag). */
+export function applyQuadPose(rig: QuadRig, pose: Readonly<Pose>, facing: number): void {
+  rig.root.rotation.y = -facing + pose.yawOffset;
+  rig.root.rotation.z = pose.roll;
+  rig.root.scaling.y = pose.scaleY;
+  if (pose.rootY !== 0) rig.root.position.y += pose.rootY;
+  if (pose.rootX !== 0) {
+    rig.root.position.x += Math.cos(facing) * pose.rootX;
+    rig.root.position.z += Math.sin(facing) * pose.rootX;
+  }
+  rig.legs[0].rotation.z = pose.armL.swingY;
+  rig.legs[1].rotation.z = pose.armR.swingY;
+  rig.legs[2].rotation.z = pose.hipL;
+  rig.legs[3].rotation.z = pose.hipR;
+  rig.neck.rotation.z = -pose.headPitch;
+  rig.neck.rotation.y = pose.headYaw;
+  rig.tail.rotation.y = pose.torsoTwist;
 }
