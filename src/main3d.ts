@@ -15,9 +15,8 @@ import { createEngine } from "./render3d/bootstrap";
 import { FollowRig } from "./render3d/camera/FollowRig";
 import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
 import { groundHeightAt, simToWorld } from "./render3d/space";
-import { Sim } from "./sim/Sim";
+import { createGameSim } from "./sim/createGameSim";
 import { moveAndSlide } from "./sim/physics";
-import { isPropSearched } from "./game/scavenge";
 import { loadGame, newGame } from "./game/GameState";
 import { randomSeed } from "./game/rng";
 import { PLAYER_SPEED } from "./game/constants";
@@ -48,12 +47,7 @@ async function boot(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const urlSeed = params.get("seed");
   const state = urlSeed ? newGame(urlSeed) : (loadGame() ?? newGame(randomSeed()));
-  const sim = new Sim(state, {
-    isChestLooted: (gid) => state.worldFlags.includes(`chest_${gid}`),
-    isPropSearched: (gid) => isPropSearched(state, gid),
-    disasters: () => state.disasters ?? [],
-    currentDay: () => state.day,
-  });
+  const { sim } = createGameSim(state);
 
   const chunkView = new ChunkViewManager(scene, sim.world, sim.events);
 

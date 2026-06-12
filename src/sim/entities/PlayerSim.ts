@@ -29,6 +29,10 @@ export class PlayerSim {
   gate: TileGate | null = null;
   /** When false, movement input is ignored (encounter pause, death). */
   controllable = true;
+  /** One-shot knockback impulse (brute hit) — overrides input while active. */
+  impulseX = 0;
+  impulseY = 0;
+  impulseUntil = -1;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -37,9 +41,40 @@ export class PlayerSim {
     this.prevY = y;
   }
 
-  tick(input: InputState, dt: number, grid: TileGrid, bounds: { w: number; h: number }, canSprint: boolean): void {
+  tick(
+    input: InputState,
+    dt: number,
+    grid: TileGrid,
+    bounds: { w: number; h: number },
+    canSprint: boolean,
+    now: number,
+    grabbedUntil: number,
+  ): void {
     this.prevX = this.x;
     this.prevY = this.y;
+
+    // Tile underfoot → terrain speed multiplier (Living World rules).
+    this.terrainMult = terrainEffect(grid.tileAt(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE))).mult;
+
+    // Held fast by a grabber: velocity zeroed (WorldScene parity).
+    if (now < grabbedUntil) {
+      this.moving = false;
+      this.sprinting = false;
+      return;
+    }
+
+    // Brute knockback wins the frame it lands (Phaser setVelocity semantics).
+    if (now < this.impulseUntil) {
+      const r = moveAndSlide(grid, this.x, this.y, this.impulseX, this.impulseY, dt, PLAYER_BODY, {
+        gate: this.gate ?? undefined,
+        bounds,
+      });
+      this.x = r.x;
+      this.y = r.y;
+      this.moving = true;
+      this.sprinting = false;
+      return;
+    }
 
     let vx = this.controllable ? input.moveX : 0;
     let vy = this.controllable ? input.moveY : 0;
@@ -47,9 +82,6 @@ export class PlayerSim {
     const sprint = len > 0 && canSprint && input.sprint;
     this.sprinting = sprint;
     this.moving = len > 0;
-
-    // Tile underfoot → terrain speed multiplier (Living World rules).
-    this.terrainMult = terrainEffect(grid.tileAt(Math.floor(this.x / TILE_SIZE), Math.floor(this.y / TILE_SIZE))).mult;
 
     if (len > 0) {
       vx /= len;
