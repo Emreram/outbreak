@@ -15,7 +15,7 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { VertexData } from "@babylonjs/core/Meshes/mesh.vertexData";
 import type { Scene } from "@babylonjs/core/scene";
 import { Tile, type Building, type ChunkData } from "../../game/worldgen";
-import { WORLD_SCALE } from "../space";
+import { groundHeightAt, WORLD_SCALE } from "../space";
 import { tileUV } from "./TileAtlas";
 import { biomeGrassTint, cornerAO, hashUnit, takesGrassTint, tileJitter, type RGBMul } from "./groundShade";
 
@@ -89,6 +89,27 @@ function texQuadUp(
   b.nrm.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
   b.uv.push(u.u0, u.v1, u.u1, u.v1, u.u1, u.v0, u.u0, u.v0);
   for (const c of [c00, c10, c11, c01]) b.col.push(c.r, c.g, c.b, 1);
+}
+
+interface GroundCorner {
+  px: number;
+  pz: number;
+  y: number;
+  n: { x: number; y: number; z: number };
+  c: RGBMul;
+}
+
+/** Terrain-displaced ground quad (WS6): per-corner heights, normals, shades. */
+function groundQuad(b: TexBuilder, tile: number, k: [GroundCorner, GroundCorner, GroundCorner, GroundCorner]): void {
+  const base = b.pos.length / 3;
+  const u = tileUV(tile);
+  for (const c of k) {
+    b.pos.push(c.px, c.y, c.pz);
+    b.nrm.push(c.n.x, c.n.y, c.n.z);
+    b.col.push(c.c.r, c.c.g, c.c.b, 1);
+  }
+  b.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  b.uv.push(u.u0, u.v1, u.u1, u.v1, u.u1, u.v0, u.u0, u.v0);
 }
 
 /** Textured vertical quad with outward normal (nx,nz); bottom/top tints
@@ -233,6 +254,24 @@ export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMes
   const tint = biomeGrassTint(chunk.biome);
   const TRIM = 0.08;
 
+  // Terrain relief (WS6): one height sample per ground corner (49×49 grid),
+  // gradients from the grid → shaded normals so the sun/CSM read the rolls.
+  const hs = new Float32Array((s + 1) * (s + 1));
+  for (let cy = 0; cy <= s; cy++) {
+    for (let cx = 0; cx <= s; cx++) {
+      hs[cy * (s + 1) + cx] = groundHeightAt((chunk.cx * s + cx) * chunk.tileSize, (chunk.cy * s + cy) * chunk.tileSize);
+    }
+  }
+  const hAt = (cx: number, cy: number): number =>
+    hs[Math.max(0, Math.min(s, cy)) * (s + 1) + Math.max(0, Math.min(s, cx))];
+  const cornerY = (cx: number, cy: number): number => hAt(cx, cy);
+  const cornerN = (cx: number, cy: number): { x: number; y: number; z: number } => {
+    const dhdx = (hAt(cx + 1, cy) - hAt(cx - 1, cy)) / 2; // 1 tile = 1m
+    const dhdz = (hAt(cx, cy + 1) - hAt(cx, cy - 1)) / 2;
+    const inv = 1 / Math.hypot(dhdx, 1, dhdz);
+    return { x: -dhdx * inv, y: inv, z: -dhdz * inv };
+  };
+
   // Corner shade = per-tile jitter × corner AO × (biome tint on grass-ish).
   const cornerShade = (lx: number, ly: number, v: Tile, cx: 0 | 1, cy: 0 | 1, j: RGBMul): RGBMul => {
     const ao = cornerAO(atNum, lx, ly, cx, cy);
@@ -256,13 +295,15 @@ export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMes
       const gx = chunk.cx * s + x;
       const gy = chunk.cy * s + y;
       const j = tileJitter(seedNum, gx, gy);
-      texQuadUp(
+      groundQuad(
         ground,
-        x0, z0, x0 + t, z0 + t, 0, v,
-        cornerShade(x, y, v, 0, 0, j),
-        cornerShade(x, y, v, 1, 0, j),
-        cornerShade(x, y, v, 1, 1, j),
-        cornerShade(x, y, v, 0, 1, j),
+        v,
+        [
+          { px: x0, pz: z0, y: cornerY(x, y), n: cornerN(x, y), c: cornerShade(x, y, v, 0, 0, j) },
+          { px: x0 + t, pz: z0, y: cornerY(x + 1, y), n: cornerN(x + 1, y), c: cornerShade(x, y, v, 1, 0, j) },
+          { px: x0 + t, pz: z0 + t, y: cornerY(x + 1, y + 1), n: cornerN(x + 1, y + 1), c: cornerShade(x, y, v, 1, 1, j) },
+          { px: x0, pz: z0 + t, y: cornerY(x, y + 1), n: cornerN(x, y + 1), c: cornerShade(x, y, v, 0, 1, j) },
+        ],
       );
 
       const wd = WATER_DEPTH[v];
@@ -287,7 +328,8 @@ export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMes
       }
 
       if (v === Tile.Tree) {
-        buildTreeInto(trees, seedNum, gx, gy, chunk.biome, x0 + t / 2, z0 + t / 2);
+        const baseY = (cornerY(x, y) + cornerY(x + 1, y) + cornerY(x, y + 1) + cornerY(x + 1, y + 1)) / 4;
+        buildTreeInto(trees, seedNum, gx, gy, chunk.biome, x0 + t / 2, z0 + t / 2, baseY);
       }
       if (v === Tile.Door) {
         buildDoorFrameInto(detail, at, x, y, x0, z0, t);
@@ -337,7 +379,7 @@ const BARE_BIOMES = new Set(["volcanic", "badlands"]);
 
 /** Tile-tree builder (WS5/WS7): tapering trunk + jittered canopy lobes with
  *  per-tree hue variation; pines stack dark cones; volcanic trees go bare. */
-function buildTreeInto(b: ColBuilder, seedNum: number, gx: number, gy: number, biome: string, cx: number, cz: number): void {
+function buildTreeInto(b: ColBuilder, seedNum: number, gx: number, gy: number, biome: string, cx: number, cz: number, y0 = 0): void {
   const h1 = hashUnit(seedNum ^ 0x51ed, gx, gy);
   const h2 = hashUnit(seedNum ^ 0xa341, gx, gy);
   const v = 0.88 + h1 * 0.24; // value jitter ±12%
@@ -345,27 +387,27 @@ function buildTreeInto(b: ColBuilder, seedNum: number, gx: number, gy: number, b
   const leaf = (hex: number): number => shadeHex(hex, v * (1 + w), v, v * (1 - w * 0.5));
 
   if (BARE_BIOMES.has(biome)) {
-    colBox(b, cx - 0.1, cz - 0.1, cx + 0.1, cz + 0.1, 0, 1.6 + h1 * 0.5, 0x2e2620); // charred trunk
-    colBox(b, cx - 0.42, cz - 0.42, cx + 0.42, cz + 0.42, 1.2, 1.7, 0x3a332c); // sparse lobe
+    colBox(b, cx - 0.1, cz - 0.1, cx + 0.1, cz + 0.1, y0, y0 + 1.6 + h1 * 0.5, 0x2e2620); // charred trunk
+    colBox(b, cx - 0.42, cz - 0.42, cx + 0.42, cz + 0.42, y0 + 1.2, y0 + 1.7, 0x3a332c); // sparse lobe
     return;
   }
   if (PINE_BIOMES.has(biome) || (biome === "forest" && h2 > 0.62)) {
-    colBox(b, cx - 0.09, cz - 0.09, cx + 0.09, cz + 0.09, 0, 0.7, 0x4a3420);
-    colBox(b, cx - 0.62, cz - 0.62, cx + 0.62, cz + 0.62, 0.6, 1.15, leaf(0x163d1c));
-    colBox(b, cx - 0.44, cz - 0.44, cx + 0.44, cz + 0.44, 1.15, 1.7, leaf(0x257032));
-    colBox(b, cx - 0.26, cz - 0.26, cx + 0.26, cz + 0.26, 1.7, 2.3 + h1 * 0.3, leaf(0x3f9a45));
+    colBox(b, cx - 0.09, cz - 0.09, cx + 0.09, cz + 0.09, y0, y0 + 0.7, 0x4a3420);
+    colBox(b, cx - 0.62, cz - 0.62, cx + 0.62, cz + 0.62, y0 + 0.6, y0 + 1.15, leaf(0x163d1c));
+    colBox(b, cx - 0.44, cz - 0.44, cx + 0.44, cz + 0.44, y0 + 1.15, y0 + 1.7, leaf(0x257032));
+    colBox(b, cx - 0.26, cz - 0.26, cx + 0.26, cz + 0.26, y0 + 1.7, y0 + 2.3 + h1 * 0.3, leaf(0x3f9a45));
     return;
   }
   // deciduous: two-step tapering trunk + 3–5 jittered lobes + lit crown
-  colBox(b, cx - 0.16, cz - 0.16, cx + 0.16, cz + 0.16, 0, 0.7, 0x3f2c19);
-  colBox(b, cx - 0.1, cz - 0.1, cx + 0.1, cz + 0.1, 0.7, 1.25, 0x4a3420);
+  colBox(b, cx - 0.16, cz - 0.16, cx + 0.16, cz + 0.16, y0, y0 + 0.7, 0x3f2c19);
+  colBox(b, cx - 0.1, cz - 0.1, cx + 0.1, cz + 0.1, y0 + 0.7, y0 + 1.25, 0x4a3420);
   const lobes = 3 + Math.floor(h2 * 3);
   for (let i = 0; i < lobes; i++) {
     const ha = hashUnit(seedNum ^ (0x100 + i), gx, gy);
     const hb = hashUnit(seedNum ^ (0x200 + i), gx, gy);
     const lx = cx + (ha - 0.5) * 0.9;
     const lz = cz + (hb - 0.5) * 0.9;
-    const ly = 1.0 + (i / lobes) * 1.1;
+    const ly = y0 + 1.0 + (i / lobes) * 1.1;
     const half = 0.52 - i * 0.04 + ha * 0.18;
     colBox(b, lx - half, lz - half, lx + half, lz + half, ly, ly + 0.62 + hb * 0.3, leaf(i === lobes - 1 ? 0x3c7a37 : 0x274c24));
   }

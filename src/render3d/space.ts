@@ -64,10 +64,17 @@ export function worldToSim(wx: number, wz: number, out?: { x: number; y: number 
 }
 
 /**
- * Ground height (meters) under a sim position. Flat 0 until the optional
- * visual-only terrain displacement lands (plan §3.5 step 2, M6 flag) — every
- * entity Y placement must route through here so that flag is one change.
+ * Ground height (meters) under a sim position — the SINGLE switch point for
+ * visual-only terrain relief (plan §3.5 step 2). Defaults to flat 0 (headless
+ * tests and the Phaser path never install a field); main3d installs the
+ * seeded height field at boot. The sim NEVER calls this.
  */
-export function groundHeightAt(_xPx: number, _yPx: number): number {
-  return 0;
+let groundHeightFn: (xPx: number, yPx: number) => number = () => 0;
+
+export function setGroundHeightFn(fn: (xPx: number, yPx: number) => number): void {
+  groundHeightFn = fn;
+}
+
+export function groundHeightAt(xPx: number, yPx: number): number {
+  return groundHeightFn(xPx, yPx);
 }

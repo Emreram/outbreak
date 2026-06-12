@@ -16,7 +16,7 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { EventBus } from "../../sim/events";
 import type { SimChunkStore } from "../../sim/world";
 import { posPhase, swayAngle, SWAY_SPECS } from "../../engine/anim";
-import { WORLD_SCALE } from "../space";
+import { groundHeightAt, WORLD_SCALE } from "../space";
 import type { ContainerKind } from "../../game/worldgen";
 
 /** Blockout recipe: stacked boxes [x0,y0,z0,x1,y1,z1,color] in meters at origin. */
@@ -241,7 +241,7 @@ export class PropInstancer {
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         it.searched = it.gid ? searched.get(it.gid) : undefined;
-        pv.set(it.x * WORLD_SCALE, 0, it.y * WORLD_SCALE);
+        pv.set(it.x * WORLD_SCALE, groundHeightAt(it.x, it.y), it.y * WORLD_SCALE);
         Matrix.ComposeToRef(one, q, pv, m);
         m.copyToArray(pool.matrices, i * 16);
       }
@@ -282,7 +282,7 @@ export class PropInstancer {
         budget--;
         const a = swayAngle(spec, timeMs, it.phase);
         Quaternion.RotationAxisToRef(AXIS_Z, a, q);
-        pv.set(it.x * WORLD_SCALE, 0, it.y * WORLD_SCALE);
+        pv.set(it.x * WORLD_SCALE, groundHeightAt(it.x, it.y), it.y * WORLD_SCALE);
         Matrix.ComposeToRef(one, q, pv, m);
         m.copyToArray(pool.matrices, i * 16);
         touched = true;

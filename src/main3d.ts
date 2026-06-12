@@ -23,7 +23,8 @@ import { BlobShadows } from "./render3d/env/BlobShadows";
 import { WeatherFx } from "./render3d/env/WeatherFx";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
-import { groundHeightAt, simToWorld, worldToSim } from "./render3d/space";
+import { groundHeightAt, setGroundHeightFn, simToWorld, worldToSim } from "./render3d/space";
+import { createHeightField } from "./render3d/env/heightField";
 import { get as idbGet, set as idbSet } from "idb-keyval";
 import { buildHumanoid, poseHumanoid } from "./render3d/actors/Blockout";
 import { createGameSim } from "./sim/createGameSim";
@@ -109,6 +110,10 @@ async function boot(): Promise<void> {
       void idbSet(IDB_SLOT, JSON.parse(JSON.stringify(s.state))).catch(() => undefined);
     };
   }
+
+  // Visual terrain relief (WS6) — installed BEFORE any meshing so the initial
+  // ring displaces. Render-only: the sim never calls this hook.
+  setGroundHeightFn(createHeightField(state.seed, sim.world).heightAt);
 
   const chunkView = new ChunkViewManager(scene, sim.world, sim.events, shadows);
   const props = new PropInstancer(scene, sim.world, sim.events);
