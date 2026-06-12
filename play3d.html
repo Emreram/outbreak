@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OUTBREAK</title>
+    <title>OUTBREAK — 3D</title>
     <style>
       html,
       body {
@@ -24,20 +24,12 @@
       }
       #game canvas {
         display: block;
-        margin: 0 auto;
         touch-action: none;
       }
     </style>
   </head>
   <body>
     <div id="game"></div>
-    <script type="module">
-      // Renderer switch (3D master plan §2): ?renderer=3d boots the Babylon
-      // build against the same save; default stays the Phaser build until the
-      // M8 cutover. Dynamic imports keep each path from paying for the other.
-      const r = new URLSearchParams(location.search).get("renderer");
-      if (r === "3d") import("/src/main3d.ts");
-      else import("/src/main.ts");
-    </script>
+    <script type="module" src="/src/main3d.ts"></script>
   </body>
 </html>

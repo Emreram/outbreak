@@ -14,7 +14,11 @@
     "gen:assets": "tsx tools/gen-assets.ts"
   },
   "dependencies": {
+    "@babylonjs/core": "^8.56.2",
+    "@babylonjs/gui": "^8.56.2",
+    "@babylonjs/loaders": "^8.56.2",
     "@mlc-ai/web-llm": "^0.2.84",
+    "idb-keyval": "^6.2.5",
     "phaser": "^3.80.1"
   },
   "devDependencies": {

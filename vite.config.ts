@@ -34,5 +34,13 @@ export default defineConfig({
   build: {
     target: "es2020",
     sourcemap: true,
+    rollupOptions: {
+      // Multi-page: the Phaser build at "/" plus the Babylon build at
+      // "/play3d.html" (3D master plan §3.2) until the M8 cutover.
+      input: {
+        main: "index.html",
+        play3d: "play3d.html",
+      },
+    },
   },
 });
