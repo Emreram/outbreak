@@ -10,20 +10,30 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { EventBus } from "../../sim/events";
 import type { SimChunkStore } from "../../sim/world";
 import { meshChunk } from "./ChunkMesher";
+import { createTileAtlas } from "./TileAtlas";
+import { createChunkMaterials, type FluidMaterials } from "./materials";
 
 export class ChunkViewManager {
+  readonly materials: FluidMaterials;
   private readonly views = new Map<string, Mesh[]>();
   private readonly queue: { cx: number; cy: number }[] = [];
-  private readonly material: StandardMaterial;
+  private readonly atlasMat: StandardMaterial;
+  private readonly colorMat: StandardMaterial;
 
   constructor(
     private readonly scene: Scene,
     private readonly store: SimChunkStore,
     events: EventBus,
   ) {
-    this.material = new StandardMaterial("chunkMat", scene);
-    this.material.specularColor = Color3.Black();
-    this.material.backFaceCulling = true;
+    const atlas = createTileAtlas(scene);
+    this.atlasMat = new StandardMaterial("chunkAtlasMat", scene);
+    this.atlasMat.diffuseTexture = atlas;
+    this.atlasMat.specularColor = Color3.Black();
+
+    this.colorMat = new StandardMaterial("chunkColorMat", scene);
+    this.colorMat.specularColor = Color3.Black();
+
+    this.materials = createChunkMaterials(scene);
 
     for (const lc of store.loadedChunks()) this.build(lc.cx, lc.cy);
     events.on("chunkLoaded", ({ cx, cy }) => this.queue.push({ cx, cy }));
@@ -44,11 +54,17 @@ export class ChunkViewManager {
     if (!data) return; // unloaded again before its turn in the queue
     const m = meshChunk(this.scene, data);
     const meshes: Mesh[] = [];
-    for (const mesh of [m.ground, m.solids]) {
-      if (!mesh) continue;
-      mesh.material = this.material;
+    const bind = (mesh: Mesh | null, mat: StandardMaterial | FluidMaterials["water"]): void => {
+      if (!mesh) return;
+      mesh.material = mat;
       meshes.push(mesh);
-    }
+    };
+    bind(m.ground, this.atlasMat);
+    bind(m.walls, this.atlasMat);
+    bind(m.trees, this.colorMat);
+    bind(m.water, this.materials.water);
+    bind(m.lava, this.materials.lava);
+    bind(m.roofs, this.materials.roof);
     this.views.set(k, meshes);
   }
 
@@ -63,6 +79,5 @@ export class ChunkViewManager {
   dispose(): void {
     for (const meshes of this.views.values()) for (const mesh of meshes) mesh.dispose();
     this.views.clear();
-    this.material.dispose();
   }
 }

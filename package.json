@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "gen:image": "tsx .claude/skills/generate-image/scripts/generate.ts",
-    "gen:assets": "tsx tools/gen-assets.ts"
+    "gen:assets": "tsx tools/gen-assets.ts",
+    "smoke3d": "node scripts/smoke3d.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "^8.56.2",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.0",
+    "playwright-core": "^1.60.0",
     "replicate": "^1.4.0",
     "sharp": "^0.34.5",
     "tsx": "^4.22.4",

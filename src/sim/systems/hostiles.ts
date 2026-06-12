@@ -83,10 +83,11 @@ export class HostilesSystem implements SimSystem {
   private readonly clouds: Cloud[] = [];
   kills = 0;
 
-  private ambientAcc = 0;
-  private ambientDelay = 8000; // first wave comes fairly soon, like a fresh scene
-  private animalAcc = 0;
-  private animalDelay = 9000;
+  /** Cadence state — public so headless tests can pin the schedule. */
+  ambientAcc = 0;
+  ambientDelay = 8000; // first wave comes fairly soon, like a fresh scene
+  animalAcc = 0;
+  animalDelay = 9000;
   private corpseAcc = 0;
 
   constructor() {

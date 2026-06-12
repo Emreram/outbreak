@@ -32,6 +32,11 @@ function run(sim: { frame(ms: number): number }, steps: number): void {
 // --- boot + spawn placement -----------------------------------------------------
 const state = newGame("simcore-test-seed");
 const { sim, clock, hostiles, combat, drops, scavenge } = createGameSim(state);
+// Determinism: pin the ambient/animal spawn cadences far out so background
+// waves can't wander into a section and interrupt it (test standards: no
+// nondeterministic interference). Sections spawn their own actors.
+hostiles.ambientDelay = 1e9;
+hostiles.animalDelay = 1e9;
 {
   // Assert: spawn is centred on a loaded, walkable chunk ring.
   ok(sim.world.loadedChunks().length === 25, `boot loads the 5×5 ring (${sim.world.loadedChunks().length})`);

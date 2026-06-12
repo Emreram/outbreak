@@ -8,6 +8,7 @@ import { isPropSearched } from "../game/scavenge";
 import { Sim } from "./Sim";
 import { ClockSystem } from "./systems/clock";
 import { CombatSystem } from "./systems/combat";
+import { DiscoverySystem } from "./systems/discovery";
 import { DropsSystem } from "./systems/drops";
 import { HostilesSystem } from "./systems/hostiles";
 import { PersistenceSystem } from "./systems/persistence";
@@ -39,6 +40,7 @@ export function createGameSim(state: GameState): {
   sim.addSystem(scavenge);
   sim.addSystem(new SurvivalSystem());
   sim.addSystem(clock);
+  sim.addSystem(new DiscoverySystem());
   sim.addSystem(new PersistenceSystem(sim));
   return { sim, clock, hostiles, combat, drops, scavenge };
 }

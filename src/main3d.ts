@@ -1,12 +1,13 @@
 // Babylon entry (3D master plan §3.2): boots the 3D renderer against the SAME
 // sim + save as the Phaser build. Reached via /play3d.html or /?renderer=3d.
-// M0 scope: real generated world meshed as blockout, capsule player on the
-// ported tile collision, follow camera, fixed-step sim with interpolation, and
-// the ?probe=1 perf scene (25 chunks + 60 wandering capsule actors).
+// M2 tier: atlas-textured terrain with walls/roofs/animated water/lava, props
+// with wind sway, the LIGHT_KEYS day/night cycle + fog, minimap + labels,
+// blockout actors driven by the full extracted sim (enemies, combat, loot,
+// scavenging, survival, clock), DOM HUD readout, and the perf probe.
 
 import { Scene } from "@babylonjs/core/scene";
-import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { Color3 } from "@babylonjs/core/Maths/math.color";
+import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { CreateCapsule } from "@babylonjs/core/Meshes/Builders/capsuleBuilder";
@@ -14,49 +15,54 @@ import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { createEngine } from "./render3d/bootstrap";
 import { FollowRig } from "./render3d/camera/FollowRig";
 import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
-import { groundHeightAt, simToWorld } from "./render3d/space";
+import { PropInstancer } from "./render3d/chunks/PropInstancer";
+import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
+import { WorldView } from "./render3d/WorldView";
+import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
+import { groundHeightAt, simToWorld, worldToSim } from "./render3d/space";
 import { createGameSim } from "./sim/createGameSim";
-import { moveAndSlide } from "./sim/physics";
-import { loadGame, newGame } from "./game/GameState";
+import type { ScavengeSystem } from "./sim/systems/scavenge";
+import { clearSave, loadGame, newGame } from "./game/GameState";
 import { randomSeed } from "./game/rng";
-import { PLAYER_SPEED } from "./game/constants";
+import { getZombie } from "./game/enemies/catalog";
+import { equippedMeleeDef, equippedRangedDef } from "./game/inventory";
+import { TILE_SIZE } from "./game/constants";
+import { DEFAULT_PLAYER_JACKET } from "./engine/textures";
 
 async function boot(): Promise<void> {
   const host = document.getElementById("game") ?? document.body;
   const canvas = document.createElement("canvas");
   canvas.id = "game3d";
-  canvas.style.width = "100vw";
-  canvas.style.height = "100vh";
-  canvas.style.display = "block";
-  canvas.style.outline = "none";
+  canvas.style.cssText = "width:100vw;height:100vh;display:block;outline:none;";
   host.appendChild(canvas);
 
   const { engine, backend } = await createEngine(canvas);
   const scene = new Scene(engine);
   scene.useRightHandedSystem = true; // the space.ts orientation contract
-  scene.clearColor = new Color4(0.043, 0.051, 0.055, 1); // #0b0d0e
 
-  // M0 lighting — TimeOfDayDirector replaces this at M2.
   const hemi = new HemisphericLight("ambient", new Vector3(0, 1, 0), scene);
-  hemi.intensity = 0.55;
-  hemi.groundColor = new Color3(0.18, 0.2, 0.24);
   const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.55), scene);
-  sun.intensity = 0.9;
+  const tod = new TimeOfDayDirector();
 
   // --- state + sim (same save key, same flags as the Phaser build) ----------
   const params = new URLSearchParams(location.search);
   const urlSeed = params.get("seed");
   const state = urlSeed ? newGame(urlSeed) : (loadGame() ?? newGame(randomSeed()));
-  const { sim } = createGameSim(state);
+  const { sim, clock, hostiles, combat, drops, scavenge } = createGameSim(state);
 
   const chunkView = new ChunkViewManager(scene, sim.world, sim.events);
+  const props = new PropInstancer(scene, sim.world, sim.events);
+  const view = new WorldView(scene, sim, hostiles, combat, drops);
+  const minimap = new MinimapOverlay(document.body);
 
-  // --- player capsule (blockout; ActorFactory replaces at M3) ----------------
+  // --- player capsule (blockout; jacket colour carries the appearance) -------
   const player = CreateCapsule("player", { height: 1.7, radius: 0.32 }, scene);
   const pmat = new StandardMaterial("playerMat", scene);
-  pmat.diffuseColor = Color3.FromHexString("#5b6b52"); // default jacket olive
+  const jacket = state.appearance?.color ?? DEFAULT_PLAYER_JACKET;
+  pmat.diffuseColor = Color3.FromHexString(`#${(jacket & 0xffffff).toString(16).padStart(6, "0")}`);
   pmat.specularColor = Color3.Black();
   player.material = pmat;
+  player.isPickable = false;
 
   const tmp = { x: 0, y: 0, z: 0 };
   const vec3 = (xPx: number, yPx: number, h: number): [number, number, number] => {
@@ -66,14 +72,65 @@ async function boot(): Promise<void> {
 
   const rig = new FollowRig(scene, canvas);
   rig.snapTo(new Vector3(...vec3(sim.player.x, sim.player.y, 0.85)));
+  sim.events.on("impulse", ({ kind, amount }) => {
+    if (kind === "shake") rig.shake(amount);
+    else if (kind === "zoomPunch") rig.zoomPunch(amount);
+  });
 
   // --- input → sim intents ----------------------------------------------------
   const keys = new Set<string>();
-  window.addEventListener("keydown", (e) => keys.add(e.code));
-  window.addEventListener("keyup", (e) => keys.delete(e.code));
-  window.addEventListener("blur", () => keys.clear());
+  window.addEventListener("keydown", (e) => {
+    if (e.repeat) return;
+    keys.add(e.code);
+    if (e.code === "Space" || e.code === "KeyF") combat.meleeAttack(sim);
+    if (e.code === "KeyR") {
+      if (sim.dead) restart();
+      else combat.tryReload(sim);
+    }
+    if (e.code === "KeyM") minimap.toggle();
+    if (e.code === "KeyE") {
+      sim.input.interact = true;
+      const sc = sim.getSystem<ScavengeSystem>("scavenge")!;
+      if (!sc.search) {
+        const t = sc.nearestSearchable(sim, 64);
+        if (t) sc.startSearch(sim, t);
+      }
+    }
+  });
+  window.addEventListener("keyup", (e) => {
+    keys.delete(e.code);
+    if (e.code === "KeyE") sim.input.interact = false;
+  });
+  window.addEventListener("blur", () => {
+    keys.clear();
+    sim.input.interact = false;
+    combat.firing = false;
+  });
 
-  function pollInput(): void {
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.button === 0) {
+      combat.firing = true;
+      combat.fire(sim, sim.input.aim ?? sim.player.facing);
+    }
+  });
+  window.addEventListener("pointerup", (e) => {
+    if (e.button === 0) combat.firing = false;
+  });
+
+  // Mouse aim: ray ∩ ground plane → sim pixels → exact aimAngle semantics (§6.1).
+  scene.onPointerObservable.add((pi) => {
+    if (pi.type !== 4 /* POINTERMOVE */) return;
+    const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, Matrix.Identity(), rig.camera);
+    if (Math.abs(ray.direction.y) < 1e-5) return;
+    const t = -ray.origin.y / ray.direction.y;
+    if (t <= 0) return;
+    const wx = ray.origin.x + ray.direction.x * t;
+    const wz = ray.origin.z + ray.direction.z * t;
+    const sp = worldToSim(wx, wz);
+    sim.input.aim = Math.atan2(sp.y - sim.player.y, sp.x - sim.player.x);
+  });
+
+  function pollMove(): void {
     let mx = 0;
     let my = 0;
     if (keys.has("KeyA") || keys.has("ArrowLeft")) mx -= 1;
@@ -85,95 +142,133 @@ async function boot(): Promise<void> {
     sim.input.sprint = keys.has("ShiftLeft") || keys.has("ShiftRight");
   }
 
-  // --- perf probe (?probe=1): 60 wandering capsule actors ---------------------
-  interface ProbeActor {
-    x: number;
-    y: number;
-    px: number;
-    py: number;
-    angle: number;
-    retarget: number;
-    mesh: ReturnType<typeof CreateCapsule>;
-  }
-  const probes: ProbeActor[] = [];
+  // --- perf probe (?probe=1): 60 real zombies on real AI ----------------------
   if (params.get("probe") === "1") {
-    const zmat = new StandardMaterial("probeMat", scene);
-    zmat.diffuseColor = Color3.FromHexString("#6a7d5a");
-    zmat.specularColor = Color3.Black();
-    for (let i = 0; i < 60; i++) {
-      const spot = sim.world.walkableNear(
-        Math.floor(sim.player.x / 32),
-        Math.floor(sim.player.y / 32),
-        4,
-        40,
-      ) ?? { x: sim.player.x + 64 + i * 8, y: sim.player.y };
-      const mesh = CreateCapsule(`probe${i}`, { height: 1.6, radius: 0.3 }, scene);
-      mesh.material = zmat;
-      probes.push({ x: spot.x, y: spot.y, px: spot.x, py: spot.y, angle: Math.random() * Math.PI * 2, retarget: 0, mesh });
+    const def = getZombie("shambler");
+    if (def) {
+      const tx = Math.floor(sim.player.x / TILE_SIZE);
+      const ty = Math.floor(sim.player.y / TILE_SIZE);
+      for (let i = 0; i < 60; i++) {
+        const spot = sim.world.walkableNear(tx, ty, 4, 40);
+        if (spot) hostiles.spawnEnemy(sim, def, spot.x, spot.y);
+      }
     }
-    sim.addSystem({
-      id: "probeWander",
-      tick(s, dt) {
-        for (const a of probes) {
-          a.px = a.x;
-          a.py = a.y;
-          a.retarget -= dt;
-          if (a.retarget <= 0) {
-            a.angle = Math.random() * Math.PI * 2;
-            a.retarget = 0.7 + Math.random() * 1.6;
-          }
-          const v = PLAYER_SPEED * 0.35;
-          const r = moveAndSlide(s.world, a.x, a.y, Math.cos(a.angle) * v, Math.sin(a.angle) * v, dt, 20, {
-            bounds: s.world.worldPxBounds(),
-          });
-          if (r.hitX || r.hitY) a.retarget = 0;
-          a.x = r.x;
-          a.y = r.y;
-        }
-      },
-    });
   }
 
-  // --- HUD overlay (dev): fps / backend / position ----------------------------
+  // --- HUD (DOM, display-only) -------------------------------------------------
+  const hud = document.createElement("div");
+  hud.style.cssText =
+    "position:fixed;top:10px;left:10px;color:#cfe6ff;font:12px ui-monospace,monospace;" +
+    "background:rgba(10,15,20,.72);padding:8px 10px;border-radius:8px;pointer-events:none;z-index:20;min-width:210px";
+  document.body.appendChild(hud);
+  const BARS: [keyof typeof state.player & string, string, string][] = [
+    ["hp", "HP", "#ff5555"],
+    ["stamina", "STA", "#ffd23f"],
+    ["hunger", "HUN", "#ff9f43"],
+    ["thirst", "THI", "#4ec3ff"],
+    ["infection", "INF", "#9b5cff"],
+  ];
+  function hudRender(): void {
+    const p = state.player;
+    const rows = BARS.map(([k, label, color]) => {
+      const v = Math.round(p[k] as number);
+      return (
+        `<div style="display:flex;align-items:center;gap:6px;margin:2px 0">` +
+        `<span style="width:28px;color:#9fb4c0">${label}</span>` +
+        `<span style="flex:1;height:9px;background:#1a222c;border-radius:3px;overflow:hidden">` +
+        `<span style="display:block;width:${v}%;height:100%;background:${color}"></span></span>` +
+        `<span style="width:24px;text-align:right">${v}</span></div>`
+      );
+    }).join("");
+    const melee = equippedMeleeDef(state);
+    const gun = equippedRangedDef(state);
+    const weapon = gun
+      ? `${gun.name} ${state.loadedAmmo ?? 0}/${gun.magSize ?? 0}${combat.reloading ? " (reloading)" : ""}`
+      : melee.name;
+    const search = scavenge.search ? ` · searching ${(scavenge.progress() * 100).toFixed(0)}%` : "";
+    hud.innerHTML =
+      rows +
+      `<div style="margin-top:4px;color:#9fb4c0">Day ${state.day} · ${state.timeOfDay}${state.bloodMoon ? ' · <span style="color:#ff5a6e">BLOOD MOON</span>' : ""}</div>` +
+      `<div style="color:#e8e2d0">${weapon} · kills ${hostiles.kills}${search}</div>`;
+  }
+
+  // --- death overlay -------------------------------------------------------------
+  const deathEl = document.createElement("div");
+  deathEl.style.cssText =
+    "position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;" +
+    "background:rgba(5,2,2,.72);color:#ff6b6b;font:700 26px ui-monospace,monospace;z-index:50;text-align:center;gap:10px";
+  document.body.appendChild(deathEl);
+  sim.events.on("death", ({ reason }) => {
+    deathEl.style.display = "flex";
+    deathEl.innerHTML =
+      `YOU DIED<div style="font-size:14px;color:#e8e2d0;font-weight:400">${reason}</div>` +
+      `<div style="font-size:13px;color:#9fb4c0;font-weight:400">${state.player.name} · day ${state.day} · ${hostiles.kills} kills</div>` +
+      `<div style="font-size:13px;color:#7fd3ff;font-weight:400">Press R for a new run (a new city and a new story await)</div>`;
+  });
+  function restart(): void {
+    clearSave();
+    const u = new URL(location.href);
+    u.searchParams.delete("seed");
+    location.href = u.toString();
+  }
+
+  // --- dev overlay ----------------------------------------------------------------
   const overlay = document.createElement("div");
   overlay.style.cssText =
-    "position:fixed;top:8px;left:8px;color:#9fb4c0;font:12px ui-monospace,monospace;" +
-    "background:rgba(10,15,20,.7);padding:6px 9px;border-radius:6px;pointer-events:none;z-index:10";
+    "position:fixed;bottom:8px;left:8px;color:#9fb4c0;font:11px ui-monospace,monospace;" +
+    "background:rgba(10,15,20,.6);padding:4px 8px;border-radius:6px;pointer-events:none;z-index:20";
   document.body.appendChild(overlay);
 
-  let fpsAcc = 0;
+  let uiAcc = 0;
   engine.runRenderLoop(() => {
     const dtMs = engine.getDeltaTime();
-    pollInput();
+    pollMove();
     sim.frame(dtMs);
     chunkView.update();
 
-    // Interpolated player visual position (capsule origin at its centre).
     const a = sim.alpha();
     const ix = sim.player.prevX + (sim.player.x - sim.player.prevX) * a;
     const iy = sim.player.prevY + (sim.player.y - sim.player.prevY) * a;
     player.position.set(...vec3(ix, iy, 0.85));
+    player.rotation.y = -sim.player.facing + Math.PI / 2;
     rig.update(player.position, dtMs);
 
-    for (const p of probes) {
-      const px = p.px + (p.x - p.px) * a;
-      const py = p.py + (p.y - p.py) * a;
-      p.mesh.position.set(...vec3(px, py, 0.8));
-    }
+    // lighting + fog from the world clock; fluid/roof uniforms follow
+    tod.apply(scene, sun, hemi, clock.dayFraction(sim), !!state.bloodMoon, state.weather);
+    const indoor = sim.world.buildingAt(Math.floor(ix / TILE_SIZE), Math.floor(iy / TILE_SIZE)) !== null;
+    chunkView.materials.update({
+      timeS: performance.now() / 1000,
+      camera: rig.camera.position,
+      fogColor: tod.state.fogColor,
+      fogDensity: tod.state.fogDensity,
+      nightDim: tod.state.nightDim,
+      sunDir: tod.state.sunDir,
+      sunColor: tod.state.sunColor,
+      ambient: tod.state.ambient,
+      player: { x: player.position.x, y: player.position.y, z: player.position.z },
+      indoor,
+    });
 
-    fpsAcc += dtMs;
-    if (fpsAcc > 250) {
-      fpsAcc = 0;
+    props.update(performance.now(), ix, iy);
+    view.update(a, performance.now(), ix, iy);
+    minimap.render(state.seed, state);
+
+    uiAcc += dtMs;
+    if (uiAcc > 200) {
+      uiAcc = 0;
+      hudRender();
       overlay.textContent =
-        `${engine.getFps().toFixed(0)} fps · ${backend} · ` +
-        `${Math.round(ix)},${Math.round(iy)} px · ${sim.world.biomeAtPx(ix, iy)}` +
-        (probes.length ? ` · probe ×${probes.length}` : "");
+        `${engine.getFps().toFixed(0)} fps · ${backend} · ${Math.round(ix)},${Math.round(iy)}px · ` +
+        `${sim.world.biomeAtPx(ix, iy)} · enemies ${hostiles.enemies.length}`;
     }
 
     scene.render();
   });
 
   window.addEventListener("resize", () => engine.resize());
+
+  // Diagnostics hook for the headless smoke harness (read-only).
+  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state };
 }
 
 void boot();
