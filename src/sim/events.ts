@@ -33,6 +33,10 @@ export interface SimEventMap {
 
   // --- entities ------------------------------------------------------------
   enemySpawned: { id: number };
+  /** A contact attack landed its cooldown window (animation telegraph). */
+  enemyAttack: { id: number; x: number; y: number };
+  /** A spitter wound up an acid glob (before the projectile spawns). */
+  enemySpit: { id: number; angle: number };
   /** corpse=true → the body converts to a lingering searchable corpse. */
   enemyRemoved: { id: number; corpse: boolean };
   corpseFaded: { id: number };
@@ -52,7 +56,7 @@ export interface SimEventMap {
   projectileKilled: { id: number; x: number; y: number };
   explosion: { x: number; y: number; radius: number };
   zap: { x0: number; y0: number; x1: number; y1: number };
-  screamRing: { x: number; y: number };
+  screamRing: { x: number; y: number; id?: number };
   toxicCloud: { x: number; y: number };
 
   // --- loot ------------------------------------------------------------------

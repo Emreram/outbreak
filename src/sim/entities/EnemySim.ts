@@ -243,6 +243,11 @@ export class EnemySim {
     return now < this.stunnedUntil;
   }
 
+  /** Mid-leap (view-side leap-stretch pose; additive getter, no sim change). */
+  isLeaping(now: number): boolean {
+    return now < this.leapUntil;
+  }
+
   hpFrac(): number {
     return this.maxHp > 0 ? this.hp / this.maxHp : 0;
   }

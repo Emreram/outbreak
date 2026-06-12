@@ -242,7 +242,10 @@ export class HostilesSystem implements SimSystem {
       } else if (et === Tile.ShallowWater || et === Tile.Mud) {
         e.scaleVelocity(0.6);
       }
-      if (e.tryAttack(px, py, sim.now) && !sim.driving && !sim.airborne) this.takeHit(sim, e);
+      if (e.tryAttack(px, py, sim.now)) {
+        sim.events.emit("enemyAttack", { id: e.id, x: e.x, y: e.y }); // view: lunge anim
+        if (!sim.driving && !sim.airborne) this.takeHit(sim, e);
+      }
       this.enemySpecials(sim, e, px, py);
       if (e.tryBleedTrail(sim.now)) sim.events.emit("decal", { x: e.x, y: e.y, scale: 0.3, enemyId: e.id });
     }
@@ -279,6 +282,7 @@ export class HostilesSystem implements SimSystem {
     const dist = Math.hypot(px - e.x, py - e.y);
     if (e.hasTrait("spitter") && dist > 40 && dist < 380 && e.trySpecial(sim.now, 2200)) {
       const a = Math.atan2(py - e.y, px - e.x);
+      sim.events.emit("enemySpit", { id: e.id, angle: a }); // view: head-thrust anim
       this.spawnAcid(sim, e.x, e.y, a, Math.max(4, Math.round(e.damage * 0.8)), e.hasTrait("acidic") || e.hasTrait("toxic"));
     } else if (e.hasTrait("electric") && dist < 120 && e.trySpecial(sim.now, 1600)) {
       sim.events.emit("sound", { id: "shot" });
@@ -287,7 +291,7 @@ export class HostilesSystem implements SimSystem {
       this.damagePlayer(sim, 5, false, "A jolt of current arcs through you.", "shock");
     } else if (e.hasTrait("screamer") && dist < e.def.aggro + 60 && e.trySpecial(sim.now, 5200)) {
       sim.events.emit("sound", { id: "ui" });
-      sim.events.emit("screamRing", { x: e.x, y: e.y });
+      sim.events.emit("screamRing", { x: e.x, y: e.y, id: e.id });
       const base = getZombie("shambler");
       if (base) {
         const tx = Math.floor(e.x / TILE_SIZE);

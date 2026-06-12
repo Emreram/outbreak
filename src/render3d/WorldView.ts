@@ -173,11 +173,19 @@ export class WorldView {
       this.corpses.delete(id);
     });
 
-    // Hit-flash (WS7): a white emissive pulse on the struck rig's body.
-    ev.on("splat", ({ enemyId }) => {
+    // Hit-flash (WS7) + stagger (WS5): the struck rig pulses and recoils
+    // along the impact direction.
+    ev.on("splat", ({ enemyId, dirX, dirY, power }) => {
       if (enemyId !== undefined && this.enemies.has(enemyId)) {
         this.flashes.set(enemyId, performance.now() + 90);
+        this.enemies.get(enemyId)!.ctrl.play("stagger", { dirX, dirY, power });
       }
+    });
+    // Enemy reaction one-shots (WS5) on the additive sim telegraphs.
+    ev.on("enemyAttack", ({ id }) => this.enemies.get(id)?.ctrl.play("enemy_lunge"));
+    ev.on("enemySpit", ({ id }) => this.enemies.get(id)?.ctrl.play("spit"));
+    ev.on("screamRing", ({ id }) => {
+      if (id !== undefined) this.enemies.get(id)?.ctrl.play("scream");
     });
 
     ev.on("dropSpawned", ({ id }) => {
@@ -307,7 +315,13 @@ export class WorldView {
       inp.stunned = e.isStunned(this.sim.now);
       inp.creep = e.def.movement === "stalker" && e.lastDist < 170;
       inp.pauseGather = e.def.movement === "lurcher" && this.sim.now % 850 >= 450;
-      v.ctrl.setStance(inp.stunned ? "dizzy" : null);
+      // stance priority: stun > leap > knockback tumble > none (WS5)
+      const leaping = e.isLeaping(this.sim.now);
+      const fwdX = Math.cos(e.facing);
+      const fwdY = Math.sin(e.facing);
+      const tumbling =
+        !leaping && e.speed() > e.def.speed * 1.8 && e.vx * fwdX + e.vy * fwdY < 0;
+      v.ctrl.setStance(inp.stunned ? "dizzy" : leaping ? "leap_stretch" : tumbling ? "tumble" : null);
       const far = Math.hypot(ix - px, iy - py) > 900;
       if (!far || this.lodFlip) v.pose = v.ctrl.tick(far ? simDt * 2 : simDt, inp);
       v.rig.root.position.set(wp.x, wp.y, wp.z);

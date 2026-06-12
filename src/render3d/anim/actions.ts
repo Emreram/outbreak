@@ -105,6 +105,74 @@ export const ACTIONS: Record<string, ActionDef> = {
       pose.headPitch += -0.12 * k;
     },
   },
+
+  // --- enemy reactions (animation plan WS5) -----------------------------------
+  /** Contact-attack lunge: forward snap + clawing arms + a bite of the head. */
+  enemy_lunge: {
+    durationMs: 240,
+    priority: 60,
+    rampMs: 50,
+    sample: (t01, w, pose) => {
+      const out = t01 < 0.4 ? easeOutCubic(seg(t01, 0, 0.4)) : 1 - easeOutQuad(seg(t01, 0.4, 1));
+      pose.rootX += 0.18 * out * w;
+      pose.armL.liftZ += 0.5 * out * w;
+      pose.armR.liftZ += 0.55 * out * w;
+      pose.armL.swingY += 0.35 * out * w;
+      pose.armR.swingY += -0.35 * out * w;
+      pose.headPitch += 0.22 * out * w; // the bite
+      pose.pitch += 0.12 * out * w;
+    },
+  },
+  /** Hit stagger: recoil along the impact direction + head snap + shuffle.
+   *  opts.dirX/dirY = impact direction in sim space; the controller can't see
+   *  facing, so the recoil rides rootX (backward along facing ≈ away for
+   *  frontal hits) plus a roll kick for side reads. */
+  stagger: {
+    durationMs: 200,
+    priority: 80,
+    rampMs: 45,
+    sample: (t01, w, pose, _inp, opts) => {
+      const k = (1 - easeOutQuad(t01)) * w;
+      const power = Math.min(1.4, opts.power ?? 1);
+      pose.rootX += -0.12 * k * power;
+      pose.headYaw += (opts.dirX !== undefined && opts.dirX < 0 ? -0.4 : 0.4) * k;
+      pose.roll += (opts.dirY !== undefined && opts.dirY < 0 ? -0.1 : 0.1) * k;
+      pose.scaleY *= 1 - 0.06 * k;
+      pose.hipL += 0.18 * k; // the half-step shuffle
+      pose.hipR += -0.12 * k;
+    },
+  },
+  /** Spitter wind-up: head rears back then thrusts with a neck stretch. */
+  spit: {
+    durationMs: 280,
+    priority: 60,
+    rampMs: 50,
+    sample: (t01, w, pose) => {
+      if (t01 < 0.32) {
+        const k = easeOutQuad(seg(t01, 0, 0.32)) * w;
+        pose.headPitch += -0.35 * k; // rear back
+        pose.pitch += -0.06 * k;
+      } else {
+        const s = (1 - seg(t01, 0.65, 1)) * easeInCubic(seg(t01, 0.32, 0.65));
+        pose.headPitch += 0.4 * s * w; // the thrust
+        pose.scaleY *= 1 + 0.05 * s * w; // neck stretch
+        pose.pitch += 0.1 * s * w;
+      }
+    },
+  },
+  /** Screamer: arms thrown up, chest heaving at 2× — synced to the 500ms ring. */
+  scream: {
+    durationMs: 520,
+    priority: 60,
+    rampMs: 80,
+    sample: (t01, w, pose) => {
+      const hold = Math.sin(Math.min(1, t01 * 1.3) * Math.PI); // rise, hold, fall
+      pose.armL.liftZ += 1.3 * hold * w;
+      pose.armR.liftZ += 1.3 * hold * w;
+      pose.headPitch += -0.3 * hold * w; // head back, throat open
+      pose.scaleY *= 1 + 0.06 * hold * Math.abs(Math.sin(t01 * Math.PI * 4)) * w; // 2× heave
+    },
+  },
 };
 
 export const STANCES: Record<string, StanceSampler> = {
@@ -144,6 +212,24 @@ export const STANCES: Record<string, StanceSampler> = {
     pose.elbowL += 0.4 * w;
     pose.elbowR += 0.4 * w;
     pose.scaleY *= 1 - 0.03 * w;
+  },
+  /** Mid-leap stretch (WS5): elongated body, arms trailing, nose down. */
+  leap_stretch: (w, pose) => {
+    pose.scaleY *= 1 + 0.12 * w;
+    pose.pitch += 0.18 * w;
+    pose.armL.liftZ += -0.35 * w;
+    pose.armR.liftZ += -0.35 * w;
+    pose.armL.swingY += -0.4 * w;
+    pose.armR.swingY += 0.4 * w;
+    pose.rootY += 0.12 * w; // a skim of airtime
+  },
+  /** Knockback tumble (WS5): rolling stumble while flung backward. */
+  tumble: (w, pose, inp) => {
+    pose.roll += Math.sin(inp.timeMs * 0.02) * 0.3 * w;
+    pose.scaleY *= 1 - 0.1 * w;
+    pose.armL.liftZ += 0.45 * w; // arms flail up
+    pose.armR.liftZ += 0.45 * w;
+    pose.headPitch += -0.2 * w;
   },
 };
 
