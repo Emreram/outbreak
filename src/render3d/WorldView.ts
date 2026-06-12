@@ -23,14 +23,15 @@ import { sfx } from "../engine/audio";
 import { defOf } from "../game/items/catalog";
 import { RARITY_META } from "../game/items/rarity";
 import { bloodProfileFor } from "../game/enemies/blood";
-import { groundHeightAt, simToWorld } from "./space";
+import { groundHeightAt, simToWorld, worldToSim } from "./space";
 import { Labels } from "./Labels";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { FxTextures } from "./fx/FxTextures";
-import { applyPose, buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, type HumanoidRig, type QuadRig } from "./actors/Blockout";
+import { applyPose, applyQuadPose, buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, type HumanoidRig, type QuadRig } from "./actors/Blockout";
 import { AnimController, newLocoInput, type Pose } from "./anim/AnimController";
-import { HUMANOID_REGISTRY } from "./anim/actions";
+import { HUMANOID_REGISTRY, QUAD_REGISTRY } from "./anim/actions";
 import { footPlants, phaseFor } from "./anim/locomotion";
+import { quadStrideRate } from "./anim/quadGait";
 import { DEATH_DURATION, finalYawSpin, pickDeathVariant, sampleDeath, type DeathSample, type DeathVariant } from "./anim/deathTweens";
 import { clamp01, easeInQuad, easeOutBack } from "./anim/easing";
 import { CombatFx } from "./fx/CombatFx";
@@ -45,6 +46,14 @@ interface EnemyView {
   /** The controller's reused pose object (re-applied on skipped LOD ticks). */
   pose: Readonly<Pose>;
   prevPhase: number;
+}
+
+/** Per-animal view (WS7): the stride phase accumulates per the engine/anim.ts
+ *  idiom (dt · strideHz · speedFrac · 2π) so feet track ground speed. */
+interface AnimalView {
+  rig: QuadRig;
+  ctrl: AnimController;
+  phase: number;
 }
 
 /** A rig mid-death-tween (animation plan WS6) — ends exactly on poseCorpse. */
@@ -77,7 +86,7 @@ export class WorldView {
   shadows: import("./env/ShadowDirector").ShadowDirector | null = null;
   private readonly labels: Labels;
   private readonly enemies = new Map<number, EnemyView>();
-  private readonly animals = new Map<number, QuadRig>();
+  private readonly animals = new Map<number, AnimalView>();
   private readonly locoInp = newLocoInput();
   private lastSimNow = 0;
   private lodFlip = false;
@@ -86,8 +95,9 @@ export class WorldView {
   /** Rigs mid-death-tween (WS6). */
   private readonly dying: DyingRig[] = [];
   private readonly deathScratch: DeathSample = { rotZFrac: 0, slide: 1, lift: 0, scaleY: 1, yawSpin: 0 };
-  /** Animal pop-in / tip-over micro-tweens (WS6). */
-  private readonly animalFx: { rig: QuadRig; t0: number; kind: "pop" | "die" }[] = [];
+  /** Animal pop-in / tip-over micro-tweens (WS6). yEnd settles a mid-hop
+   *  kill back onto the ground while it keels. */
+  private readonly animalFx: { rig: QuadRig; t0: number; kind: "pop" | "die"; yEnd?: number }[] = [];
   /** Hit-flash expiry per enemy id (WS7). */
   private readonly flashes = new Map<number, number>();
   private readonly drops = new Map<number, { mesh: Mesh; born: number; glow: Mesh; beam: Mesh | null; rank: number }>();
@@ -207,17 +217,24 @@ export class WorldView {
       this.shadows?.addActorCaster(rig.body);
       rig.root.scaling.setAll(0.01);
       this.animalFx.push({ rig, t0: this.sim.now, kind: "pop" }); // pop-in (WS6)
-      this.animals.set(id, rig);
+      const ctrl = new AnimController(
+        { kind: "quad", archetype: a.def.kind, scale: a.def.scale, hash: a.phase / (Math.PI * 2) },
+        QUAD_REGISTRY,
+      );
+      this.animals.set(id, { rig, ctrl, phase: a.phase });
     });
     ev.on("animalRemoved", ({ id, killed }) => {
-      const rig = this.animals.get(id);
+      const v = this.animals.get(id);
       this.animals.delete(id);
-      if (!rig) return;
-      this.shadows?.removeActorCaster(rig.body);
-      const popping = this.animalFx.findIndex((f) => f.rig === rig);
+      if (!v) return;
+      this.shadows?.removeActorCaster(v.rig.body);
+      const popping = this.animalFx.findIndex((f) => f.rig === v.rig);
       if (popping >= 0) this.animalFx.splice(popping, 1); // died mid-pop
-      if (killed) this.animalFx.push({ rig, t0: this.sim.now, kind: "die" }); // tip-over then dispose
-      else rig.dispose();
+      if (killed) {
+        // tip-over then dispose; a mid-hop kill settles back to the ground
+        const sp = worldToSim(v.rig.root.position.x, v.rig.root.position.z);
+        this.animalFx.push({ rig: v.rig, t0: this.sim.now, kind: "die", yEnd: groundHeightAt(sp.x, sp.y) });
+      } else v.rig.dispose();
     });
 
     ev.on("corpseFaded", ({ id }) => {
@@ -408,16 +425,25 @@ export class WorldView {
       }
     }
     for (const an of this.hostiles.animals) {
-      const rig = this.animals.get(an.id);
-      if (!rig) continue;
+      const v = this.animals.get(an.id);
+      if (!v) continue;
       const ix = an.prevX + (an.x - an.prevX) * a;
       const iy = an.prevY + (an.y - an.prevY) * a;
       const wp = simToWorld(ix, iy, groundHeightAt(ix, iy), this.tmp);
-      rig.root.position.set(wp.x, wp.y, wp.z);
-      // Animal.update sway: ±0.14 fleeing / ±0.12 calm at now·0.02.
-      const sway = Math.sin(nowMs * 0.02 + an.phase) * (an.fleeing ? 0.14 : 0.12);
-      rig.root.rotation.y = -(an.facing + sway);
-      rig.root.scaling.y = 1 + (an.speed() > 4 ? Math.sin(nowMs * 0.028 + an.phase) * 0.04 : 0);
+      // Real gaits (WS7): bound/gallop/trot off the accumulated stride phase
+      // (dt · strideHz · speedFrac · 2π — the engine/anim.ts idiom). The 2D
+      // yaw-sway parity (±0.14 flee / ±0.12 calm) lives in sampleQuadGait.
+      const speedFrac = Math.min(1.2, an.speed() / Math.max(1, an.def.speed));
+      v.phase += (simDt / 1000) * quadStrideRate(an.def.kind, an.fleeing) * Math.PI * 2 * speedFrac;
+      const inp = this.locoInp;
+      inp.timeMs = this.sim.now;
+      inp.phaseRad = v.phase;
+      inp.moving = an.speed() > 4;
+      inp.speedFrac = speedFrac;
+      inp.sprintFrac = an.fleeing ? 1 : 0;
+      const pose = v.ctrl.tick(simDt, inp);
+      v.rig.root.position.set(wp.x, wp.y, wp.z);
+      applyQuadPose(v.rig, pose, an.facing);
     }
     this.tickDying();
     this.tickAnimalFx();
@@ -532,8 +558,11 @@ export class WorldView {
         const k = 0.01 + 0.99 * easeOutBack(clamp01(t));
         f.rig.root.scaling.set(k, k, k);
       } else {
-        // keel onto the side (roll about the body's forward axis)
-        f.rig.root.rotation.x = (Math.PI / 2) * easeInQuad(clamp01(t));
+        // keel onto the side (roll about the body's forward axis), settling
+        // any mid-hop height back onto the ground
+        const e = easeInQuad(clamp01(t));
+        f.rig.root.rotation.x = (Math.PI / 2) * e;
+        if (f.yEnd !== undefined) f.rig.root.position.y += (f.yEnd - f.rig.root.position.y) * e;
       }
     }
   }

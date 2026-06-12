@@ -400,5 +400,65 @@ const ok = (cond: boolean, msg: string) => {
   ok(Math.abs(pose.rootY) < 0.01 && Math.abs(pose.scaleY - 1) < 0.01, "spawn rise ends level with the walk pose");
 }
 
+// --- WS7 quadruped gaits -----------------------------------------------------------------
+{
+  const { FLEE_STRIDE_MULT, QUAD_STRIDE_HZ, quadStrideRate, sampleQuadGait } = await import("../src/render3d/anim/quadGait");
+  const { GAITS, gaitPose } = await import("../src/engine/anim");
+  const pose = newPose();
+  const inp = newLocoInput();
+  inp.moving = true;
+  inp.speedFrac = 1;
+  const spec = (kind: string): ActorAnimSpec => ({ kind: "quad", archetype: kind, scale: 1, hash: 0 });
+
+  // Rabbit bound: the hop is parabolic, never digs, and lands exactly at the
+  // stride boundaries (φ = 0, π, 2π).
+  let maxHop = 0;
+  let minHop = 0;
+  for (let i = 0; i <= 80; i++) {
+    sampleQuadGait(spec("rabbit"), { ...inp, phaseRad: (i / 80) * Math.PI * 2 }, resetPose(pose));
+    maxHop = Math.max(maxHop, pose.rootY);
+    minHop = Math.min(minHop, pose.rootY);
+  }
+  ok(maxHop > 0.15 && maxHop <= 0.23, `rabbit hop peaks ~0.22m (${maxHop.toFixed(3)})`);
+  ok(minHop >= 0, "rabbit hop never digs below ground");
+  for (const φ of [0, Math.PI, Math.PI * 2]) {
+    sampleQuadGait(spec("rabbit"), { ...inp, phaseRad: φ }, resetPose(pose));
+    ok(Math.abs(pose.rootY) < 1e-12, `rabbit lands at the stride boundary (φ=${φ.toFixed(2)})`);
+  }
+  // Bound pairing: front pair in phase with each other, hinds together too.
+  sampleQuadGait(spec("rabbit"), { ...inp, phaseRad: 1.1 }, resetPose(pose));
+  ok(pose.armL.swingY === pose.armR.swingY && pose.hipL === pose.hipR, "bound moves leg PAIRS together");
+  ok(pose.armL.swingY !== pose.hipL, "front and hind pairs are out of phase");
+
+  // Deer gallop: rotary offsets give 4 distinct leg phases; the bob comes
+  // STRAIGHT from GAITS.equine via gaitPose (mandated engine/anim.ts reuse).
+  sampleQuadGait(spec("deer"), { ...inp, phaseRad: 0.9 }, resetPose(pose));
+  const legs = [pose.armL.swingY, pose.armR.swingY, pose.hipL, pose.hipR];
+  ok(new Set(legs.map((v) => v.toFixed(4))).size === 4, "gallop legs carry 4 distinct rotary phases");
+  const g = gaitPose(GAITS.equine, 0.9, 1, false);
+  ok(Math.abs(pose.scaleY - (1 + g.scaleYMul)) < 1e-12, "deer bob is GAITS.equine via gaitPose (reuse asserted)");
+  ok(QUAD_STRIDE_HZ.deer === GAITS.equine.strideHz && QUAD_STRIDE_HZ.boar === GAITS.quadruped.strideHz, "stride rates come from the GAITS table");
+
+  // Boar trot: strict diagonal pairs.
+  sampleQuadGait(spec("boar"), { ...inp, phaseRad: 2.2 }, resetPose(pose));
+  ok(pose.armL.swingY === pose.hipR && pose.armR.swingY === pose.hipL, "trot pairs the diagonals");
+  ok(pose.armL.swingY !== pose.armR.swingY, "trot diagonals alternate");
+
+  // Flee panic runs the stride ×1.35; the 2D yaw-sway parity stays verbatim.
+  ok(quadStrideRate("rabbit", true) === quadStrideRate("rabbit", false) * FLEE_STRIDE_MULT, "flee stride ×1.35");
+  const calm = newLocoInput();
+  calm.timeMs = 777;
+  sampleQuadGait(spec("deer"), calm, resetPose(pose));
+  ok(Math.abs(pose.yawOffset - -Math.sin(777 * 0.02) * 0.12) < 1e-12, "calm yaw sway is the 2D ±0.12 parity");
+  calm.sprintFrac = 1;
+  sampleQuadGait(spec("deer"), calm, resetPose(pose));
+  ok(Math.abs(pose.yawOffset - -Math.sin(777 * 0.02) * 0.14) < 1e-12, "flee yaw sway is the 2D ±0.14 parity");
+
+  // Idle: stride channels rest, breathe only.
+  const idle = newLocoInput();
+  sampleQuadGait(spec("rabbit"), idle, resetPose(pose));
+  ok(pose.armL.swingY === 0 && pose.hipL === 0 && pose.rootY === 0, "idle quad rests its legs");
+}
+
 console.log(fail === 0 ? "ALL ANIM3D CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

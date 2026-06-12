@@ -4,9 +4,10 @@
 // reactions. Quadruped locomotion lives in quadGait.ts (WS7) but shares the
 // registries here.
 
-import type { ActionDef, ActorAnimSpec, AnimRegistry, LocoInput, Pose, StanceSampler } from "./AnimController";
+import type { ActionDef, AnimRegistry, StanceSampler } from "./AnimController";
 import { clamp01, easeInCubic, easeInQuad, easeOutCubic, easeOutQuad, lerp } from "./easing";
 import { humanoidAdditive, sampleHumanoidLocomotion } from "./locomotion";
+import { sampleQuadGait } from "./quadGait";
 
 /** Segment helper: progress 0..1 inside [a,b] of the track (clamped). */
 function seg(t01: number, a: number, b: number): number {
@@ -255,15 +256,9 @@ export const HUMANOID_REGISTRY: AnimRegistry = {
   additive: humanoidAdditive,
 };
 
-/** Quadruped registry — locomotion is installed by quadGait (WS7); until
- *  then a minimal sway keeps animals alive. */
+/** Quadruped registry — real gaits (bound/gallop/trot) live in quadGait.ts. */
 export const QUAD_REGISTRY: AnimRegistry = {
-  locomotion: (spec: ActorAnimSpec, inp: LocoInput, pose: Pose): void => {
-    const sway = Math.sin(inp.phaseRad) * (inp.speedFrac > 0.9 ? 0.14 : 0.12);
-    pose.yawOffset = -sway;
-    if (inp.moving) pose.scaleY *= 1 + Math.sin(inp.phaseRad * 1.4) * 0.04;
-    void spec;
-  },
+  locomotion: sampleQuadGait,
   actions: ACTIONS,
   stances: STANCES,
 };

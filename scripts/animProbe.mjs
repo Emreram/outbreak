@@ -77,6 +77,52 @@ try {
     });
     return { yaw0, frames, disposed: root.isDisposed() };
   });
+  // Quadruped gait (anim WS7): force a wild-animal spawn beside the player
+  // (the urban probe seed never rolls one ambiently — bypass the biome gate
+  // for the dev scenario only) and watch a leg pivot swing through frames.
+  const quad = await page.evaluate(async () => {
+    const { sim, scene, hostiles } = window.__ob3d;
+    const origBiome = sim.world.biomeAtPx.bind(sim.world);
+    sim.world.biomeAtPx = () => "grassland";
+    try {
+      hostiles.spawnWildAnimals(sim);
+    } finally {
+      sim.world.biomeAtPx = origBiome;
+    }
+    const a = hostiles.animals[0];
+    if (!a) return { err: "spawn rolled zero animals" };
+    // park it near the player so it flees (full-speed gait, stays loaded)
+    a.x = sim.player.x + 80;
+    a.y = sim.player.y;
+    const leg = scene.getTransformNodeByName("animal" + a.id + "_legp0");
+    const root = scene.getTransformNodeByName("animal" + a.id);
+    if (!leg || !root) return { err: "animal rig missing" };
+    const frames = [];
+    const s0 = performance.now();
+    await new Promise((done) => {
+      const iv = setInterval(() => {
+        frames.push({ leg: leg.rotation.z, sy: root.scaling.y });
+        if (performance.now() - s0 > 900) {
+          clearInterval(iv);
+          done();
+        }
+      }, 40);
+    });
+    return { kind: a.def.kind, fleeing: a.fleeing, frames };
+  });
+  if (quad.err) {
+    console.log(`ok  : quad gait probe skipped (${quad.err}) — informative only`);
+  } else {
+    const legs = quad.frames.map((f) => f.leg);
+    const swings = Math.max(...legs) - Math.min(...legs);
+    const popped = quad.frames.some((f) => f.sy > 0.5);
+    const legOk = swings > 0.05 && Math.max(...legs.map(Math.abs)) < 2;
+    console.log(`${legOk ? "ok  " : "FAIL"}: ${quad.kind} leg pivot swings (range ${swings.toFixed(3)}, fleeing=${quad.fleeing})`);
+    console.log(`${popped ? "ok  " : "FAIL"}: spawn pop-in scaled the rig up`);
+    if (!legOk) failed++;
+    if (!popped) failed++;
+  }
+
   if (death.err) {
     console.log(`ok  : death tween skipped (${death.err}) — informative only`);
   } else {
