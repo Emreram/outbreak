@@ -10,6 +10,8 @@ import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
 import { createEngine } from "./render3d/bootstrap";
+import { capsFor, resolveTier } from "./render3d/quality";
+import { parseBloodMoon, parseTod, parseWeather } from "./render3d/devParams";
 import { FollowRig } from "./render3d/camera/FollowRig";
 import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
 import { PropInstancer } from "./render3d/chunks/PropInstancer";
@@ -52,6 +54,24 @@ async function boot(): Promise<void> {
   const scene = new Scene(engine);
   scene.useRightHandedSystem = true; // the space.ts orientation contract
 
+  // Quality tier (graphics plan WS1): ?tier= override → software-rasterizer/
+  // mobile probe → backend default. Caps gate every visual system below.
+  const params = new URLSearchParams(location.search);
+  let rendererString = "";
+  try {
+    const info = (engine as unknown as { getGlInfo?: () => { renderer?: string } }).getGlInfo?.();
+    rendererString = info?.renderer ?? "";
+  } catch {
+    /* WebGPU path has no GL info */
+  }
+  const isMobile = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
+  const caps = capsFor(resolveTier({ override: params.get("tier"), backend, rendererString, isMobile }));
+
+  // View-side screenshot/dev overrides — never touch the sim clock or save.
+  const todOv = parseTod(params.get("tod"));
+  const weatherOv = parseWeather(params.get("weather"));
+  const bloodOv = parseBloodMoon(params.get("bloodmoon"));
+
   const hemi = new HemisphericLight("ambient", new Vector3(0, 1, 0), scene);
   const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.55), scene);
   const tod = new TimeOfDayDirector();
@@ -60,7 +80,6 @@ async function boot(): Promise<void> {
   // Load order (plan §4.3): localStorage v4 (the frozen oracle path) first;
   // else the IDB slot (hydrated back through saveGame so loadGame validates
   // it — a hand-edited or stale file can never corrupt a run); else new game.
-  const params = new URLSearchParams(location.search);
   const urlSeed = params.get("seed");
   let loaded = urlSeed ? newGame(urlSeed) : loadGame();
   if (!loaded) {
@@ -460,8 +479,12 @@ async function boot(): Promise<void> {
     camTarget.set(player.position.x, player.position.y + 0.9, player.position.z);
     rig.update(camTarget, dtMs);
 
-    // lighting + fog from the world clock; fluid/roof uniforms follow
-    tod.apply(scene, sun, hemi, clock.dayFraction(sim), !!state.bloodMoon, state.weather);
+    // lighting + fog from the world clock (or the dev override); fluid/roof
+    // uniforms follow
+    const dayT = todOv ?? clock.dayFraction(sim);
+    const bloodEff = bloodOv || !!state.bloodMoon;
+    const weatherEff = weatherOv ?? state.weather;
+    tod.apply(scene, sun, hemi, dayT, bloodEff, weatherEff);
     const indoor = sim.world.buildingAt(Math.floor(ix / TILE_SIZE), Math.floor(iy / TILE_SIZE)) !== null;
     chunkView.materials.update({
       timeS: performance.now() / 1000,
@@ -478,7 +501,7 @@ async function boot(): Promise<void> {
 
     props.update(performance.now(), ix, iy);
     view.update(a, performance.now(), ix, iy);
-    weather.update(state.weather, player.position.x, player.position.z, dtMs);
+    weather.update(weatherEff, player.position.x, player.position.z, dtMs);
     minimap.render(state.seed, state);
 
     uiAcc += dtMs;
@@ -486,7 +509,7 @@ async function boot(): Promise<void> {
       uiAcc = 0;
       hudRender();
       overlay.textContent =
-        `${engine.getFps().toFixed(0)} fps · ${backend} · ${Math.round(ix)},${Math.round(iy)}px · ` +
+        `${engine.getFps().toFixed(0)} fps · ${backend} · ${caps.tier} · ${Math.round(ix)},${Math.round(iy)}px · ` +
         `${sim.world.biomeAtPx(ix, iy)} · enemies ${hostiles.enemies.length}`;
     }
 
@@ -496,7 +519,7 @@ async function boot(): Promise<void> {
   window.addEventListener("resize", () => engine.resize());
 
   // Diagnostics hook for the headless smoke harness (read-only).
-  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state };
+  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state, caps };
 }
 
 void boot();

@@ -43,6 +43,9 @@ async function waitForServer(url, ms = 15000) {
 
 const screenshotIdx = process.argv.indexOf("--screenshot");
 const screenshotPath = screenshotIdx > 0 ? process.argv[screenshotIdx + 1] : null;
+// Extra query params for screenshot baselines, e.g. --params "tod=night&weather=storm&tier=medium"
+const paramsIdx = process.argv.indexOf("--params");
+const extraParams = paramsIdx > 0 ? `&${process.argv[paramsIdx + 1]}` : "";
 
 const server = spawn("npx", ["vite", "preview", "--port", String(PORT), "--strictPort"], {
   stdio: "ignore",
@@ -75,9 +78,9 @@ try {
     return { page, errors };
   }
 
-  // --- 3D page -------------------------------------------------------------
+  // --- 3D page (Low tier: SwiftShader-friendly, the always-works floor) -----
   {
-    const { page, errors } = await bootCheck("3d", `http://localhost:${PORT}/play3d.html?seed=smoke3d`, 9000);
+    const { page, errors } = await bootCheck("3d", `http://localhost:${PORT}/play3d.html?seed=smoke3d&tier=low${extraParams}`, 9000);
     const hasCanvas = await page.evaluate(() => {
       const c = document.querySelector("canvas#game3d");
       return !!c && c.width > 0;
@@ -97,6 +100,21 @@ try {
     for (const e of fatal.slice(0, 6)) console.log("  ", e);
     if (!hasCanvas || variance < 4 || !hudUp || fatal.length > 0) failed++;
     if (screenshotPath) await page.screenshot({ path: screenshotPath });
+    await page.close();
+  }
+
+  // --- 3D page, Medium tier (errors-only): exercises the post-FX pipeline +
+  // CSM shader-compile path on SwiftShader without timing/variance gates ------
+  {
+    const { page, errors } = await bootCheck("3d-medium", `http://localhost:${PORT}/play3d.html?seed=smoke3d&tier=medium&tod=night`, 6000);
+    const tierTook = await page.evaluate(() => {
+      const hook = window.__ob3d;
+      return hook?.caps?.tier ?? "none";
+    });
+    const fatal = errors.filter((e) => !e.includes("favicon"));
+    console.log(`3d-medium: tier=${tierTook} errors=${fatal.length}`);
+    for (const e of fatal.slice(0, 6)) console.log("  ", e);
+    if (fatal.length > 0 || tierTook !== "medium") failed++;
     await page.close();
   }
 
