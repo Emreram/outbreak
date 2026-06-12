@@ -15,6 +15,7 @@ import { HostilesSystem } from "./systems/hostiles";
 import { PersistenceSystem } from "./systems/persistence";
 import { ScavengeSystem } from "./systems/scavenge";
 import { SurvivalSystem } from "./systems/survival";
+import { WorldEventsSystem } from "./systems/worldEvents";
 
 export function createGameSim(state: GameState): {
   sim: Sim;
@@ -45,6 +46,7 @@ export function createGameSim(state: GameState): {
   sim.addSystem(new SurvivalSystem());
   sim.addSystem(clock);
   sim.addSystem(new DiscoverySystem());
+  sim.addSystem(new WorldEventsSystem());
   sim.addSystem(new PersistenceSystem(sim));
   return { sim, clock, hostiles, combat, drops, scavenge, chests };
 }

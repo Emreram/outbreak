@@ -67,6 +67,10 @@ export interface SimEventMap {
   /** A "corpse" prop lunged (playsDead roll) — an enemy spawned instead. */
   corpseLunged: { x: number; y: number };
 
+  // --- GM encounters ---------------------------------------------------------
+  /** A scripted dilemma fired — the view opens the GM choice/chat modal. */
+  encounterRequested: { title: string; situation: string; choices: string[]; loc: string };
+
   // --- run state ----------------------------------------------------------------
   death: { reason: string };
 }

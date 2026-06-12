@@ -17,9 +17,11 @@ import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
 import { groundHeightAt, simToWorld, worldToSim } from "./render3d/space";
+import { get as idbGet, set as idbSet } from "idb-keyval";
 import { buildHumanoid, poseHumanoid } from "./render3d/actors/Blockout";
 import { createGameSim } from "./sim/createGameSim";
-import { clearSave, loadGame, newGame } from "./game/GameState";
+import type { PersistenceSystem } from "./sim/systems/persistence";
+import { clearSave, loadGame, newGame, saveGame } from "./game/GameState";
 import { randomSeed } from "./game/rng";
 import { getZombie } from "./game/enemies/catalog";
 import { equippedMeleeDef, equippedRangedDef } from "./game/inventory";
@@ -28,6 +30,14 @@ import { RARITY_META } from "./game/items/rarity";
 import { TILE_SIZE } from "./game/constants";
 import { DEFAULT_PLAYER_JACKET } from "./engine/textures";
 import { LootReveal, type RevealCard } from "./ui/LootReveal";
+import { EncounterModal } from "./ui/EncounterModal";
+import { consumeFellBack, getActiveBrain, runTurn } from "./ai/gameMaster";
+import { applyOutcome } from "./game/outcomes";
+import { sfx } from "./engine/audio";
+import type { GMResponse, TurnInput } from "./shared/contracts";
+
+/** IndexedDB save slot (plan §4.3) — localStorage v4 stays the rollback copy. */
+const IDB_SLOT = "outbreak/slot/0";
 
 async function boot(): Promise<void> {
   const host = document.getElementById("game") ?? document.body;
@@ -45,10 +55,33 @@ async function boot(): Promise<void> {
   const tod = new TimeOfDayDirector();
 
   // --- state + sim (same save key, same flags as the Phaser build) ----------
+  // Load order (plan §4.3): localStorage v4 (the frozen oracle path) first;
+  // else the IDB slot (hydrated back through saveGame so loadGame validates
+  // it — a hand-edited or stale file can never corrupt a run); else new game.
   const params = new URLSearchParams(location.search);
   const urlSeed = params.get("seed");
-  const state = urlSeed ? newGame(urlSeed) : (loadGame() ?? newGame(randomSeed()));
+  let loaded = urlSeed ? newGame(urlSeed) : loadGame();
+  if (!loaded) {
+    try {
+      const fromIdb = await idbGet(IDB_SLOT);
+      if (fromIdb && typeof fromIdb === "object") {
+        saveGame(fromIdb as Parameters<typeof saveGame>[0]);
+        loaded = loadGame();
+      }
+    } catch {
+      /* IDB unavailable — fall through */
+    }
+  }
+  const state = loaded ?? newGame(randomSeed());
   const { sim, clock, hostiles, combat, drops, scavenge, chests } = createGameSim(state);
+  // Write-through: every autosave hits BOTH stores (one save serves both builds).
+  const persistence = sim.getSystem<PersistenceSystem>("persistence");
+  if (persistence) {
+    persistence.write = (s) => {
+      saveGame(s.state);
+      void idbSet(IDB_SLOT, JSON.parse(JSON.stringify(s.state))).catch(() => undefined);
+    };
+  }
 
   const chunkView = new ChunkViewManager(scene, sim.world, sim.events);
   const props = new PropInstancer(scene, sim.world, sim.events);
@@ -99,6 +132,123 @@ async function boot(): Promise<void> {
     reveal.open({ title: `${e.kind.replace(/_/g, " ")} · tier ${e.tier}`.toUpperCase(), icon: rarityIcon("rare", "SC"), cards, egg: false });
   };
 
+  // --- the AI Game Master loop (plan §6.7) — DOM modal, unchanged ------------
+  const modal = new EncounterModal();
+  let encounterTurns = 0;
+  let encounterLoc = "";
+  let aiNoticeShown = false;
+  let inferring = false;
+  const MAX_ENCOUNTER_TURNS = 2;
+
+  const effectsSummary = (gm: GMResponse): string => {
+    const parts: string[] = [];
+    const sc = gm.state_changes;
+    for (const k of ["hp", "stamina", "hunger", "thirst", "infection"] as const) {
+      const v = sc?.[k] ?? 0;
+      if (v !== 0) parts.push(`${v > 0 ? "+" : ""}${v} ${k}`);
+    }
+    for (const it of gm.inventory_add ?? []) parts.push(`+${it.item}${it.qty > 1 ? ` ×${it.qty}` : ""}`);
+    for (const it of gm.inventory_remove ?? []) parts.push(`−${it.item}${it.qty > 1 ? ` ×${it.qty}` : ""}`);
+    return parts.join(" · ");
+  };
+
+  const endEncounter = (): void => {
+    modal.close();
+    sim.paused = false;
+  };
+
+  const resolveTurn = async (input: TurnInput): Promise<void> => {
+    inferring = true; // render drops to 30fps while the model runs (plan §4.5)
+    let gm: GMResponse;
+    try {
+      gm = await runTurn(state, input, encounterLoc);
+    } finally {
+      inferring = false;
+    }
+    if (!aiNoticeShown && consumeFellBack()) {
+      aiNoticeShown = true;
+      view.toast("AI model offline — using the local director. See README to enable Ollama.");
+    }
+    const result = applyOutcome(state, gm);
+    encounterTurns += 1;
+    hostiles.spawnNear(sim, result.spawns);
+    if (gm.inventory_add.length > 0) sfx.pickup();
+
+    if (result.gameOver) {
+      endEncounter();
+      sim.enterDeath(result.reason || "The world claimed you.");
+      return;
+    }
+    // Float the stat deltas over the survivor (the visible consequence).
+    const sc = gm.state_changes;
+    let lift = 0;
+    for (const k of ["hp", "stamina", "hunger", "thirst", "infection"] as const) {
+      const v = sc?.[k] ?? 0;
+      if (v !== 0) {
+        sim.events.emit("floatText", {
+          x: sim.player.x,
+          y: sim.player.y - lift * 14,
+          text: `${v > 0 ? "+" : ""}${v} ${k}`,
+          color: (k === "infection" ? v < 0 : v > 0) ? "#9ef0a0" : "#ff8a8a",
+        });
+        lift++;
+      }
+    }
+    modal.showBanner(result.narrative, effectsSummary(gm));
+    await new Promise((r) => setTimeout(r, 700)); // the enact beat
+
+    const keepOpen = !result.encounterOver && result.spawns.length > 0 && encounterTurns < MAX_ENCOUNTER_TURNS;
+    if (keepOpen) modal.showChoices(result.narrative, result.interaction, effectsSummary(gm));
+    else endEncounter();
+  };
+
+  modal.setHandlers(
+    (input: TurnInput) => {
+      modal.openLoading("Encounter", getActiveBrain() === "offline" ? undefined : "the AI is thinking…");
+      void resolveTurn(input);
+    },
+    () => endEncounter(),
+  );
+
+  sim.events.on("encounterRequested", ({ title, situation, choices }) => {
+    if (sim.dead || modal.isOpen() || reveal.isOpen()) return;
+    sim.paused = true;
+    combat.firing = false;
+    encounterTurns = 0;
+    encounterLoc = sim.world.biomeAtPx(sim.player.x, sim.player.y);
+    sfx.ui();
+    modal.openPrompt(title, situation, choices);
+  });
+
+  // --- save export / import (plan §4.3) ---------------------------------------
+  function exportSave(): void {
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `outbreak-save-${state.seed}-day${state.day}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    view.toast("Save exported");
+  }
+  function importSave(): void {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = "application/json";
+    inp.onchange = async () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      try {
+        const parsed = JSON.parse(await f.text()) as unknown;
+        saveGame(parsed as Parameters<typeof saveGame>[0]); // loadGame re-validates
+        if (!loadGame()) throw new Error("invalid save shape");
+        location.reload();
+      } catch {
+        view.toast("That file isn't a valid OUTBREAK save", "#ff8a8a");
+      }
+    };
+    inp.click();
+  }
+
   const tmp = { x: 0, y: 0, z: 0 };
   const vec3 = (xPx: number, yPx: number, h: number): [number, number, number] => {
     simToWorld(xPx, yPx, h + groundHeightAt(xPx, yPx), tmp);
@@ -124,6 +274,14 @@ async function boot(): Promise<void> {
       else combat.tryReload(sim);
     }
     if (e.code === "KeyM") minimap.toggle();
+    if (e.code === "F9") {
+      e.preventDefault();
+      exportSave();
+    }
+    if (e.code === "F10") {
+      e.preventDefault();
+      importSave();
+    }
     if (e.code === "KeyE") {
       sim.input.interact = true;
       // Interact priority (WorldScene parity, trimmed to live systems):
@@ -247,6 +405,7 @@ async function boot(): Promise<void> {
   });
   function restart(): void {
     clearSave();
+    void idbSet(IDB_SLOT, undefined).catch(() => undefined);
     const u = new URL(location.href);
     u.searchParams.delete("seed");
     location.href = u.toString();
@@ -260,8 +419,14 @@ async function boot(): Promise<void> {
   document.body.appendChild(overlay);
 
   let uiAcc = 0;
+  let frameParity = false;
   engine.runRenderLoop(() => {
     const dtMs = engine.getDeltaTime();
+    // GPU contention rule (plan §4.5): while the in-browser model is
+    // inferring, render every other frame (~30fps) — Babylon and WebLLM
+    // share the GPU; this doubles as the encounter's cinematic slow-down.
+    frameParity = !frameParity;
+    if (inferring && frameParity) return;
     pollMove();
     sim.frame(dtMs);
     chunkView.update();
