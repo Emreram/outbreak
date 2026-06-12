@@ -17,6 +17,7 @@ import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
 import { PropInstancer } from "./render3d/chunks/PropInstancer";
 import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
 import { PostFxDirector } from "./render3d/env/PostFxDirector";
+import { SkyDome } from "./render3d/env/SkyDome";
 import { WeatherFx } from "./render3d/env/WeatherFx";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
@@ -298,6 +299,7 @@ async function boot(): Promise<void> {
   rig.snapTo(new Vector3(...vec3(sim.player.x, sim.player.y, 0.85)));
   const camTarget = new Vector3();
   const postFx = new PostFxDirector(scene, rig.camera, caps, sim.events);
+  const sky = new SkyDome(scene, rig.camera);
   let biomeCached = sim.world.biomeAtPx(sim.player.x, sim.player.y);
   sim.events.on("impulse", ({ kind, amount }) => {
     if (kind === "shake") rig.shake(amount);
@@ -492,6 +494,7 @@ async function boot(): Promise<void> {
     const bloodEff = bloodOv || !!state.bloodMoon;
     const weatherEff = weatherOv ?? state.weather;
     tod.apply(scene, sun, hemi, dayT, bloodEff, weatherEff);
+    sky.update(dayT, tod.state, bloodEff, biomeCached, performance.now() / 1000);
     postFx.update(dayT, biomeCached, bloodEff, weatherEff, dtMs, rig.camera.radius);
     const indoor = sim.world.buildingAt(Math.floor(ix / TILE_SIZE), Math.floor(iy / TILE_SIZE)) !== null;
     chunkView.materials.update({
