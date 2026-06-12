@@ -1,6 +1,6 @@
 # OUTBREAK 3D — Full-Stack 3D Transformation Master Plan
 
-> **Status:** Approved direction, pre-implementation.
+> **Status:** In implementation — M0–M3 delivered, M4/M5 cores delivered; see §12 Implementation log.
 > **Goal:** Transform OUTBREAK from a 2D top-down Phaser 3 game into a 3D game with AAA-level polish, **preserving 100% of current functionality**.
 > **Engine:** Babylon.js 8 (WebGPU-first, WebGL2 fallback) · **Scope:** offline-only single-player · **Art:** stylized low-poly + cinematic lighting · **Backend:** none (fully local stack).
 
@@ -525,3 +525,21 @@ Sizes **S/M/L/XL** (relative effort, not calendar). Green-bar rule per milestone
 ---
 
 *End of master plan. Build in order (§8); keep the green bar; the save is sacred; the sim is the authority.*
+
+---
+
+## 12. Implementation log (kept honest, updated per milestone)
+
+Play it: `/play3d.html` (or `/?renderer=3d`), `?seed=<x>` dev flow, `?probe=1` perf scene. Gates: `npm test` (33 files) · `npm run typecheck` · `npm run build` · `node scripts/checkBudgets.mjs` · `npm run smoke3d` (headless Chromium boots BOTH renderers, fails on page errors, asserts rendered variance — wired into `.github/workflows/ci.yml`). The Phaser build is untouched and still ships at `/`.
+
+| Milestone | State | Delivered / notes |
+|---|---|---|
+| **M0** | ✅ | `render3d/space.ts` (32px≡1m, x→X y→Z; **RH scene + alpha=+π/2** — the plan's literal `−π/2` fails its own north-up test in Babylon's handedness; asserted vs real LookAt math in `tests/space3d.test.ts`), WebGPU→WebGL2 bootstrap, FollowRig (lerp .12, wheel 9–24m), swept tunnel-proof `sim/physics.ts` (+13-check suite), `SimChunkStore`, fixed-step `Sim`, perf probe. fps gate on real iGPU hardware **not demonstrable in the dev container** (SwiftShader ~16–23fps is software rendering; budgets enforced by construction: ≤6 meshes/chunk, thin instances, 298KB gz entry). |
+| **M1** | ✅ core | `/src/sim` systems with the oracle's exact constants: EnemySim/AnimalSim 1:1 AI ports, hostiles (noise model, specials, death traits, kill pipeline, corpses, cadences), combat (melee/ranged/projectiles/reload), drops (magnet/combos/TTL), scavenge channels (playsDead), clock (45s segments, blood moon 6%+surge, weather, crops), survival (2s decay, burn/soak, death doors), chests (unlock tools, themed loot, ceremony gate), discovery, world events, persistence — 26-check headless integration suite (`tests/simcore.test.ts`). **Deviation:** WorldScene was NOT edited to delegate (zero regression risk to the shippable oracle); parity holds via shared pure modules + mirrored constants + tests. Golden-replay tapes not recorded. |
+| **M2** | ✅ | Pixel-faithful atlas port (same painting code, same per-tile rng), ChunkMesher (atlas ground, neighbour-culled walls, trees, roof slab+parapet w/ Bayer dither cutaway, water/lava ShaderMaterial ports of the 2D shaders w/ manual EXP2 fog), verbatim LIGHT_KEYS TimeOfDayDirector + blood-moon program + weather fog boost, PropInstancer (palette blockouts, exact sway math, searched gray-out, chest tints), GUI labels, DOM minimap, DiscoverySystem. Same save loads in both builds (shared `outbreak_save_v4` path). |
+| **M3** | ✅ core | Modular blockout actors from the zombieSprites dims table + LookSpec palettes with Enemy.applySway/Player gait parity; CombatFx (blood-profile sprays/gibs, casings arc-settle, style swing arcs, muzzle+light, zap/scream/explosion/cloud); chest ceremony over the untouched DOM LootReveal. **Open:** per-def attachment/feature meshes, corpse search visuals, 100-def screenshot grid. |
+| **M4** | ◐ partial | Weather rain/storm streaks + fog density; blood-moon lighting; seed/persisted vehicles render parked (veh_* blockouts); world events live (horde/raiders/supply drop/flyover/dilemma; beacons as compass notices). **Not yet:** driving, pets (taming/riding/flying/swim), NPCs/trade/camps, farming/base/siege interactions, disasters live phases + scar remesh hooks (scars DO apply on generate), building moods, stash maps, ambushes. The pure sim modules for all of these exist and are tested — the remaining work is sim orchestration + views. |
+| **M5** | ◐ core | The AI-GM loop end-to-end in 3D over the untouched DOM EncounterModal (dilemma → openPrompt → runTurn 4-brain fallback → applyOutcome → spawns/floats/banner → 2-turn cap), 30fps render cap during inference, IndexedDB slot + localStorage write-through + boot fallback, F9/F10 export/import (validated via the frozen load path), DOM HUD (bars/weapon/ammo/day/kills/search%), death screen → new run. **Not yet:** Craft/Trade/Storage/Pet/Reader modal wiring, character create / main menu, touch controls reuse, intent choreography. |
+| **M6** | ◐ slice | Synthesized audio bridged (non-positional); fluid/roof shaders carry the mood; per-biome grades, PannerNode adapter, GLB manifest/AssetRegistry, title diorama pending. |
+| **M7** | ◐ slice | CI: tests + build + payload budget (≤3.5MB gz; actual 298KB) + dual-renderer headless smoke. Quality tiers, Playwright screenshot baselines, device passes pending. |
+| **M8** | ✖ not started | Cutover requires the signed M7 parity certificate per the constitution — Phaser remains the shipped default at `/`. |

@@ -1,0 +1,28 @@
+# CI gates (3D master plan §4.6 / M7): logic tests, typecheck+build, the
+# headless boot smoke on BOTH renderers (Phaser oracle + Babylon), and the
+# payload budget. The smoke runs WebGL2 via SwiftShader — the primary tested
+# path per the risk register (WebGPU is enhancement-only).
+
+name: CI
+
+on:
+  push:
+    branches: ["claude/wizardly-cray-UGv1J", "main", "master"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-build-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: node scripts/checkBudgets.mjs
+      - run: npx playwright install chromium --with-deps
+      - run: npm run smoke3d

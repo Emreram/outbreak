@@ -65,6 +65,10 @@ const PROPS: Record<string, PropSpec> = {
   fishing_spot: { boxes: [box(0.5, 0.06, 0.5, 0xcfe8f4, 0.02)] },
   pet_den: { boxes: [box(1.3, 0.5, 1.3, 0x3a2c1e), box(0.7, 0.3, 0.7, 0x14100c, 0.0)] },
   flowers: { boxes: [box(0.4, 0.3, 0.4, 0x2c5a2a), box(0.2, 0.16, 0.2, 0xe88ab0, 0.3)] },
+  // Drivable-vehicle blockouts (Feature 4 records; propSprites veh_* palette).
+  veh_sedan: { boxes: [box(1.5, 0.5, 3.0, 0xe8ebee), box(1.3, 0.42, 1.5, 0x1b2733, 0.5), box(0.2, 0.18, 0.2, 0xc2c8cf, 0.5, 0, 1.3)] },
+  veh_pickup: { boxes: [box(1.6, 0.55, 1.6, 0xe2e5e9, 0, 0, -0.7), box(1.5, 0.35, 1.4, 0xb7bdc4, 0, 0, 0.8), box(1.3, 0.4, 0.9, 0x1b2733, 0.55, 0, -0.7)] },
+  veh_van: { boxes: [box(1.7, 1.0, 3.4, 0xeceef1), box(1.5, 0.5, 0.8, 0x1b2733, 0.45, 0, -1.4)] },
 };
 
 const FALLBACK: PropSpec = { boxes: [box(0.6, 0.6, 0.6, 0x777777)] };
@@ -98,6 +102,8 @@ export class PropInstancer {
   private readonly pools = new Map<string, Pool>();
   private readonly material: StandardMaterial;
   private dirty = true;
+  /** Optional extra instances (seed/persisted vehicles) merged at rebuild. */
+  extras: (() => { kind: string; x: number; y: number; yaw?: number }[]) | null = null;
 
   constructor(
     private readonly scene: Scene,
@@ -181,6 +187,15 @@ export class PropInstancer {
         buckets.set(kind, arr);
       }
       arr.push({ x: c.x, y: c.y, phase: 0 });
+    }
+    // extras (vehicle records etc.)
+    for (const e of this.extras?.() ?? []) {
+      let arr = buckets.get(e.kind);
+      if (!arr) {
+        arr = [];
+        buckets.set(e.kind, arr);
+      }
+      arr.push({ x: e.x, y: e.y, phase: 0 });
     }
 
     // sync pools

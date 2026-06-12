@@ -14,6 +14,7 @@ import { FollowRig } from "./render3d/camera/FollowRig";
 import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
 import { PropInstancer } from "./render3d/chunks/PropInstancer";
 import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
+import { WeatherFx } from "./render3d/env/WeatherFx";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
 import { groundHeightAt, simToWorld, worldToSim } from "./render3d/space";
@@ -27,6 +28,7 @@ import { getZombie } from "./game/enemies/catalog";
 import { equippedMeleeDef, equippedRangedDef } from "./game/inventory";
 import { defOf } from "./game/items/catalog";
 import { RARITY_META } from "./game/items/rarity";
+import { chunkVehicles, resolveVehicle } from "./game/vehicles";
 import { TILE_SIZE } from "./game/constants";
 import { DEFAULT_PLAYER_JACKET } from "./engine/textures";
 import { LootReveal, type RevealCard } from "./ui/LootReveal";
@@ -85,7 +87,20 @@ async function boot(): Promise<void> {
 
   const chunkView = new ChunkViewManager(scene, sim.world, sim.events);
   const props = new PropInstancer(scene, sim.world, sim.events);
+  // Seed/persisted vehicles render as parked blockouts (driving lands with the
+  // M4 vehicle system; reconcile semantics are the sim's computeWantedVehicles).
+  props.extras = () => {
+    const out: { kind: string; x: number; y: number }[] = [];
+    for (const lc of sim.world.loadedChunks()) {
+      for (const sp of chunkVehicles(state.seed, lc.cx, lc.cy)) {
+        const v = resolveVehicle(state, state.seed, sp);
+        out.push({ kind: `veh_${v.type}`, x: v.x, y: v.y });
+      }
+    }
+    return out;
+  };
   const view = new WorldView(scene, sim, hostiles, combat, drops);
+  const weather = new WeatherFx(scene);
   const minimap = new MinimapOverlay(document.body);
 
   // --- player rig (blockout survivor: jacket body, skin head, pack accent) ---
@@ -463,6 +478,7 @@ async function boot(): Promise<void> {
 
     props.update(performance.now(), ix, iy);
     view.update(a, performance.now(), ix, iy);
+    weather.update(state.weather, player.position.x, player.position.z, dtMs);
     minimap.render(state.seed, state);
 
     uiAcc += dtMs;
