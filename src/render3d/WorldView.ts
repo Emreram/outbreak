@@ -25,7 +25,7 @@ import { defOf } from "../game/items/catalog";
 import { RARITY_META } from "../game/items/rarity";
 import { groundHeightAt, simToWorld } from "./space";
 import { Labels } from "./Labels";
-import { buildHumanoid, buildQuadruped, lookOfZombie, poseHumanoid, type HumanoidRig, type QuadRig } from "./actors/Blockout";
+import { buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, poseHumanoid, type HumanoidRig, type QuadRig } from "./actors/Blockout";
 import { CombatFx } from "./fx/CombatFx";
 
 const FLOAT_POOL = 18;
@@ -39,7 +39,10 @@ export class WorldView {
   private readonly labels: Labels;
   private readonly enemies = new Map<number, HumanoidRig>();
   private readonly animals = new Map<number, QuadRig>();
-  private readonly corpses = new Map<number, Mesh>();
+  /** Fallen rigs reposed in place (WS7) — keyed by corpse record id. */
+  private readonly corpses = new Map<number, HumanoidRig>();
+  /** Hit-flash expiry per enemy id (WS7). */
+  private readonly flashes = new Map<number, number>();
   private readonly drops = new Map<number, { mesh: Mesh; born: number }>();
   private readonly projectiles = new Map<number, Mesh>();
   private readonly floats: { block: TextBlock; x: number; y: number; born: number; live: boolean }[] = [];
@@ -49,7 +52,6 @@ export class WorldView {
   private readonly tmp = new Vector3();
   private projMat: StandardMaterial;
   private acidMat: StandardMaterial;
-  private corpseMat: StandardMaterial;
   private decalMat: StandardMaterial;
 
   constructor(
@@ -85,9 +87,6 @@ export class WorldView {
     this.acidMat = new StandardMaterial("acidMat", scene);
     this.acidMat.emissiveColor = Color3.FromHexString("#8fd14a");
     this.acidMat.disableLighting = true;
-    this.corpseMat = new StandardMaterial("corpseMat", scene);
-    this.corpseMat.diffuseColor = Color3.FromHexString("#5a5a5a");
-    this.corpseMat.specularColor = Color3.Black();
     this.decalMat = new StandardMaterial("decalMat", scene);
     this.decalMat.diffuseColor = Color3.FromHexString("#3a0e10");
     this.decalMat.specularColor = Color3.Black();
@@ -106,11 +105,24 @@ export class WorldView {
       this.shadows?.addActorCaster(rig.body);
       this.enemies.set(id, rig);
     });
-    ev.on("enemyRemoved", ({ id }) => {
+    ev.on("enemyRemoved", ({ id, corpse }) => {
       const rig = this.enemies.get(id);
-      if (rig) this.shadows?.removeActorCaster(rig.body);
-      rig?.dispose();
       this.enemies.delete(id);
+      this.flashes.delete(id);
+      if (!rig) return;
+      this.shadows?.removeActorCaster(rig.body);
+      if (corpse) {
+        // The matching record is the newest one (kill-pipeline order): repose
+        // the SAME rig as the fallen body instead of swapping in a slab.
+        const rec = this.hostiles.corpses[this.hostiles.corpses.length - 1];
+        if (rec) {
+          const wp = simToWorld(rec.x, rec.y, groundHeightAt(rec.x, rec.y), this.tmp);
+          poseCorpse(rig, wp.x, wp.y, wp.z, Math.random() < 0.5 ? 1 : -1, rig.root.rotation.y + (Math.random() - 0.5) * 0.5);
+          this.corpses.set(rec.id, rig);
+          return;
+        }
+      }
+      rig.dispose();
     });
 
     ev.on("animalSpawned", ({ id }) => {
@@ -129,24 +141,16 @@ export class WorldView {
       this.animals.delete(id);
     });
 
-    ev.on("enemyRemoved", ({ id, corpse }) => {
-      if (!corpse) return;
-      // The matching corpse record is the most recent one (kill pipeline order).
-      const rec = this.hostiles.corpses[this.hostiles.corpses.length - 1];
-      if (!rec) return;
-      const slab = CreateBox(`corpse${rec.id}`, { width: 0.9, height: 0.16, depth: 0.5 }, this.scene);
-      slab.material = this.corpseMat;
-      slab.rotation.y = Math.random() * Math.PI;
-      const wp = simToWorld(rec.x, rec.y, 0.08 + groundHeightAt(rec.x, rec.y));
-      slab.position.set(wp.x, wp.y, wp.z);
-      slab.freezeWorldMatrix();
-      slab.isPickable = false;
-      this.corpses.set(rec.id, slab);
-      void id;
-    });
     ev.on("corpseFaded", ({ id }) => {
       this.corpses.get(id)?.dispose();
       this.corpses.delete(id);
+    });
+
+    // Hit-flash (WS7): a white emissive pulse on the struck rig's body.
+    ev.on("splat", ({ enemyId }) => {
+      if (enemyId !== undefined && this.enemies.has(enemyId)) {
+        this.flashes.set(enemyId, performance.now() + 90);
+      }
     });
 
     ev.on("dropSpawned", ({ id }) => {
@@ -257,6 +261,24 @@ export class WorldView {
       const lurchPause = e.def.movement === "lurcher" && this.sim.now % 850 >= 450;
       poseHumanoid(rig, e.facing, lurchPause ? 0 : phaseRad, moving && !lurchPause, Math.sin(phaseRad) * amp, 0, 0.55);
       rig.root.scaling.y = e.isStunned(this.sim.now) ? 0.85 : rig.root.scaling.y;
+    }
+    // hit-flash decay (WS7)
+    if (this.flashes.size > 0) {
+      for (const [id, until] of this.flashes) {
+        const rig = this.enemies.get(id);
+        if (!rig) {
+          this.flashes.delete(id);
+          continue;
+        }
+        const left = until - nowMs;
+        if (left <= 0) {
+          rig.bodyMat.emissiveColor.set(0, 0, 0);
+          this.flashes.delete(id);
+        } else {
+          const k = (left / 90) * 0.85;
+          rig.bodyMat.emissiveColor.set(k, k, k);
+        }
+      }
     }
     for (const an of this.hostiles.animals) {
       const rig = this.animals.get(an.id);
