@@ -29,6 +29,7 @@ import { groundHeightAt, setGroundHeightFn, simToWorld, worldToSim } from "./ren
 import { createHeightField } from "./render3d/env/heightField";
 import { get as idbGet, set as idbSet } from "idb-keyval";
 import { applyPose, buildHumanoid, setBlockoutMaxLights } from "./render3d/actors/Blockout";
+import { buildWeapon, weaponFamilyFor, type WeaponNode } from "./render3d/actors/weapons";
 import { AnimController, newLocoInput } from "./render3d/anim/AnimController";
 import { HUMANOID_REGISTRY } from "./render3d/anim/actions";
 import { playerPhase } from "./render3d/anim/locomotion";
@@ -159,6 +160,19 @@ async function boot(): Promise<void> {
   );
   const playerInp = newLocoInput();
   let lastSimNow = 0;
+  // weapon-in-hand (WS4): swapped in the 200ms HUD cadence below
+  let weaponNode: WeaponNode | null = null;
+  let weaponName = "";
+  let hasRanged = false;
+  const wrapAngle = (a: number): number => {
+    let r = a % (Math.PI * 2);
+    if (r > Math.PI) r -= Math.PI * 2;
+    if (r < -Math.PI) r += Math.PI * 2;
+    return r;
+  };
+  // combat one-shots ride the existing sim events (style from the swing event)
+  sim.events.on("swing", ({ style }) => playerCtrl.play(`attack_${style}`));
+  sim.events.on("muzzle", () => playerCtrl.play("fire_recoil"));
 
   // --- loot ceremony (the DOM LootReveal survives untouched — plan §6.3) -----
   const reveal = new LootReveal(() => {
@@ -330,6 +344,7 @@ async function boot(): Promise<void> {
   sim.events.on("impulse", ({ kind, amount }) => {
     if (kind === "shake") rig.shake(amount);
     else if (kind === "zoomPunch") rig.zoomPunch(amount);
+    else if (kind === "hurtPulse") playerCtrl.play("hit_recoil");
   });
 
   // --- input → sim intents ----------------------------------------------------
@@ -513,6 +528,8 @@ async function boot(): Promise<void> {
     playerInp.moving = sim.player.moving;
     playerInp.speedFrac = sim.player.moving ? 1 : 0;
     playerInp.sprintFrac = sim.player.sprinting ? 1 : 0;
+    playerInp.aimDeltaYaw = wrapAngle((sim.input.aim ?? sim.player.facing) - sim.player.facing);
+    playerCtrl.setStance(combat.reloading ? "reload_loop" : hasRanged ? "aim" : null);
     applyPose(playerRig, playerCtrl.tick(simDt, playerInp), sim.player.facing);
     camTarget.set(player.position.x, player.position.y + 0.9, player.position.z);
     rig.update(camTarget, dtMs);
@@ -554,6 +571,18 @@ async function boot(): Promise<void> {
       uiAcc = 0;
       hudRender();
       biomeCached = sim.world.biomeAtPx(ix, iy);
+      // weapon-in-hand swap (WS4) — piggybacks the HUD's equip poll cadence
+      const rangedNow = equippedRangedDef(state);
+      hasRanged = !!rangedNow;
+      const held = rangedNow ?? equippedMeleeDef(state);
+      if (held.name !== weaponName) {
+        weaponName = held.name;
+        weaponNode?.dispose();
+        weaponNode = buildWeapon(scene, weaponFamilyFor(held.wclass));
+        if (weaponNode) {
+          weaponNode.root.parent = weaponFamilyFor(held.wclass) === "bow" ? playerRig.handL : playerRig.handR;
+        }
+      }
       overlay.textContent =
         `${engine.getFps().toFixed(0)} fps · ${backend} · ${caps.tier} · ${Math.round(ix)},${Math.round(iy)}px · ` +
         `${biomeCached} · enemies ${hostiles.enemies.length}`;

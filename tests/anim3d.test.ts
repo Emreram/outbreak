@@ -256,5 +256,43 @@ const ok = (cond: boolean, msg: string) => {
   ok(plants === 2 && seen[0] !== seen[1], `exactly 2 alternating plants per stride (${plants})`);
 }
 
+
+// --- WS4 player combat actions + weapon families ------------------------------------------
+{
+  const { ACTIONS } = await import("../src/render3d/anim/actions");
+  const { weaponFamilyFor } = await import("../src/render3d/actors/weapons");
+  const { newLocoInput, newPose, resetPose } = await import("../src/render3d/anim/AnimController");
+
+  // Arrange/Assert: the family map is total over every WeaponClass.
+  const classes = [
+    "fist", "blade", "axe", "blunt", "spear", "polearm", "whip", "thrown",
+    "pistol", "revolver", "smg", "shotgun", "rifle", "dmr", "lmg",
+    "bow", "crossbow", "launcher", "flame", "nailgun", "energy",
+  ] as const;
+  ok(classes.every((c) => typeof weaponFamilyFor(c) === "string"), "weaponFamilyFor is total over all 21 classes");
+  ok(weaponFamilyFor("fist") === "none" && weaponFamilyFor("rifle") === "long" && weaponFamilyFor("crossbow") === "bow", "family routing spot checks");
+
+  // Action table sanity: durations/priorities per the plan.
+  ok(ACTIONS.attack_slash.durationMs === 320 && ACTIONS.attack_slash.priority === 60, "slash 320ms @60");
+  ok(ACTIONS.attack_thrust.durationMs === 260 && ACTIONS.attack_smash.durationMs === 380, "thrust 260ms, smash 380ms");
+  ok(ACTIONS.fire_recoil.durationMs === 120 && ACTIONS.fire_recoil.priority === 40, "fire recoil 120ms @40 (§3.7 window)");
+  ok(ACTIONS.hit_recoil.priority === 80, "hit recoil interrupts attacks");
+
+  // Thrust returns rootX to ~0 at t=1 (no drift), slash sweep is monotonic.
+  const inp = newLocoInput();
+  const pose = newPose();
+  ACTIONS.attack_thrust.sample(0.9999, 1, resetPose(pose), inp, {}, { kind: "humanoid", archetype: "survivor", scale: 1, hash: 0 });
+  ok(Math.abs(pose.rootX) < 0.01, `thrust lunge returns home (rootX ${pose.rootX.toFixed(3)})`);
+  let prev = -99;
+  let mono = true;
+  for (let i = 0; i <= 10; i++) {
+    const t = 0.28 + (i / 10) * 0.27;
+    ACTIONS.attack_slash.sample(t, 1, resetPose(pose), inp, {}, { kind: "humanoid", archetype: "survivor", scale: 1, hash: 0 });
+    if (pose.armR.swingY < prev - 1e-9) mono = false;
+    prev = pose.armR.swingY;
+  }
+  ok(mono, "slash sweep is monotonic through its window");
+}
+
 console.log(fail === 0 ? "ALL ANIM3D CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);
