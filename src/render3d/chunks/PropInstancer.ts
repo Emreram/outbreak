@@ -150,9 +150,11 @@ export class PropInstancer {
     private readonly scene: Scene,
     private readonly store: SimChunkStore,
     events: EventBus,
+    maxLights = 4,
   ) {
     this.material = new StandardMaterial("propMat", scene);
     this.material.specularColor = Color3.Black();
+    this.material.maxSimultaneousLights = maxLights; // WS9 light pool
     events.on("chunkLoaded", () => (this.dirty = true));
     events.on("chunkUnloaded", () => (this.dirty = true));
     events.on("searchDone", () => (this.dirty = true));

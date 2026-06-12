@@ -20,13 +20,15 @@ import { PostFxDirector } from "./render3d/env/PostFxDirector";
 import { SkyDome } from "./render3d/env/SkyDome";
 import { ShadowDirector } from "./render3d/env/ShadowDirector";
 import { BlobShadows } from "./render3d/env/BlobShadows";
+import { LightPool } from "./render3d/env/LightPool";
+import { AmbientFx } from "./render3d/env/AmbientFx";
 import { WeatherFx } from "./render3d/env/WeatherFx";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
 import { groundHeightAt, setGroundHeightFn, simToWorld, worldToSim } from "./render3d/space";
 import { createHeightField } from "./render3d/env/heightField";
 import { get as idbGet, set as idbSet } from "idb-keyval";
-import { buildHumanoid, poseHumanoid } from "./render3d/actors/Blockout";
+import { buildHumanoid, poseHumanoid, setBlockoutMaxLights } from "./render3d/actors/Blockout";
 import { createGameSim } from "./sim/createGameSim";
 import type { PersistenceSystem } from "./sim/systems/persistence";
 import { clearSave, loadGame, newGame, saveGame } from "./game/GameState";
@@ -81,6 +83,8 @@ async function boot(): Promise<void> {
   const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.55), scene);
   const tod = new TimeOfDayDirector();
   const shadows = new ShadowDirector(sun, caps);
+  const lightPool = new LightPool(scene, caps.lightPool);
+  setBlockoutMaxLights(caps.maxSimultaneousLights);
 
   // --- state + sim (same save key, same flags as the Phaser build) ----------
   // Load order (plan §4.3): localStorage v4 (the frozen oracle path) first;
@@ -114,8 +118,8 @@ async function boot(): Promise<void> {
   // ring displaces. Render-only: the sim never calls this hook.
   setGroundHeightFn(createHeightField(state.seed, sim.world).heightAt);
 
-  const chunkView = new ChunkViewManager(scene, sim.world, sim.events, shadows);
-  const props = new PropInstancer(scene, sim.world, sim.events);
+  const chunkView = new ChunkViewManager(scene, sim.world, sim.events, shadows, lightPool, caps.maxSimultaneousLights);
+  const props = new PropInstancer(scene, sim.world, sim.events, caps.maxSimultaneousLights);
   props.shadows = shadows;
   // Seed/persisted vehicles render as parked blockouts (driving lands with the
   // M4 vehicle system; reconcile semantics are the sim's computeWantedVehicles).
@@ -132,6 +136,7 @@ async function boot(): Promise<void> {
   const view = new WorldView(scene, sim, hostiles, combat, drops);
   view.shadows = shadows;
   const blobs = caps.shadows === "blob" ? new BlobShadows(scene, view.fxTex) : null;
+  const ambient = new AmbientFx(scene, view.fxTex, caps.ambientDensity);
   const weather = new WeatherFx(scene);
   const minimap = new MinimapOverlay(document.body);
 
@@ -508,6 +513,7 @@ async function boot(): Promise<void> {
     tod.apply(scene, sun, hemi, dayT, bloodEff, weatherEff);
     sky.update(dayT, tod.state, bloodEff, biomeCached, performance.now() / 1000);
     postFx.update(dayT, biomeCached, bloodEff, weatherEff, dtMs, rig.camera.radius);
+    lightPool.update(ix, iy, tod.state.glow, performance.now() / 1000, dtMs);
     const indoor = sim.world.buildingAt(Math.floor(ix / TILE_SIZE), Math.floor(iy / TILE_SIZE)) !== null;
     chunkView.materials.update({
       timeS: performance.now() / 1000,
@@ -527,6 +533,7 @@ async function boot(): Promise<void> {
     props.update(performance.now(), ix, iy);
     view.update(a, performance.now(), ix, iy);
     blobs?.update(sim, hostiles, a);
+    ambient.update(biomeCached, tod.state.glow, weatherEff, dayT, player.position.x, player.position.z, dtMs);
     weather.update(weatherEff, player.position.x, player.position.z, dtMs);
     minimap.render(state.seed, state);
 

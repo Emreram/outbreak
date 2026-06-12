@@ -10,6 +10,8 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { EventBus } from "../../sim/events";
 import type { SimChunkStore } from "../../sim/world";
 import type { ShadowDirector } from "../env/ShadowDirector";
+import type { LightPool } from "../env/LightPool";
+import { TILE_SIZE } from "../../game/constants";
 import { meshChunk } from "./ChunkMesher";
 import { seedHash } from "./groundShade";
 import { createTileAtlas } from "./TileAtlas";
@@ -26,14 +28,20 @@ export class ChunkViewManager {
   private readonly shadows: ShadowDirector | null;
   /** Per-run hash seed for the WS5 vertex-shade jitter. */
   private readonly seedNum: number;
+  /** Light-pool hookup (WS9): lava centroids + doorway night lights. */
+  private readonly lights: LightPool | null;
+  private readonly lightIds = new Map<string, string[]>();
 
   constructor(
     private readonly scene: Scene,
     private readonly store: SimChunkStore,
     events: EventBus,
     shadows?: ShadowDirector,
+    lights?: LightPool,
+    maxLights = 4,
   ) {
     this.shadows = shadows ?? null;
+    this.lights = lights ?? null;
     this.seedNum = seedHash(store.seed, "vjit");
     const atlas = createTileAtlas(scene);
     this.atlasMat = new StandardMaterial("chunkAtlasMat", scene);
@@ -41,6 +49,8 @@ export class ChunkViewManager {
     this.atlasMat.specularColor = Color3.Black();
 
     this.colorMat = new StandardMaterial("chunkColorMat", scene);
+    this.atlasMat.maxSimultaneousLights = maxLights; // Babylon's default 4 drops pool lights
+    this.colorMat.maxSimultaneousLights = maxLights;
     this.colorMat.specularColor = Color3.Black();
 
     this.materials = createChunkMaterials(scene);
@@ -78,6 +88,37 @@ export class ChunkViewManager {
     bind(m.roofs, this.materials.roof);
     this.views.set(k, meshes);
 
+    // Light sources (WS9): lava centroid + a warm doorway light per building.
+    if (this.lights) {
+      const ids: string[] = [];
+      if (m.lavaCenterPx) {
+        const lid = `lava_${k}`;
+        this.lights.register({ id: lid, x: m.lavaCenterPx.x, y: m.lavaCenterPx.y, h: 0.6, color: 0xff7a2a, intensity: 14, range: 15, flicker: 1 });
+        ids.push(lid);
+      }
+      for (const b of data.buildings) {
+        const doorPx = (b.door.x + 0.5) * TILE_SIZE;
+        const doorPy = (b.door.y + 0.5) * TILE_SIZE;
+        const dx = doorPx - b.center.x;
+        const dy = doorPy - b.center.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const lid = `win_${b.gid}`;
+        this.lights.register({
+          id: lid,
+          x: doorPx + (dx / len) * 24,
+          y: doorPy + (dy / len) * 24,
+          h: 1.5,
+          color: 0xffc26b,
+          intensity: 7,
+          range: 9,
+          flicker: 0.25,
+          nightOnly: true,
+        });
+        ids.push(lid);
+      }
+      if (ids.length > 0) this.lightIds.set(k, ids);
+    }
+
     // Shadows (WS4): ground + walls receive; walls + trees cast (the custom
     // ShaderMaterial fluids/roofs do neither — called out in the plan).
     if (this.shadows?.enabled) {
@@ -95,6 +136,11 @@ export class ChunkViewManager {
     const meshes = this.views.get(k);
     if (!meshes) return;
     this.shadows?.dropChunk(k);
+    const lids = this.lightIds.get(k);
+    if (lids) {
+      for (const lid of lids) this.lights?.unregister(lid);
+      this.lightIds.delete(k);
+    }
     for (const mesh of meshes) mesh.dispose();
     this.views.delete(k);
   }

@@ -41,6 +41,14 @@ function hex(c: number): string {
 }
 
 const matCache = new Map<string, StandardMaterial>();
+let blockoutMaxLights = 4;
+
+/** Raise the forward-light cap on actor materials (WS9 light pool). Call once
+ *  at boot, before any rigs build. */
+export function setBlockoutMaxLights(n: number): void {
+  blockoutMaxLights = n;
+}
+
 function mat(scene: Scene, color: number, emissive = 0): StandardMaterial {
   const key = `${color}|${emissive}`;
   let m = matCache.get(key);
@@ -49,6 +57,7 @@ function mat(scene: Scene, color: number, emissive = 0): StandardMaterial {
     m.diffuseColor = Color3.FromHexString(hex(color));
     if (emissive) m.emissiveColor = Color3.FromHexString(hex(emissive)).scale(0.8);
     m.specularColor = Color3.Black();
+    m.maxSimultaneousLights = blockoutMaxLights;
     matCache.set(key, m);
   }
   return m;

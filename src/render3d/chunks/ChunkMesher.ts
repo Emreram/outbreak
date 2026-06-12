@@ -232,6 +232,8 @@ export interface ChunkMeshes {
   roofs: Mesh | null;
   /** Window frames/glass + door jambs (WS5) — vertex-coloured detail. */
   detail: Mesh | null;
+  /** Lava field centroid in sim px (WS9 light source), if any lava here. */
+  lavaCenterPx: { x: number; y: number } | null;
 }
 
 export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMeshes {
@@ -253,6 +255,9 @@ export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMes
 
   const tint = biomeGrassTint(chunk.biome);
   const TRIM = 0.08;
+  let lavaSumX = 0;
+  let lavaSumY = 0;
+  let lavaCount = 0;
 
   // Terrain relief (WS6): one height sample per ground corner (49×49 grid),
   // gradients from the grid → shaded normals so the sun/CSM read the rolls.
@@ -308,7 +313,12 @@ export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMes
 
       const wd = WATER_DEPTH[v];
       if (wd !== undefined) fluidQuad(water, x0, z0, x0 + t, z0 + t, 0.03, wd);
-      if (v === Tile.Lava) fluidQuad(lava, x0, z0, x0 + t, z0 + t, 0.03, 1);
+      if (v === Tile.Lava) {
+        fluidQuad(lava, x0, z0, x0 + t, z0 + t, 0.03, 1);
+        lavaSumX += gx + 0.5;
+        lavaSumY += gy + 0.5;
+        lavaCount++;
+      }
 
       const h = EXTRUDE_M[v];
       if (h !== undefined) {
@@ -363,6 +373,10 @@ export function meshChunk(scene: Scene, chunk: ChunkData, seedNum = 0): ChunkMes
     lava: applyFluid(scene, `${id}_lava`, lava),
     roofs: applyCol(scene, `${id}_roofs`, roofs),
     detail: applyCol(scene, `${id}_detail`, detail),
+    lavaCenterPx:
+      lavaCount > 0
+        ? { x: (lavaSumX / lavaCount) * chunk.tileSize, y: (lavaSumY / lavaCount) * chunk.tileSize }
+        : null,
   };
 }
 
