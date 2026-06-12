@@ -6,6 +6,7 @@
 import type { GameState } from "../shared/contracts";
 import { isPropSearched } from "../game/scavenge";
 import { Sim } from "./Sim";
+import { ChestsSystem } from "./systems/chests";
 import { ClockSystem } from "./systems/clock";
 import { CombatSystem } from "./systems/combat";
 import { DiscoverySystem } from "./systems/discovery";
@@ -22,6 +23,7 @@ export function createGameSim(state: GameState): {
   combat: CombatSystem;
   drops: DropsSystem;
   scavenge: ScavengeSystem;
+  chests: ChestsSystem;
 } {
   const sim = new Sim(state, {
     isChestLooted: (gid) => state.worldFlags.includes(`chest_${gid}`),
@@ -34,13 +36,15 @@ export function createGameSim(state: GameState): {
   const combat = new CombatSystem();
   const drops = new DropsSystem();
   const scavenge = new ScavengeSystem();
+  const chests = new ChestsSystem();
   sim.addSystem(hostiles);
   sim.addSystem(combat);
   sim.addSystem(drops);
   sim.addSystem(scavenge);
+  sim.addSystem(chests);
   sim.addSystem(new SurvivalSystem());
   sim.addSystem(clock);
   sim.addSystem(new DiscoverySystem());
   sim.addSystem(new PersistenceSystem(sim));
-  return { sim, clock, hostiles, combat, drops, scavenge };
+  return { sim, clock, hostiles, combat, drops, scavenge, chests };
 }

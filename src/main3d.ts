@@ -6,12 +6,9 @@
 // scavenging, survival, clock), DOM HUD readout, and the perf probe.
 
 import { Scene } from "@babylonjs/core/scene";
-import { Color3 } from "@babylonjs/core/Maths/math.color";
 import { Matrix, Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight";
-import { CreateCapsule } from "@babylonjs/core/Meshes/Builders/capsuleBuilder";
-import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { createEngine } from "./render3d/bootstrap";
 import { FollowRig } from "./render3d/camera/FollowRig";
 import { ChunkViewManager } from "./render3d/chunks/ChunkViewManager";
@@ -20,14 +17,17 @@ import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
 import { groundHeightAt, simToWorld, worldToSim } from "./render3d/space";
+import { buildHumanoid, poseHumanoid } from "./render3d/actors/Blockout";
 import { createGameSim } from "./sim/createGameSim";
-import type { ScavengeSystem } from "./sim/systems/scavenge";
 import { clearSave, loadGame, newGame } from "./game/GameState";
 import { randomSeed } from "./game/rng";
 import { getZombie } from "./game/enemies/catalog";
 import { equippedMeleeDef, equippedRangedDef } from "./game/inventory";
+import { defOf } from "./game/items/catalog";
+import { RARITY_META } from "./game/items/rarity";
 import { TILE_SIZE } from "./game/constants";
 import { DEFAULT_PLAYER_JACKET } from "./engine/textures";
+import { LootReveal, type RevealCard } from "./ui/LootReveal";
 
 async function boot(): Promise<void> {
   const host = document.getElementById("game") ?? document.body;
@@ -48,21 +48,56 @@ async function boot(): Promise<void> {
   const params = new URLSearchParams(location.search);
   const urlSeed = params.get("seed");
   const state = urlSeed ? newGame(urlSeed) : (loadGame() ?? newGame(randomSeed()));
-  const { sim, clock, hostiles, combat, drops, scavenge } = createGameSim(state);
+  const { sim, clock, hostiles, combat, drops, scavenge, chests } = createGameSim(state);
 
   const chunkView = new ChunkViewManager(scene, sim.world, sim.events);
   const props = new PropInstancer(scene, sim.world, sim.events);
   const view = new WorldView(scene, sim, hostiles, combat, drops);
   const minimap = new MinimapOverlay(document.body);
 
-  // --- player capsule (blockout; jacket colour carries the appearance) -------
-  const player = CreateCapsule("player", { height: 1.7, radius: 0.32 }, scene);
-  const pmat = new StandardMaterial("playerMat", scene);
+  // --- player rig (blockout survivor: jacket body, skin head, pack accent) ---
   const jacket = state.appearance?.color ?? DEFAULT_PLAYER_JACKET;
-  pmat.diffuseColor = Color3.FromHexString(`#${(jacket & 0xffffff).toString(16).padStart(6, "0")}`);
-  pmat.specularColor = Color3.Black();
-  player.material = pmat;
-  player.isPickable = false;
+  const playerRig = buildHumanoid(scene, "player", {
+    skin: jacket,
+    headColor: 0xc89a6a,
+    accent: 0x6e5a3a, // backpack strap band
+    scale: 1.05,
+  });
+  const player = playerRig.root;
+
+  // --- loot ceremony (the DOM LootReveal survives untouched — plan §6.3) -----
+  const reveal = new LootReveal(() => {
+    sim.paused = false;
+  });
+  const rarityIcon = (rarity: keyof typeof RARITY_META, label: string): string => {
+    const c = document.createElement("canvas");
+    c.width = 56;
+    c.height = 56;
+    const g = c.getContext("2d")!;
+    g.fillStyle = "#10151b";
+    g.fillRect(0, 0, 56, 56);
+    g.strokeStyle = RARITY_META[rarity].css;
+    g.lineWidth = 3;
+    g.strokeRect(3, 3, 50, 50);
+    g.fillStyle = RARITY_META[rarity].css;
+    g.font = "700 20px ui-monospace, monospace";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(label.slice(0, 2).toUpperCase(), 28, 30);
+    return c.toDataURL();
+  };
+  chests.onOpened = (e) => {
+    if (!e.ceremony || reveal.isOpen()) return;
+    const cards: RevealCard[] = e.rolls
+      .map((s) => {
+        const def = defOf(s.item);
+        return { img: rarityIcon(def.rarity, s.item), name: s.item, qty: s.qty, rarity: def.rarity };
+      })
+      .sort((a, b) => RARITY_META[a.rarity].rank - RARITY_META[b.rarity].rank);
+    sim.paused = true;
+    combat.firing = false;
+    reveal.open({ title: `${e.kind.replace(/_/g, " ")} · tier ${e.tier}`.toUpperCase(), icon: rarityIcon("rare", "SC"), cards, egg: false });
+  };
 
   const tmp = { x: 0, y: 0, z: 0 };
   const vec3 = (xPx: number, yPx: number, h: number): [number, number, number] => {
@@ -72,6 +107,7 @@ async function boot(): Promise<void> {
 
   const rig = new FollowRig(scene, canvas);
   rig.snapTo(new Vector3(...vec3(sim.player.x, sim.player.y, 0.85)));
+  const camTarget = new Vector3();
   sim.events.on("impulse", ({ kind, amount }) => {
     if (kind === "shake") rig.shake(amount);
     else if (kind === "zoomPunch") rig.zoomPunch(amount);
@@ -90,10 +126,14 @@ async function boot(): Promise<void> {
     if (e.code === "KeyM") minimap.toggle();
     if (e.code === "KeyE") {
       sim.input.interact = true;
-      const sc = sim.getSystem<ScavengeSystem>("scavenge")!;
-      if (!sc.search) {
-        const t = sc.nearestSearchable(sim, 64);
-        if (t) sc.startSearch(sim, t);
+      // Interact priority (WorldScene parity, trimmed to live systems):
+      // chest first, then hold-to-search the nearest searchable prop/body.
+      const chest = chests.nearestChest(sim, 56);
+      if (chest) {
+        chests.openChest(sim, chest);
+      } else if (!scavenge.search) {
+        const t = scavenge.nearestSearchable(sim, 64);
+        if (t) scavenge.startSearch(sim, t);
       }
     }
   });
@@ -229,9 +269,16 @@ async function boot(): Promise<void> {
     const a = sim.alpha();
     const ix = sim.player.prevX + (sim.player.x - sim.player.prevX) * a;
     const iy = sim.player.prevY + (sim.player.y - sim.player.prevY) * a;
-    player.position.set(...vec3(ix, iy, 0.85));
-    player.rotation.y = -sim.player.facing + Math.PI / 2;
-    rig.update(player.position, dtMs);
+    player.position.set(...vec3(ix, iy, 0));
+    // Player.update visual parity: walk sway ±0.07 (±0.1 sprint) on the
+    // walkT·0.35 phase; idle micro-breathe 1+sin(t·0.0045)·0.015.
+    const moving = sim.player.moving;
+    const phase = sim.now * (sim.player.sprinting ? 0.042 : 0.021);
+    const sway = moving ? Math.sin(phase) * (sim.player.sprinting ? 0.1 : 0.07) : 0;
+    const breathe = moving ? 0 : Math.sin(sim.now * 0.0045) * 0.015;
+    poseHumanoid(playerRig, sim.player.facing, phase, moving, sway, breathe, 0.7);
+    camTarget.set(player.position.x, player.position.y + 0.9, player.position.z);
+    rig.update(camTarget, dtMs);
 
     // lighting + fog from the world clock; fluid/roof uniforms follow
     tod.apply(scene, sun, hemi, clock.dayFraction(sim), !!state.bloodMoon, state.weather);

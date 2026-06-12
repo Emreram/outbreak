@@ -8,7 +8,6 @@
 // mark discrete moments. The view never mutates sim state.
 
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
-import { CreateCapsule } from "@babylonjs/core/Meshes/Builders/capsuleBuilder";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import { CreateDisc } from "@babylonjs/core/Meshes/Builders/discBuilder";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
@@ -26,20 +25,18 @@ import { defOf } from "../game/items/catalog";
 import { RARITY_META } from "../game/items/rarity";
 import { groundHeightAt, simToWorld } from "./space";
 import { Labels } from "./Labels";
-
-interface ActorView {
-  mesh: Mesh;
-  mat: StandardMaterial;
-}
+import { buildHumanoid, buildQuadruped, lookOfZombie, poseHumanoid, type HumanoidRig, type QuadRig } from "./actors/Blockout";
+import { CombatFx } from "./fx/CombatFx";
 
 const FLOAT_POOL = 18;
 const DECAL_POOL = 48;
 
 export class WorldView {
   readonly ui: AdvancedDynamicTexture;
+  readonly fx: CombatFx;
   private readonly labels: Labels;
-  private readonly enemies = new Map<number, ActorView>();
-  private readonly animals = new Map<number, ActorView>();
+  private readonly enemies = new Map<number, HumanoidRig>();
+  private readonly animals = new Map<number, QuadRig>();
   private readonly corpses = new Map<number, Mesh>();
   private readonly drops = new Map<number, { mesh: Mesh; born: number }>();
   private readonly projectiles = new Map<number, Mesh>();
@@ -48,7 +45,6 @@ export class WorldView {
   private decalIdx = 0;
   private readonly toastHost: HTMLDivElement;
   private readonly tmp = new Vector3();
-  private readonly matCache = new Map<number, StandardMaterial>();
   private projMat: StandardMaterial;
   private acidMat: StandardMaterial;
   private corpseMat: StandardMaterial;
@@ -94,18 +90,8 @@ export class WorldView {
     this.decalMat.diffuseColor = Color3.FromHexString("#3a0e10");
     this.decalMat.specularColor = Color3.Black();
 
+    this.fx = new CombatFx(scene, sim, hostiles);
     this.bind();
-  }
-
-  private actorMat(hex: number): StandardMaterial {
-    let m = this.matCache.get(hex);
-    if (!m) {
-      m = new StandardMaterial(`actor${hex.toString(16)}`, this.scene);
-      m.diffuseColor = Color3.FromHexString(`#${(hex & 0xffffff).toString(16).padStart(6, "0")}`);
-      m.specularColor = Color3.Black();
-      this.matCache.set(hex, m);
-    }
-    return m;
   }
 
   private bind(): void {
@@ -114,28 +100,22 @@ export class WorldView {
     ev.on("enemySpawned", ({ id }) => {
       const e = this.hostiles.enemies.find((x) => x.id === id);
       if (!e) return;
-      const h = 1.5 * e.def.scale + 0.2;
-      const mesh = CreateCapsule(`enemy${id}`, { height: h, radius: 0.26 * e.def.scale + 0.06 }, this.scene);
-      const mat = this.actorMat(e.def.look.skin);
-      mesh.material = mat;
-      mesh.isPickable = false;
-      this.enemies.set(id, { mesh, mat });
+      this.enemies.set(id, buildHumanoid(this.scene, `enemy${id}`, lookOfZombie(e.def)));
     });
     ev.on("enemyRemoved", ({ id }) => {
-      this.enemies.get(id)?.mesh.dispose();
+      this.enemies.get(id)?.dispose();
       this.enemies.delete(id);
     });
 
     ev.on("animalSpawned", ({ id }) => {
       const a = this.hostiles.animals.find((x) => x.id === id);
       if (!a) return;
-      const mesh = CreateCapsule(`animal${id}`, { height: 0.8 * a.def.scale + 0.2, radius: 0.22 * a.def.scale + 0.05 }, this.scene);
-      mesh.material = this.actorMat(a.def.kind === "rabbit" ? 0xd8c8b0 : a.def.kind === "deer" ? 0xa97a4a : 0x6b5236);
-      mesh.isPickable = false;
-      this.animals.set(id, { mesh, mat: mesh.material as StandardMaterial });
+      const body = a.def.kind === "rabbit" ? 0xd8c8b0 : a.def.kind === "deer" ? 0xa97a4a : 0x6b5236;
+      const head = a.def.kind === "deer" ? 0x8a5f38 : undefined;
+      this.animals.set(id, buildQuadruped(this.scene, `animal${id}`, body, a.def.scale, head));
     });
     ev.on("animalRemoved", ({ id }) => {
-      this.animals.get(id)?.mesh.dispose();
+      this.animals.get(id)?.dispose();
       this.animals.delete(id);
     });
 
@@ -250,26 +230,37 @@ export class WorldView {
   update(alpha: number, nowMs: number, px: number, py: number): void {
     const a = alpha;
     for (const e of this.hostiles.enemies) {
-      const v = this.enemies.get(e.id);
-      if (!v) continue;
+      const rig = this.enemies.get(e.id);
+      if (!rig) continue;
       const ix = e.prevX + (e.x - e.prevX) * a;
       const iy = e.prevY + (e.y - e.prevY) * a;
-      const h = (1.5 * e.def.scale + 0.2) / 2;
-      const wp = simToWorld(ix, iy, h + groundHeightAt(ix, iy), this.tmp);
-      v.mesh.position.set(wp.x, wp.y, wp.z);
-      v.mesh.rotation.y = -e.facing + Math.PI / 2; // sim angle → RH yaw
-      // stunned/chasing read: subtle squash while stunned (view-only)
-      v.mesh.scaling.y = e.isStunned(this.sim.now) ? 0.85 : 1;
+      const wp = simToWorld(ix, iy, groundHeightAt(ix, iy), this.tmp);
+      rig.root.position.set(wp.x, wp.y, wp.z);
+      // Enemy.applySway port — per-class motion identity, verbatim numbers.
+      const fast = e.family === "zombie_runner" || e.hasTrait("fast");
+      const wide = e.def.movement === "crawler";
+      let amp = wide ? 0.2 : fast ? 0.22 : 0.12;
+      const freq = wide ? 0.006 : fast ? 0.022 : 0.008;
+      if (e.def.movement === "stalker" && e.lastDist < 170) amp *= 0.5; // the creep
+      const phaseRad = this.sim.now * freq + e.phase;
+      const moving = e.speed() > 4;
+      const lurchPause = e.def.movement === "lurcher" && this.sim.now % 850 >= 450;
+      poseHumanoid(rig, e.facing, lurchPause ? 0 : phaseRad, moving && !lurchPause, Math.sin(phaseRad) * amp, 0, 0.55);
+      rig.root.scaling.y = e.isStunned(this.sim.now) ? 0.85 : rig.root.scaling.y;
     }
     for (const an of this.hostiles.animals) {
-      const v = this.animals.get(an.id);
-      if (!v) continue;
+      const rig = this.animals.get(an.id);
+      if (!rig) continue;
       const ix = an.prevX + (an.x - an.prevX) * a;
       const iy = an.prevY + (an.y - an.prevY) * a;
-      const wp = simToWorld(ix, iy, 0.45 * an.def.scale + 0.1, this.tmp);
-      v.mesh.position.set(wp.x, wp.y, wp.z);
-      v.mesh.rotation.y = -an.facing + Math.PI / 2;
+      const wp = simToWorld(ix, iy, groundHeightAt(ix, iy), this.tmp);
+      rig.root.position.set(wp.x, wp.y, wp.z);
+      // Animal.update sway: ±0.14 fleeing / ±0.12 calm at now·0.02.
+      const sway = Math.sin(nowMs * 0.02 + an.phase) * (an.fleeing ? 0.14 : 0.12);
+      rig.root.rotation.y = -(an.facing + sway);
+      rig.root.scaling.y = 1 + (an.speed() > 4 ? Math.sin(nowMs * 0.028 + an.phase) * 0.04 : 0);
     }
+    this.fx.update();
     for (const p of this.combat.projectiles) {
       const m = this.projectiles.get(p.id);
       if (!m) continue;
