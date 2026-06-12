@@ -50,6 +50,54 @@ try {
     console.log(`${okMove ? "ok  " : "FAIL"}: ${k} ${a?.toFixed(3)} -> ${b?.toFixed(3)} (moving + bounded)`);
     if (!okMove && k !== "enemyHip") failed++; // enemies may be idle — informative only
   }
+
+  // Death tween (anim WS6): force a crit kill (⇒ launch variant) and watch the
+  // SAME rig roll to side·π/2, bake the 1.5-turn tumble into its yaw, and
+  // survive as the corpse node (the corpses-map handover).
+  const death = await page.evaluate(async () => {
+    const { sim, scene, hostiles } = window.__ob3d;
+    const e = hostiles.enemies.find(
+      (q) => !q.hasTrait("exploder") && !q.hasTrait("splitter") && !q.hasTrait("bloated") && q.family !== "survivor_friendly",
+    );
+    if (!e) return { err: "no plain enemy up" };
+    const root = scene.getTransformNodeByName("enemy" + e.id);
+    if (!root) return { err: "rig missing" };
+    const yaw0 = root.rotation.y;
+    hostiles.onEnemyKilled(sim, e, { dir: { x: 1, y: 0 }, crit: true });
+    const frames = [];
+    await new Promise((done) => {
+      const t0 = performance.now();
+      const iv = setInterval(() => {
+        frames.push({ t: performance.now() - t0, rz: root.rotation.z, ry: root.rotation.y, y: root.position.y });
+        if (performance.now() - t0 > 600) {
+          clearInterval(iv);
+          done();
+        }
+      }, 25);
+    });
+    return { yaw0, frames, disposed: root.isDisposed() };
+  });
+  if (death.err) {
+    console.log(`ok  : death tween skipped (${death.err}) — informative only`);
+  } else {
+    const HALF_PI = Math.PI / 2;
+    const last = death.frames[death.frames.length - 1];
+    const mid = death.frames.some((f) => Math.abs(f.rz) > 0.05 && Math.abs(f.rz) < HALF_PI - 0.05);
+    const settled = Math.abs(Math.abs(last.rz) - HALF_PI) < 1e-6;
+    const tumbled = Math.abs(Math.abs(last.ry - death.yaw0) - Math.PI * 1.5) < 1e-6;
+    const lifted = death.frames.some((f) => f.y > last.y + 0.05); // arc peak clears the corpse rest height
+    const checks = [
+      [mid, "death roll animates through mid angles (not snapped)"],
+      [settled, `corpse settles at exactly ±π/2 (rz ${last.rz.toFixed(4)})`],
+      [tumbled, "launch bakes the 1.5-turn tumble into the corpse yaw"],
+      [lifted, "launch arc lifts the body"],
+      [!death.disposed, "the rig survives the handover as the corpse node"],
+    ];
+    for (const [okC, msg] of checks) {
+      console.log(`${okC ? "ok  " : "FAIL"}: ${msg}`);
+      if (!okC) failed++;
+    }
+  }
   await browser.close();
 } catch (e) {
   console.error("animProbe:", e.message ?? e);

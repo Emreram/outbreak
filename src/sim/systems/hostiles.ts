@@ -428,8 +428,14 @@ export class HostilesSystem implements SimSystem {
         sim.events.emit("corpseFaded", { id: old.id });
       }
     }
-    sim.events.emit("enemyRemoved", { id: e.id, corpse });
-    void ctx; // direction/crit feed the view's corpse fling via the events above
+    sim.events.emit("enemyRemoved", {
+      id: e.id,
+      corpse,
+      dirX: ctx?.dir?.x,
+      dirY: ctx?.dir?.y,
+      crit: ctx?.crit,
+      explosive: ctx?.explosive,
+    });
   }
 
   /** Bursting deaths (exploder/splitter/bloated) and friendlies leave no body. */

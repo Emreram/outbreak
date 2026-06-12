@@ -294,5 +294,111 @@ const ok = (cond: boolean, msg: string) => {
   ok(mono, "slash sweep is monotonic through its window");
 }
 
+// --- WS5 enemy reactions ----------------------------------------------------------------
+{
+  const { ACTIONS, HUMANOID_REGISTRY } = await import("../src/render3d/anim/actions");
+  const spec: ActorAnimSpec = { kind: "humanoid", archetype: "zombie", scale: 1, hash: 0 };
+  const inp = newLocoInput();
+  const pose = newPose();
+
+  // Table sanity: the scream one-shot must cover the 500ms ring flash.
+  ok(ACTIONS.scream.durationMs >= 500, `scream holds through the 500ms ring (${ACTIONS.scream.durationMs}ms)`);
+  ok(ACTIONS.enemy_lunge.durationMs === 240 && ACTIONS.enemy_lunge.priority === 60, "lunge 240ms @60");
+  ok(ACTIONS.stagger.priority === 80 && ACTIONS.spawn.priority === 90, "stagger > attacks, spawn > stagger");
+
+  // Stagger direction math: the head snaps toward the impact side and the
+  // recoil scales with splat power.
+  ACTIONS.stagger.sample(0.1, 1, resetPose(pose), inp, { dirX: -1, dirY: -1, power: 1 }, spec);
+  const leftYaw = pose.headYaw;
+  const leftRoll = pose.roll;
+  ACTIONS.stagger.sample(0.1, 1, resetPose(pose), inp, { dirX: 1, dirY: 1, power: 1 }, spec);
+  ok(leftYaw < 0 && pose.headYaw > 0, "stagger head-snap follows the impact side");
+  ok(leftRoll < 0 && pose.roll > 0, "stagger roll kick follows the impact side");
+  ACTIONS.stagger.sample(0.1, 1, resetPose(pose), inp, { power: 0.4 }, spec);
+  const soft = pose.rootX;
+  ACTIONS.stagger.sample(0.1, 1, resetPose(pose), inp, { power: 1.4 }, spec);
+  ok(pose.rootX < soft && pose.rootX < 0, `stagger recoil scales with power (${soft.toFixed(3)} → ${pose.rootX.toFixed(3)})`);
+
+  // Controller arbitration: stagger (80) replaces a lunge (60) mid-flight, but
+  // a spawn rise (90) shrugs the stagger off.
+  const ctrl = new AnimController(spec, HUMANOID_REGISTRY);
+  ctrl.play("enemy_lunge");
+  let p = ctrl.tick(10, inp);
+  ok(p.rootX > 0, `lunge pushes forward (${p.rootX.toFixed(3)})`);
+  ctrl.play("stagger", { power: 1 });
+  p = ctrl.tick(10, inp);
+  ok(p.rootX < 0, `stagger interrupts the lunge (${p.rootX.toFixed(3)})`);
+  const ctrl2 = new AnimController(spec, HUMANOID_REGISTRY);
+  ctrl2.play("spawn");
+  ctrl2.play("stagger", { power: 1 });
+  p = ctrl2.tick(10, inp);
+  ok(p.rootY < -0.2, "spawn rise survives a stagger attempt");
+  ok(p.hipL === 0, "the dropped stagger leaves no shuffle channel");
+}
+
+// --- WS6 death tweens + spawn endpoint ---------------------------------------------------
+{
+  const { DEATH_DURATION, DEATH_END, finalYawSpin, pickDeathVariant, sampleDeath } = await import("../src/render3d/anim/deathTweens");
+  const { ACTIONS } = await import("../src/render3d/anim/actions");
+  const spec: ActorAnimSpec = { kind: "humanoid", archetype: "zombie", scale: 1, hash: 0 };
+  const variants = ["flop", "crumple", "launch"] as const;
+  const s = { rotZFrac: 9, slide: 9, lift: 9, scaleY: 9, yawSpin: 9 };
+
+  // Endpoint equality — the load-bearing corpses-map handover contract: every
+  // variant's t=1 channels equal poseCorpse's (DEATH_END) exactly.
+  for (const v of variants) {
+    sampleDeath(v, 1, s);
+    ok(
+      s.rotZFrac === DEATH_END.rotZFrac && s.slide === DEATH_END.slide && s.lift === DEATH_END.lift && s.scaleY === DEATH_END.scaleY,
+      `${v} t=1 lands exactly on the poseCorpse contract`,
+    );
+    ok(s.yawSpin === finalYawSpin(v), `${v} yawSpin settles on its persistent value`);
+    sampleDeath(v, 1.7, s);
+    ok(s.rotZFrac === 1 && s.slide === 1 && s.lift === 0, `${v} clamps past t=1`);
+    ok(DEATH_DURATION[v] > 0 && DEATH_DURATION[v] <= 300, `${v} is a fast beat (${DEATH_DURATION[v]}ms)`);
+  }
+
+  // Variant routing is deterministic: crit/explosive launch, hash splits the rest.
+  ok(pickDeathVariant({ crit: true, hash: 0.1 }) === "launch", "crit kills launch");
+  ok(pickDeathVariant({ explosive: true, hash: 0.9 }) === "launch", "explosive kills launch");
+  ok(pickDeathVariant({ hash: 0.3 }) === "flop" && pickDeathVariant({ hash: 0.8 }) === "crumple", "hash splits flop/crumple 70/30");
+  ok(pickDeathVariant({ hash: 0.42 }) === pickDeathVariant({ hash: 0.42 }), "variant pick is deterministic");
+
+  // Launch arc bounds: the fling (lift·1.6 in the view) stays ≤ 0.7m and the
+  // body never digs below ground; crumple visibly collapses first.
+  let maxLift = 0;
+  let minLift = 0;
+  let crumpleDip = 1;
+  for (let i = 0; i <= 100; i++) {
+    sampleDeath("launch", i / 100, s);
+    maxLift = Math.max(maxLift, s.lift);
+    minLift = Math.min(minLift, s.lift);
+    sampleDeath("crumple", i / 100, s);
+    crumpleDip = Math.min(crumpleDip, s.scaleY);
+  }
+  ok(maxLift > 0.1 && maxLift * 1.6 <= 0.7, `launch fling bounded ≤0.7m (peak ${(maxLift * 1.6).toFixed(2)}m)`);
+  ok(minLift >= 0, "launch lift never goes negative");
+  ok(crumpleDip < 0.7, `crumple collapses before tipping (scaleY dips to ${crumpleDip.toFixed(2)})`);
+
+  // Flop roll is monotonic — no jitter on the way down.
+  let prevRot = -1;
+  let mono = true;
+  for (let i = 0; i <= 50; i++) {
+    sampleDeath("flop", i / 50, s);
+    if (s.rotZFrac < prevRot - 1e-9) mono = false;
+    prevRot = s.rotZFrac;
+  }
+  ok(mono, "flop roll is monotonic");
+
+  // Spawn claw-up: starts buried with reaching arms, lands level (no pop when
+  // the locomotion layer takes over).
+  const inp = newLocoInput();
+  const pose = newPose();
+  ACTIONS.spawn.sample(0, 1, resetPose(pose), inp, {}, spec);
+  ok(pose.rootY < -0.5 && pose.armL.liftZ > 1, "spawn starts buried, arms reaching");
+  ACTIONS.spawn.sample(0.9999, 1, resetPose(pose), inp, {}, spec);
+  ok(Math.abs(pose.rootY) < 0.01 && Math.abs(pose.scaleY - 1) < 0.01, "spawn rise ends level with the walk pose");
+}
+
 console.log(fail === 0 ? "ALL ANIM3D CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

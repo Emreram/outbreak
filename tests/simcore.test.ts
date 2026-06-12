@@ -77,12 +77,15 @@ hostiles.animalDelay = 1e9;
   const def = getZombie("shambler")!;
   const e = hostiles.spawnEnemy(sim, def, sim.player.x + 60, sim.player.y)!;
   const hp0 = state.player.hp;
+  let clawId = -1;
+  sim.events.on("enemyAttack", (p) => (clawId = p.id));
   // Act: stand still for 3 seconds — it should close and claw.
   run(sim, 180);
   // Assert.
   ok(e.state === "chase", "adjacent shambler aggroes (noise + aggro radius)");
   ok(state.player.hp < hp0, `contact attacks land (hp ${hp0} → ${state.player.hp})`);
   ok(state.recentEvents.some((l) => l.includes("Claws") || l.includes("Bitten")), "the hit wrote a recent event");
+  ok(clawId === e.id, "enemyAttack telegraph fired for the clawing enemy (anim WS5 hook)");
 }
 
 // --- melee kill pipeline ---------------------------------------------------------------
@@ -96,7 +99,11 @@ hostiles.animalDelay = 1e9;
   const kills0 = hostiles.kills;
   const corpses0 = hostiles.corpses.length;
   let removed = false;
-  sim.events.on("enemyRemoved", () => (removed = true));
+  let removedDirLen = 0;
+  sim.events.on("enemyRemoved", (p) => {
+    removed = true;
+    removedDirLen = Math.hypot(p.dirX ?? 0, p.dirY ?? 0);
+  });
   // Act: swing until THIS one dies (fists, cooldown-gated, ~0.5s per swing).
   for (let i = 0; i < 60 && hostiles.enemies.includes(target); i++) {
     combat.meleeAttack(sim);
@@ -108,6 +115,7 @@ hostiles.animalDelay = 1e9;
   ok(skillXp(state, "combat") > xp0, "combat XP granted on the kill");
   ok(hostiles.corpses.length > corpses0, "a searchable corpse record remains");
   ok(removed, "enemyRemoved event fired for the view layer");
+  ok(removedDirLen > 0, "the melee kill carried its direction (anim WS6 death-tween hook)");
   // Clean the arena so later sections are hermetic (despawn stragglers, heal).
   hostiles.enemies.length = 0;
   state.player.hp = 100;

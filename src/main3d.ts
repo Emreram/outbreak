@@ -593,8 +593,9 @@ async function boot(): Promise<void> {
 
   window.addEventListener("resize", () => engine.resize());
 
-  // Diagnostics hook for the headless smoke harness (read-only).
-  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state, caps };
+  // Diagnostics hook for the headless smoke + motion-probe harnesses
+  // (read-only; the anim probe drives dev-only kill scenarios through it).
+  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state, caps, hostiles };
 }
 
 void boot();

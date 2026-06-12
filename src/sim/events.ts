@@ -37,8 +37,9 @@ export interface SimEventMap {
   enemyAttack: { id: number; x: number; y: number };
   /** A spitter wound up an acid glob (before the projectile spawns). */
   enemySpit: { id: number; angle: number };
-  /** corpse=true → the body converts to a lingering searchable corpse. */
-  enemyRemoved: { id: number; corpse: boolean };
+  /** corpse=true → the body converts to a lingering searchable corpse.
+   *  dir/crit/explosive carry the kill context for death-animation variants. */
+  enemyRemoved: { id: number; corpse: boolean; dirX?: number; dirY?: number; crit?: boolean; explosive?: boolean };
   corpseFaded: { id: number };
   animalSpawned: { id: number };
   animalRemoved: { id: number; killed: boolean };

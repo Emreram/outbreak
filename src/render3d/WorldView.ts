@@ -31,6 +31,8 @@ import { applyPose, buildHumanoid, buildQuadruped, lookOfZombie, poseCorpse, typ
 import { AnimController, newLocoInput, type Pose } from "./anim/AnimController";
 import { HUMANOID_REGISTRY } from "./anim/actions";
 import { footPlants, phaseFor } from "./anim/locomotion";
+import { DEATH_DURATION, finalYawSpin, pickDeathVariant, sampleDeath, type DeathSample, type DeathVariant } from "./anim/deathTweens";
+import { clamp01, easeInQuad, easeOutBack } from "./anim/easing";
 import { CombatFx } from "./fx/CombatFx";
 
 const FLOAT_POOL = 18;
@@ -44,6 +46,28 @@ interface EnemyView {
   pose: Readonly<Pose>;
   prevPhase: number;
 }
+
+/** A rig mid-death-tween (animation plan WS6) — ends exactly on poseCorpse. */
+interface DyingRig {
+  rig: HumanoidRig;
+  recId: number;
+  variant: DeathVariant;
+  side: 1 | -1;
+  startYaw: number;
+  /** Start position (world m) → slides toward the corpse record position. */
+  sx: number;
+  sy: number;
+  sz: number;
+  /** Kill direction (unit, world X/Z plane) — the launch arc travels along it. */
+  dirX: number;
+  dirY: number;
+  corpse: { x: number; y: number; z: number; simX: number; simY: number };
+  t0: number;
+  dusted: boolean;
+}
+
+const ANIMAL_POP_MS = 200;
+const ANIMAL_DIE_MS = 400;
 
 export class WorldView {
   readonly ui: AdvancedDynamicTexture;
@@ -59,6 +83,11 @@ export class WorldView {
   private lodFlip = false;
   /** Fallen rigs reposed in place (WS7) — keyed by corpse record id. */
   private readonly corpses = new Map<number, HumanoidRig>();
+  /** Rigs mid-death-tween (WS6). */
+  private readonly dying: DyingRig[] = [];
+  private readonly deathScratch: DeathSample = { rotZFrac: 0, slide: 1, lift: 0, scaleY: 1, yawSpin: 0 };
+  /** Animal pop-in / tip-over micro-tweens (WS6). */
+  private readonly animalFx: { rig: QuadRig; t0: number; kind: "pop" | "die" }[] = [];
   /** Hit-flash expiry per enemy id (WS7). */
   private readonly flashes = new Map<number, number>();
   private readonly drops = new Map<number, { mesh: Mesh; born: number; glow: Mesh; beam: Mesh | null; rank: number }>();
@@ -129,9 +158,11 @@ export class WorldView {
         },
         HUMANOID_REGISTRY,
       );
-      this.enemies.set(id, { rig, ctrl, pose: ctrl.tick(0, this.locoInp), prevPhase: 0 });
+      const view: EnemyView = { rig, ctrl, pose: ctrl.tick(0, this.locoInp), prevPhase: 0 };
+      ctrl.play("spawn"); // claw-up out of the ground (WS6)
+      this.enemies.set(id, view);
     });
-    ev.on("enemyRemoved", ({ id, corpse }) => {
+    ev.on("enemyRemoved", ({ id, corpse, dirX, dirY, crit, explosive }) => {
       const v = this.enemies.get(id);
       this.enemies.delete(id);
       this.flashes.delete(id);
@@ -139,13 +170,28 @@ export class WorldView {
       const rig = v.rig;
       this.shadows?.removeActorCaster(rig.body);
       if (corpse) {
-        // The matching record is the newest one (kill-pipeline order): repose
-        // the SAME rig as the fallen body instead of swapping in a slab.
+        // The matching record is the newest one (kill-pipeline order): the
+        // SAME rig animates its fall (WS6) and then becomes the corpse.
         const rec = this.hostiles.corpses[this.hostiles.corpses.length - 1];
         if (rec) {
           const wp = simToWorld(rec.x, rec.y, groundHeightAt(rec.x, rec.y), this.tmp);
-          poseCorpse(rig, wp.x, wp.y, wp.z, Math.random() < 0.5 ? 1 : -1, rig.root.rotation.y + (Math.random() - 0.5) * 0.5);
-          this.corpses.set(rec.id, rig);
+          const hash = ((rec.id * 2654435761) >>> 16) % 1000 / 1000;
+          const dl = Math.hypot(dirX ?? 0, dirY ?? 0);
+          this.dying.push({
+            rig,
+            recId: rec.id,
+            variant: pickDeathVariant({ crit, explosive, hash }),
+            side: hash > 0.5 ? 1 : -1,
+            startYaw: rig.root.rotation.y,
+            sx: rig.root.position.x,
+            sy: rig.root.position.y,
+            sz: rig.root.position.z,
+            dirX: dl > 0 ? (dirX as number) / dl : 0,
+            dirY: dl > 0 ? (dirY as number) / dl : 0,
+            corpse: { x: wp.x, y: wp.y, z: wp.z, simX: rec.x, simY: rec.y },
+            t0: this.sim.now,
+            dusted: false,
+          });
           return;
         }
       }
@@ -159,16 +205,28 @@ export class WorldView {
       const head = a.def.kind === "deer" ? 0x8a5f38 : undefined;
       const rig = buildQuadruped(this.scene, `animal${id}`, body, a.def.scale, head);
       this.shadows?.addActorCaster(rig.body);
+      rig.root.scaling.setAll(0.01);
+      this.animalFx.push({ rig, t0: this.sim.now, kind: "pop" }); // pop-in (WS6)
       this.animals.set(id, rig);
     });
-    ev.on("animalRemoved", ({ id }) => {
+    ev.on("animalRemoved", ({ id, killed }) => {
       const rig = this.animals.get(id);
-      if (rig) this.shadows?.removeActorCaster(rig.body);
-      rig?.dispose();
       this.animals.delete(id);
+      if (!rig) return;
+      this.shadows?.removeActorCaster(rig.body);
+      const popping = this.animalFx.findIndex((f) => f.rig === rig);
+      if (popping >= 0) this.animalFx.splice(popping, 1); // died mid-pop
+      if (killed) this.animalFx.push({ rig, t0: this.sim.now, kind: "die" }); // tip-over then dispose
+      else rig.dispose();
     });
 
     ev.on("corpseFaded", ({ id }) => {
+      const mid = this.dying.findIndex((d) => d.recId === id);
+      if (mid >= 0) {
+        this.dying[mid].rig.dispose(); // raced the tween — finish instantly
+        this.dying.splice(mid, 1);
+        return;
+      }
       this.corpses.get(id)?.dispose();
       this.corpses.delete(id);
     });
@@ -361,6 +419,8 @@ export class WorldView {
       rig.root.rotation.y = -(an.facing + sway);
       rig.root.scaling.y = 1 + (an.speed() > 4 ? Math.sin(nowMs * 0.028 + an.phase) * 0.04 : 0);
     }
+    this.tickDying();
+    this.tickAnimalFx();
     this.fx.update();
     for (const p of this.combat.projectiles) {
       const m = this.projectiles.get(p.id);
@@ -418,6 +478,64 @@ export class WorldView {
     }
 
     this.labels.update(px, py);
+  }
+
+  /** Death tweens (WS6) on sim time — hitstop/pause freeze the fall. Each
+   *  tween's t=1 channels equal poseCorpse exactly (asserted via DEATH_END in
+   *  tests), so the corpses-map handover below is seamless. */
+  private tickDying(): void {
+    if (this.dying.length === 0) return;
+    const s = this.deathScratch;
+    for (let i = this.dying.length - 1; i >= 0; i--) {
+      const d = this.dying[i];
+      const t = (this.sim.now - d.t0) / DEATH_DURATION[d.variant];
+      if (t >= 1) {
+        // hand over to the corpse pool at the EXACT record position (search
+        // targeting stays honest); launch bakes its tumble into the final yaw
+        poseCorpse(d.rig, d.corpse.x, d.corpse.y, d.corpse.z, d.side, d.startYaw + finalYawSpin(d.variant));
+        this.corpses.set(d.recId, d.rig);
+        this.dying.splice(i, 1);
+        continue;
+      }
+      sampleDeath(d.variant, t, s);
+      const r = d.rig.root;
+      r.rotation.y = d.startYaw + s.yawSpin;
+      r.rotation.z = d.side * (Math.PI / 2) * s.rotZFrac;
+      r.scaling.y = s.scaleY;
+      // the launch arc travels along the kill direction in step with its lift
+      const fling = s.lift * 1.6;
+      r.position.x = d.sx + (d.corpse.x - d.sx) * s.slide + d.dirX * fling;
+      r.position.z = d.sz + (d.corpse.z - d.sz) * s.slide + d.dirY * fling;
+      // the corpse root rides 0.16 above ground (poseCorpse) — raise it as the
+      // body rolls flat so there's no pop at either end
+      r.position.y = d.sy + (d.corpse.y + 0.16 - d.sy) * s.rotZFrac + s.lift;
+      if (!d.dusted && t >= 0.78) {
+        d.dusted = true;
+        this.fx.dust(d.corpse.simX, d.corpse.simY, 3); // ground-contact puff
+      }
+    }
+  }
+
+  /** Animal micro-tweens (WS6): spawn pop-in scale and tip-over death. */
+  private tickAnimalFx(): void {
+    if (this.animalFx.length === 0) return;
+    for (let i = this.animalFx.length - 1; i >= 0; i--) {
+      const f = this.animalFx[i];
+      const t = (this.sim.now - f.t0) / (f.kind === "pop" ? ANIMAL_POP_MS : ANIMAL_DIE_MS);
+      if (t >= 1) {
+        if (f.kind === "pop") f.rig.root.scaling.setAll(1);
+        else f.rig.dispose(); // loot pop + blood carry the beat past this
+        this.animalFx.splice(i, 1);
+        continue;
+      }
+      if (f.kind === "pop") {
+        const k = 0.01 + 0.99 * easeOutBack(clamp01(t));
+        f.rig.root.scaling.set(k, k, k);
+      } else {
+        // keel onto the side (roll about the body's forward axis)
+        f.rig.root.rotation.x = (Math.PI / 2) * easeInQuad(clamp01(t));
+      }
+    }
   }
 }
 

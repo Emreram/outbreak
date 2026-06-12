@@ -106,6 +106,21 @@ export const ACTIONS: Record<string, ActionDef> = {
     },
   },
 
+  /** Spawn claw-up (WS6): rises out of the ground, arms reaching. */
+  spawn: {
+    durationMs: 240,
+    priority: 90,
+    rampMs: 240, // ramp = duration → weight fades the WHOLE action out smoothly
+    sample: (t01, _w, pose) => {
+      const k = easeOutCubic(t01);
+      pose.rootY += -0.6 * (1 - k);
+      pose.scaleY *= 0.7 + 0.3 * k;
+      pose.armL.liftZ += 1.2 * (1 - t01);
+      pose.armR.liftZ += 1.1 * (1 - t01);
+      pose.headPitch += -0.25 * (1 - t01);
+    },
+  },
+
   // --- enemy reactions (animation plan WS5) -----------------------------------
   /** Contact-attack lunge: forward snap + clawing arms + a bite of the head. */
   enemy_lunge: {
