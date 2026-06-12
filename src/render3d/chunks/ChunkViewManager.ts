@@ -9,6 +9,7 @@ import { Color3 } from "@babylonjs/core/Maths/math.color";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { EventBus } from "../../sim/events";
 import type { SimChunkStore } from "../../sim/world";
+import type { ShadowDirector } from "../env/ShadowDirector";
 import { meshChunk } from "./ChunkMesher";
 import { createTileAtlas } from "./TileAtlas";
 import { createChunkMaterials, type FluidMaterials } from "./materials";
@@ -19,12 +20,17 @@ export class ChunkViewManager {
   private readonly queue: { cx: number; cy: number }[] = [];
   private readonly atlasMat: StandardMaterial;
   private readonly colorMat: StandardMaterial;
+  /** Shadow hookup (WS4) — chunk walls/trees cast, ground receives. Passed at
+   *  construction because the initial ring meshes immediately. */
+  private readonly shadows: ShadowDirector | null;
 
   constructor(
     private readonly scene: Scene,
     private readonly store: SimChunkStore,
     events: EventBus,
+    shadows?: ShadowDirector,
   ) {
+    this.shadows = shadows ?? null;
     const atlas = createTileAtlas(scene);
     this.atlasMat = new StandardMaterial("chunkAtlasMat", scene);
     this.atlasMat.diffuseTexture = atlas;
@@ -66,12 +72,24 @@ export class ChunkViewManager {
     bind(m.lava, this.materials.lava);
     bind(m.roofs, this.materials.roof);
     this.views.set(k, meshes);
+
+    // Shadows (WS4): ground + walls receive; walls + trees cast (the custom
+    // ShaderMaterial fluids/roofs do neither — called out in the plan).
+    if (this.shadows?.enabled) {
+      if (m.ground) m.ground.receiveShadows = true;
+      if (m.walls) m.walls.receiveShadows = true;
+      const casters: Mesh[] = [];
+      if (m.walls) casters.push(m.walls);
+      if (m.trees) casters.push(m.trees);
+      this.shadows.setChunkCasters(k, casters);
+    }
   }
 
   private drop(cx: number, cy: number): void {
     const k = `${cx},${cy}`;
     const meshes = this.views.get(k);
     if (!meshes) return;
+    this.shadows?.dropChunk(k);
     for (const mesh of meshes) mesh.dispose();
     this.views.delete(k);
   }

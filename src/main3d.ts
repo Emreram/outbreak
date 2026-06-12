@@ -18,6 +18,8 @@ import { PropInstancer } from "./render3d/chunks/PropInstancer";
 import { TimeOfDayDirector } from "./render3d/env/TimeOfDayDirector";
 import { PostFxDirector } from "./render3d/env/PostFxDirector";
 import { SkyDome } from "./render3d/env/SkyDome";
+import { ShadowDirector } from "./render3d/env/ShadowDirector";
+import { BlobShadows } from "./render3d/env/BlobShadows";
 import { WeatherFx } from "./render3d/env/WeatherFx";
 import { WorldView } from "./render3d/WorldView";
 import { MinimapOverlay } from "./render3d/ui/MinimapOverlay";
@@ -33,7 +35,7 @@ import { equippedMeleeDef, equippedRangedDef } from "./game/inventory";
 import { defOf } from "./game/items/catalog";
 import { RARITY_META } from "./game/items/rarity";
 import { chunkVehicles, resolveVehicle } from "./game/vehicles";
-import { TILE_SIZE } from "./game/constants";
+import { CHUNK_TILES, TILE_SIZE } from "./game/constants";
 import { DEFAULT_PLAYER_JACKET } from "./engine/textures";
 import { LootReveal, type RevealCard } from "./ui/LootReveal";
 import { EncounterModal } from "./ui/EncounterModal";
@@ -77,6 +79,8 @@ async function boot(): Promise<void> {
   const hemi = new HemisphericLight("ambient", new Vector3(0, 1, 0), scene);
   const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, 0.55), scene);
   const tod = new TimeOfDayDirector();
+  const shadows = new ShadowDirector(sun, caps);
+  const blobs = caps.shadows === "blob" ? new BlobShadows(scene) : null;
 
   // --- state + sim (same save key, same flags as the Phaser build) ----------
   // Load order (plan §4.3): localStorage v4 (the frozen oracle path) first;
@@ -106,8 +110,9 @@ async function boot(): Promise<void> {
     };
   }
 
-  const chunkView = new ChunkViewManager(scene, sim.world, sim.events);
+  const chunkView = new ChunkViewManager(scene, sim.world, sim.events, shadows);
   const props = new PropInstancer(scene, sim.world, sim.events);
+  props.shadows = shadows;
   // Seed/persisted vehicles render as parked blockouts (driving lands with the
   // M4 vehicle system; reconcile semantics are the sim's computeWantedVehicles).
   props.extras = () => {
@@ -121,6 +126,7 @@ async function boot(): Promise<void> {
     return out;
   };
   const view = new WorldView(scene, sim, hostiles, combat, drops);
+  view.shadows = shadows;
   const weather = new WeatherFx(scene);
   const minimap = new MinimapOverlay(document.body);
 
@@ -133,6 +139,7 @@ async function boot(): Promise<void> {
     scale: 1.05,
   });
   const player = playerRig.root;
+  shadows.addActorCaster(playerRig.body);
 
   // --- loot ceremony (the DOM LootReveal survives untouched — plan §6.3) -----
   const reveal = new LootReveal(() => {
@@ -510,8 +517,11 @@ async function boot(): Promise<void> {
       indoor,
     });
 
+    const CHUNK_PX = CHUNK_TILES * TILE_SIZE;
+    shadows.update(Math.floor(ix / CHUNK_PX), Math.floor(iy / CHUNK_PX));
     props.update(performance.now(), ix, iy);
     view.update(a, performance.now(), ix, iy);
+    blobs?.update(sim, hostiles, a);
     weather.update(weatherEff, player.position.x, player.position.z, dtMs);
     minimap.render(state.seed, state);
 

@@ -89,6 +89,12 @@ const CHEST_TINT: Record<ContainerKind, number> = {
 
 export const SEARCHED_GRAY = 0.42; // brightness of rummaged props (0x5f5f5f-ish)
 
+/** Tall/bulky kinds whose thin-instance pools cast sun shadows (WS4). */
+const CASTER_KINDS = new Set([
+  "tree", "pine", "car", "wreck", "veh_sedan", "veh_pickup", "veh_van",
+  "boulder", "dumpster", "locker_prop", "fridge_prop", "shelf", "bookshelf", "tent",
+]);
+
 interface Pool {
   mesh: Mesh;
   /** Instance records for rebuilds + sway. */
@@ -104,6 +110,8 @@ export class PropInstancer {
   private dirty = true;
   /** Optional extra instances (seed/persisted vehicles) merged at rebuild. */
   extras: (() => { kind: string; x: number; y: number; yaw?: number }[]) | null = null;
+  /** Optional shadow hookup (WS4): tall pools cast, all pools receive. */
+  shadows: import("../env/ShadowDirector").ShadowDirector | null = null;
 
   constructor(
     private readonly scene: Scene,
@@ -156,6 +164,10 @@ export class PropInstancer {
     mesh.material = this.material;
     mesh.isPickable = false;
     mesh.alwaysSelectAsActiveMesh = true; // thin instances span chunks; skip per-mesh culling
+    if (this.shadows?.enabled) {
+      mesh.receiveShadows = true;
+      if (CASTER_KINDS.has(kind)) this.shadows.addPoolCaster(mesh);
+    }
     return mesh;
   }
 

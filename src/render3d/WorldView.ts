@@ -34,6 +34,8 @@ const DECAL_POOL = 48;
 export class WorldView {
   readonly ui: AdvancedDynamicTexture;
   readonly fx: CombatFx;
+  /** Optional shadow hookup (WS4): actor body meshes cast. */
+  shadows: import("./env/ShadowDirector").ShadowDirector | null = null;
   private readonly labels: Labels;
   private readonly enemies = new Map<number, HumanoidRig>();
   private readonly animals = new Map<number, QuadRig>();
@@ -100,10 +102,14 @@ export class WorldView {
     ev.on("enemySpawned", ({ id }) => {
       const e = this.hostiles.enemies.find((x) => x.id === id);
       if (!e) return;
-      this.enemies.set(id, buildHumanoid(this.scene, `enemy${id}`, lookOfZombie(e.def)));
+      const rig = buildHumanoid(this.scene, `enemy${id}`, lookOfZombie(e.def));
+      this.shadows?.addActorCaster(rig.body);
+      this.enemies.set(id, rig);
     });
     ev.on("enemyRemoved", ({ id }) => {
-      this.enemies.get(id)?.dispose();
+      const rig = this.enemies.get(id);
+      if (rig) this.shadows?.removeActorCaster(rig.body);
+      rig?.dispose();
       this.enemies.delete(id);
     });
 
@@ -112,10 +118,14 @@ export class WorldView {
       if (!a) return;
       const body = a.def.kind === "rabbit" ? 0xd8c8b0 : a.def.kind === "deer" ? 0xa97a4a : 0x6b5236;
       const head = a.def.kind === "deer" ? 0x8a5f38 : undefined;
-      this.animals.set(id, buildQuadruped(this.scene, `animal${id}`, body, a.def.scale, head));
+      const rig = buildQuadruped(this.scene, `animal${id}`, body, a.def.scale, head);
+      this.shadows?.addActorCaster(rig.body);
+      this.animals.set(id, rig);
     });
     ev.on("animalRemoved", ({ id }) => {
-      this.animals.get(id)?.dispose();
+      const rig = this.animals.get(id);
+      if (rig) this.shadows?.removeActorCaster(rig.body);
+      rig?.dispose();
       this.animals.delete(id);
     });
 
