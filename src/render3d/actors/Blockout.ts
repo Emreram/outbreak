@@ -15,6 +15,7 @@ import { Color3 } from "@babylonjs/core/Maths/math.color";
 import type { Scene } from "@babylonjs/core/scene";
 import type { ZombieDef } from "../../game/enemies/types";
 import { attachFeatures } from "./features";
+import { newPose, resetPose, type Pose } from "../anim/AnimController";
 
 /** Body archetype canvas dims (bw, bh, headR, headOff, armLen) — the EXACT
  *  zombieSprites.ts table; 64px canvas ≙ ~1.8m figure → scale px·0.028m. */
@@ -227,8 +228,107 @@ export function lookOfZombie(def: ZombieDef): HumanoidLook {
   };
 }
 
+// --- pose application (animation plan WS1) -----------------------------------
+
+interface V3Like {
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface NodeLike {
+  rotation: V3Like;
+  scaling: V3Like;
+  position: V3Like;
+}
+
+/** Structural rig slice so headless tests drive applyPose with plain objects.
+ *  TransformNodes satisfy it; v3 joints are optional until WS2 adds them. */
+export interface PoseRig {
+  root: NodeLike;
+  armL: NodeLike;
+  armR: NodeLike;
+  hipL?: NodeLike | null;
+  hipR?: NodeLike | null;
+  torso?: NodeLike | null;
+  neck?: NodeLike | null;
+  elbowL?: NodeLike | null;
+  elbowR?: NodeLike | null;
+  kneeL?: NodeLike | null;
+  kneeR?: NodeLike | null;
+}
+
+/**
+ * Write a composed Pose onto rig transforms. Channel conventions (model faces
+ * +X; positive rotation.z raises a +X limb):
+ *   yawOffset → root yaw added to -facing (locomotion passes -sway: 2D parity)
+ *   roll → root.rotation.z · pitch (fwd lean, +down) → torso.rotation.z = -pitch
+ *   armX.swingY → shoulder rotation.y · armX.liftZ → shoulder rotation.z (+ = raise)
+ *   elbowX (+ = curl inward) → elbow rotation.y (mirrored R)
+ *   hipX → hip rotation.z (direct) · kneeX (+ = bend back) → knee rotation.z = -knee
+ *   headPitch (+ = nod down) → neck rotation.z = -headPitch · headYaw → neck rotation.y
+ *   rootY/rootX → position offsets — MUST be applied after the view sets
+ *   root.position from the sim (the view re-sets it every frame, so adding here
+ *   never accumulates).
+ */
+export function applyPose(rig: PoseRig, pose: Readonly<Pose>, facing: number): void {
+  rig.root.rotation.y = -facing + pose.yawOffset;
+  rig.root.rotation.z = pose.roll;
+  rig.root.scaling.y = pose.scaleY;
+  if (pose.rootY !== 0) rig.root.position.y += pose.rootY;
+  if (pose.rootX !== 0) {
+    rig.root.position.x += Math.cos(facing) * pose.rootX;
+    rig.root.position.z += Math.sin(facing) * pose.rootX;
+  }
+  rig.armL.rotation.y = pose.armL.swingY;
+  rig.armL.rotation.z = pose.armL.liftZ;
+  rig.armR.rotation.y = pose.armR.swingY;
+  rig.armR.rotation.z = pose.armR.liftZ;
+  if (rig.hipL) rig.hipL.rotation.z = pose.hipL;
+  if (rig.hipR) rig.hipR.rotation.z = pose.hipR;
+  if (rig.torso) {
+    rig.torso.rotation.z = -pose.pitch;
+    rig.torso.rotation.y = pose.torsoTwist;
+  }
+  if (rig.neck) {
+    rig.neck.rotation.z = -pose.headPitch;
+    rig.neck.rotation.y = pose.headYaw;
+  }
+  if (rig.elbowL) rig.elbowL.rotation.y = pose.elbowL;
+  if (rig.elbowR) rig.elbowR.rotation.y = -pose.elbowR;
+  if (rig.kneeL) rig.kneeL.rotation.z = -pose.kneeL;
+  if (rig.kneeR) rig.kneeR.rotation.z = -pose.kneeR;
+}
+
+const scratchPose: Pose = newPose();
+
+/** Fill a Pose with the v2 walk math (sway/bob/counter-swing) — the cheap
+ *  far-LOD locomotion and the wrapper body below. Exported for tests. */
+export function fillBasicWalkPose(
+  pose: Pose,
+  phaseRad: number,
+  moving: boolean,
+  sway: number,
+  bob: number,
+  armSwing: number,
+): Pose {
+  pose.yawOffset = -sway;
+  pose.roll = sway * 0.6;
+  pose.scaleY = 1 + bob;
+  const swing = moving ? Math.sin(phaseRad) * armSwing : 0;
+  pose.armL.swingY = swing;
+  pose.armR.swingY = -swing;
+  pose.armL.liftZ = -0.08 + (moving ? Math.cos(phaseRad) * 0.06 : 0); // slight reach droop
+  pose.armR.liftZ = -0.08 - (moving ? Math.cos(phaseRad) * 0.06 : 0);
+  const step = moving ? Math.sin(phaseRad) * Math.min(0.55, armSwing * 0.8) : 0;
+  pose.hipL = -step;
+  pose.hipR = step;
+  return pose;
+}
+
 /** Per-frame humanoid pose: facing yaw + sway + bob + counter-swinging limbs.
- *  The 2D-parity math is unchanged — only the pivots moved to joints. */
+ *  Now a thin wrapper over the Pose pipeline (bit-parity with the v2 math —
+ *  asserted in tests); kept permanently as the far-LOD path (plan D9). */
 export function poseHumanoid(
   rig: HumanoidRig,
   facing: number,
@@ -238,21 +338,9 @@ export function poseHumanoid(
   bob: number,
   armSwing: number,
 ): void {
-  // 2D parity: the sprite's rotation = facing + sway (a yaw wobble); 3D adds a
-  // half-amplitude roll so the shamble reads as body lean, not twist.
-  rig.root.rotation.y = -(facing + sway);
-  rig.root.rotation.z = sway * 0.6;
-  rig.root.scaling.y = 1 + bob;
-  const swing = moving ? Math.sin(phaseRad) * armSwing : 0;
-  rig.armL.rotation.y = swing;
-  rig.armR.rotation.y = -swing;
-  rig.armL.rotation.z = -0.08 + (moving ? Math.cos(phaseRad) * 0.06 : 0); // slight reach droop
-  rig.armR.rotation.z = -0.08 - (moving ? Math.cos(phaseRad) * 0.06 : 0);
-  if (rig.hipL && rig.hipR) {
-    const step = moving ? Math.sin(phaseRad) * Math.min(0.55, armSwing * 0.8) : 0;
-    rig.hipL.rotation.z = -step;
-    rig.hipR.rotation.z = step;
-  }
+  const p = resetPose(scratchPose);
+  fillBasicWalkPose(p, phaseRad, moving, sway, bob, armSwing);
+  applyPose(rig, p, facing);
 }
 
 /** Repose a rig as a fallen corpse (WS7): rolled flat, sunk to the ground. */
