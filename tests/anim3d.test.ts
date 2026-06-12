@@ -460,5 +460,63 @@ const ok = (cond: boolean, msg: string) => {
   ok(pose.armL.swingY === 0 && pose.hipL === 0 && pose.rootY === 0, "idle quad rests its legs");
 }
 
+// --- WS8 world-transient curves ----------------------------------------------------------
+{
+  const { DROP_ARC_MS, LID_MAX_RAD, LID_OPEN_MS, dropArcY, lidAngle, magnetLerp, magnetScale, rummagePulse } = await import(
+    "../src/render3d/anim/transientCurves"
+  );
+
+  // Chest lid: closed at 0, fully open at 320ms, NEVER past −110° (clamped),
+  // and monotonic on the way open.
+  ok(lidAngle(0) === 0, "lid starts closed");
+  ok(lidAngle(LID_OPEN_MS) === LID_MAX_RAD && lidAngle(LID_OPEN_MS + 500) === LID_MAX_RAD, "lid opens to exactly −110° and holds");
+  let minLid = 0;
+  let lidMono = true;
+  let prevLid = 0.001;
+  for (let i = 0; i <= 64; i++) {
+    const a = lidAngle((i / 64) * LID_OPEN_MS);
+    minLid = Math.min(minLid, a);
+    if (a > prevLid + 1e-12) lidMono = false;
+    prevLid = a;
+  }
+  ok(minLid >= LID_MAX_RAD, "lid clamps at −110° (no overshoot past the hinge)");
+  ok(lidMono, "lid swing is monotonic");
+
+  // Drop arc: starts 0.85 above rest, two bounce apexes (h·r², h·r⁴), never
+  // digs, and is EXACTLY at rest from 620ms on.
+  ok(dropArcY(0) === 0.85, "arc starts 0.85m above rest");
+  ok(dropArcY(DROP_ARC_MS) === 0 && dropArcY(DROP_ARC_MS + 200) === 0, "arc is at rest from 620ms on");
+  let minY = 1;
+  let apex1 = 0;
+  let apex2 = 0;
+  const t1 = DROP_ARC_MS / (1 + 0.7 + 2 * 0.35 * 0.35); // first-fall ms (closed form)
+  const tb1 = 0.7 * t1;
+  for (let i = 0; i <= 600; i++) {
+    const t = (i / 600) * DROP_ARC_MS;
+    const y = dropArcY(t);
+    minY = Math.min(minY, y);
+    if (t > t1 && t <= t1 + tb1) apex1 = Math.max(apex1, y);
+    if (t > t1 + tb1) apex2 = Math.max(apex2, y);
+  }
+  ok(minY >= 0, "arc never digs below rest");
+  ok(Math.abs(apex1 - 0.85 * 0.35 * 0.35) < 0.002, `bounce 1 apex ≈ h·r² (${apex1.toFixed(3)})`);
+  ok(Math.abs(apex2 - 0.85 * 0.35 ** 4) < 0.001 && apex2 > 0.005, `bounce 2 apex ≈ h·r⁴ (${apex2.toFixed(4)})`);
+
+  // Magnet flight: reaches the player exactly at the sim's 160ms pickup.
+  ok(magnetLerp(0) === 0 && magnetLerp(160) === 1 && magnetLerp(220) === 1, "magnet t=1 reaches the target at 160ms");
+  ok(magnetScale(0) === 1 && Math.abs(magnetScale(160) - 0.4) < 1e-12, "magnet shrinks the cube to 0.4");
+  let magMono = true;
+  let prevMag = -1;
+  for (let i = 0; i <= 40; i++) {
+    const v = magnetLerp((i / 40) * 160);
+    if (v < prevMag - 1e-12) magMono = false;
+    prevMag = v;
+  }
+  ok(magMono, "magnet flight is monotonic");
+
+  // Rummage cadence: pulses each 400ms boundary, once.
+  ok(!rummagePulse(0, 399) && rummagePulse(399, 401) && !rummagePulse(401, 780) && rummagePulse(780, 805), "rummage pulses on each 400ms boundary");
+}
+
 console.log(fail === 0 ? "ALL ANIM3D CHECKS PASSED" : `${fail} CHECK(S) FAILED`);
 process.exit(fail === 0 ? 0 : 1);

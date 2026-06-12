@@ -34,6 +34,8 @@ import { footPlants, phaseFor } from "./anim/locomotion";
 import { quadStrideRate } from "./anim/quadGait";
 import { DEATH_DURATION, finalYawSpin, pickDeathVariant, sampleDeath, type DeathSample, type DeathVariant } from "./anim/deathTweens";
 import { clamp01, easeInQuad, easeOutBack } from "./anim/easing";
+import { DROP_ARC_MS, dropArcY, magnetLerp, magnetScale } from "./anim/transientCurves";
+import { Transients } from "./actors/transients";
 import { CombatFx } from "./fx/CombatFx";
 
 const FLOAT_POOL = 18;
@@ -82,6 +84,8 @@ export class WorldView {
   readonly ui: AdvancedDynamicTexture;
   readonly fx: CombatFx;
   readonly fxTex: FxTextures;
+  /** World-object transients (WS8): chest lids, spark blips. */
+  readonly transients: Transients;
   /** Optional shadow hookup (WS4): actor body meshes cast. */
   shadows: import("./env/ShadowDirector").ShadowDirector | null = null;
   private readonly labels: Labels;
@@ -146,6 +150,7 @@ export class WorldView {
 
     this.fxTex = new FxTextures(scene);
     this.fx = new CombatFx(scene, sim, hostiles, this.fxTex);
+    this.transients = new Transients(scene, this.fx);
     this.bind();
   }
 
@@ -261,6 +266,14 @@ export class WorldView {
     ev.on("enemySpit", ({ id }) => this.enemies.get(id)?.ctrl.play("spit"));
     ev.on("screamRing", ({ id }) => {
       if (id !== undefined) this.enemies.get(id)?.ctrl.play("scream");
+    });
+
+    // Search payoffs (WS8): a real chest swings its lid open with sparks and
+    // a warm blip; prop/corpse searches settle for a rummage puff.
+    ev.on("searchDone", ({ x, y, gid }) => {
+      const isChest = gid !== undefined && this.sim.world.activeChests().some((c) => c.gid === gid);
+      if (isChest) this.transients.openChest(x, y);
+      else this.fx.dust(x, y, 3);
     });
 
     ev.on("dropSpawned", ({ id }) => {
@@ -465,15 +478,36 @@ export class WorldView {
       const rec = this.dropsSys.drops.find((x) => x.id === id);
       if (!rec) continue;
       const g = groundHeightAt(rec.x, rec.y);
-      const bob = Math.sin((nowMs - d.born) * 0.004) * 0.06;
+      const age = nowMs - d.born;
+      if (rec.magnetAt !== null) {
+        // magnet flight (WS8): race to the player on the sim clock (lands in
+        // the bag exactly when the 160ms pickup fires), shrinking as it goes
+        const t = magnetLerp(this.sim.now - rec.magnetAt);
+        const from = simToWorld(rec.x, rec.y, 0.28 + g, this.tmp);
+        const fx = from.x;
+        const fy = from.y;
+        const fz = from.z;
+        const to = simToWorld(px, py, 0.5 + groundHeightAt(px, py), this.tmp);
+        d.mesh.position.set(fx + (to.x - fx) * t, fy + (to.y - fy) * t, fz + (to.z - fz) * t);
+        d.mesh.scaling.setAll(magnetScale(this.sim.now - rec.magnetAt));
+        if (d.glow.isEnabled()) d.glow.setEnabled(false);
+        if (d.beam?.isEnabled()) d.beam.setEnabled(false);
+        continue;
+      }
+      // spawn arc (WS8): pop from 0.85m and double-bounce to rest, then blend
+      // into the idle bob over 150ms
+      const bobT = Math.sin(age * 0.004) * 0.06;
+      const bob = age <= DROP_ARC_MS ? dropArcY(age) : bobT * Math.min(1, (age - DROP_ARC_MS) / 150);
       const wp = simToWorld(rec.x, rec.y, 0.28 + bob + g, this.tmp);
       d.mesh.position.set(wp.x, wp.y, wp.z);
-      d.mesh.rotation.y = (nowMs - d.born) * 0.0012;
+      // tumbles in fast, then lazes (continuous at the handoff)
+      d.mesh.rotation.y = age <= DROP_ARC_MS ? age * 0.004 : DROP_ARC_MS * 0.004 + (age - DROP_ARC_MS) * 0.0012;
       d.glow.position.set(wp.x, g + 0.03, wp.z);
-      const pulse = (0.55 + d.rank * 0.22) * (1 + Math.sin((nowMs - d.born) * 0.003) * 0.12);
+      const pulse = (0.55 + d.rank * 0.22) * (1 + Math.sin(age * 0.003) * 0.12);
       d.glow.scaling.setAll(pulse);
       if (d.beam) d.beam.position.set(wp.x, g + 1.1, wp.z);
     }
+    this.transients.update(nowMs);
 
     // float text rise + fade (800ms)
     const cam = this.scene.activeCamera;

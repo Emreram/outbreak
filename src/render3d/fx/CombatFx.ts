@@ -193,6 +193,24 @@ export class CombatFx {
     });
   }
 
+  /** Gold spark burst — chest-open flourish (animation plan WS8). */
+  sparks(xPx: number, yPx: number, n = 8): void {
+    for (let i = 0; i < n; i++) {
+      const p = this.alloc(this.sprays, 40, 0.045, this.brassMat);
+      const wp = simToWorld(xPx, yPx, 0.45 + groundHeightAt(xPx, yPx), this.tmp);
+      p.mesh.position.set(wp.x, wp.y, wp.z);
+      const a = Math.random() * Math.PI * 2;
+      const sp = 0.5 + Math.random() * 0.9;
+      p.vx = Math.cos(a) * sp;
+      p.vz = Math.sin(a) * sp;
+      p.vy = 1.4 + Math.random() * 1.2;
+      p.life = 380 + Math.random() * 180;
+      p.born = performance.now();
+      p.settleY = 0.03 + groundHeightAt(xPx, yPx);
+      p.live = true;
+    }
+  }
+
   /** Footstep/landing dust puff at a sim position (animation plan WS3). */
   dust(xPx: number, yPx: number, n = 2): void {
     for (let i = 0; i < n; i++) {

@@ -40,14 +40,18 @@ try {
       return { playerHip: z("player_hip1"), playerKnee: z("player_knee1"), enemyHip: enemy };
     });
   const s1 = await sample();
-  await page.waitForTimeout(380);
+  await page.waitForTimeout(130);
   const s2 = await sample();
+  await page.waitForTimeout(130);
+  const s3 = await sample();
   await page.keyboard.up("w");
   for (const k of ["playerHip", "playerKnee", "enemyHip"]) {
-    const a = s1[k];
-    const b = s2[k];
-    const okMove = a !== null && b !== null && Math.abs(a - b) > 0.02 && Math.abs(a) < 1 && Math.abs(b) < 1;
-    console.log(`${okMove ? "ok  " : "FAIL"}: ${k} ${a?.toFixed(3)} -> ${b?.toFixed(3)} (moving + bounded)`);
+    // three samples 130ms apart so a stride-period alias can't fake stillness
+    const v = [s1[k], s2[k], s3[k]];
+    const okMove =
+      v.every((x) => x !== null && Math.abs(x) < 1) &&
+      (Math.abs(v[0] - v[1]) > 0.02 || Math.abs(v[1] - v[2]) > 0.02);
+    console.log(`${okMove ? "ok  " : "FAIL"}: ${k} ${v.map((x) => x?.toFixed(3)).join(" -> ")} (moving + bounded)`);
     if (!okMove && k !== "enemyHip") failed++; // enemies may be idle — informative only
   }
 
@@ -121,6 +125,74 @@ try {
     console.log(`${popped ? "ok  " : "FAIL"}: spawn pop-in scaled the rig up`);
     if (!legOk) failed++;
     if (!popped) failed++;
+  }
+
+  // World transients (anim WS8): a spawned drop rides the bounce arc; a drop
+  // inside the 44px magnet shrinks and lands in the bag; a chest searchDone
+  // swings a pooled lid open.
+  const ws8 = await page.evaluate(async () => {
+    const { sim, scene, drops } = window.__ob3d;
+    const px = sim.player.x;
+    const py = sim.player.y;
+    drops.spawnDrop(sim, px + 100, py, "Cloth", 1); // outside the magnet
+    const rec = drops.drops[drops.drops.length - 1];
+    const mesh = scene.getMeshByName("drop" + rec.id);
+    if (!mesh) return { err: "drop mesh missing" };
+    const ys = [];
+    const s0 = performance.now();
+    await new Promise((done) => {
+      const iv = setInterval(() => {
+        ys.push(mesh.position.y);
+        if (performance.now() - s0 > 800) {
+          clearInterval(iv);
+          done();
+        }
+      }, 30);
+    });
+    // magnet: drop at the player's feet → caught, shrinks, picked up by 600ms
+    drops.spawnDrop(sim, sim.player.x + 6, sim.player.y, "Cloth", 1);
+    const rec2 = drops.drops[drops.drops.length - 1];
+    let shrunk = 1;
+    const m2 = () => scene.getMeshByName("drop" + rec2.id);
+    const s1 = performance.now();
+    while (performance.now() - s1 < 600 && m2()) {
+      const m = m2();
+      if (m) shrunk = Math.min(shrunk, m.scaling.y);
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const pickedUp = !m2();
+    const magDiag = { recAlive: drops.drops.includes(rec2), magnetAt: rec2.magnetAt, simNow: sim.now, paused: sim.paused };
+    // chest lid: fire searchDone with a REAL chest gid (synthetic dev event)
+    const chest = sim.world.activeChests()[0];
+    let lidOpened = false;
+    if (chest) {
+      sim.events.emit("searchDone", { x: chest.x, y: chest.y, empty: false, gid: chest.gid });
+      await new Promise((r) => setTimeout(r, 380));
+      const lid = scene.getTransformNodeByName("lidp0");
+      lidOpened = !!lid && lid.isEnabled() && Math.abs(lid.rotation.x) > 1.5;
+    }
+    return { ys, shrunk, pickedUp, magDiag, hadChest: !!chest, lidOpened };
+  });
+  if (ws8.err) {
+    console.log(`ok  : WS8 transient probe skipped (${ws8.err}) — informative only`);
+  } else {
+    // discard samples taken before the first render positioned the mesh
+    const ys = ws8.ys.filter((y) => y > 0.01);
+    const peak = Math.max(...ys);
+    const rest = ys[ys.length - 1];
+    const arcOk = peak - rest > 0.25 && ys.indexOf(peak) < ys.length / 2;
+    console.log(`${arcOk ? "ok  " : "FAIL"}: drop arc bounces in (peak +${(peak - rest).toFixed(2)}m over rest, settles)`);
+    const magOk = ws8.pickedUp && ws8.shrunk < 0.75;
+    console.log(`${magOk ? "ok  " : "FAIL"}: magnet flight shrinks (min scale ${ws8.shrunk.toFixed(2)}) and lands in the bag`);
+    if (!magOk) console.log(`      diag: ${JSON.stringify(ws8.magDiag)}`);
+    if (!arcOk) failed++;
+    if (!magOk) failed++;
+    if (ws8.hadChest) {
+      console.log(`${ws8.lidOpened ? "ok  " : "FAIL"}: chest searchDone swings the pooled lid open`);
+      if (!ws8.lidOpened) failed++;
+    } else {
+      console.log("ok  : no chest in the loaded ring — lid probe skipped (informative)");
+    }
   }
 
   if (death.err) {

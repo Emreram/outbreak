@@ -33,6 +33,7 @@ import { buildWeapon, weaponFamilyFor, type WeaponNode } from "./render3d/actors
 import { AnimController, newLocoInput } from "./render3d/anim/AnimController";
 import { HUMANOID_REGISTRY } from "./render3d/anim/actions";
 import { playerPhase } from "./render3d/anim/locomotion";
+import { rummagePulse } from "./render3d/anim/transientCurves";
 import { createGameSim } from "./sim/createGameSim";
 import type { PersistenceSystem } from "./sim/systems/persistence";
 import { clearSave, loadGame, newGame, saveGame } from "./game/GameState";
@@ -139,6 +140,7 @@ async function boot(): Promise<void> {
   };
   const view = new WorldView(scene, sim, hostiles, combat, drops);
   view.shadows = shadows;
+  view.transients.lights = lightPool; // chest-open warm blip (WS8)
   const blobs = caps.shadows === "blob" ? new BlobShadows(scene, view.fxTex) : null;
   const ambient = new AmbientFx(scene, view.fxTex, caps.ambientDensity);
   const weather = new WeatherFx(scene);
@@ -160,6 +162,7 @@ async function boot(): Promise<void> {
   );
   const playerInp = newLocoInput();
   let lastSimNow = 0;
+  let prevSearchHeld = 0; // rummage dust cadence tracker (WS8)
   // weapon-in-hand (WS4): swapped in the 200ms HUD cadence below
   let weaponNode: WeaponNode | null = null;
   let weaponName = "";
@@ -529,9 +532,25 @@ async function boot(): Promise<void> {
     playerInp.speedFrac = sim.player.moving ? 1 : 0;
     playerInp.sprintFrac = sim.player.sprinting ? 1 : 0;
     playerInp.aimDeltaYaw = wrapAngle((sim.input.aim ?? sim.player.facing) - sim.player.facing);
-    playerCtrl.setStance(combat.reloading ? "reload_loop" : hasRanged ? "aim" : null);
+    // stance: reload > rummage (hold-to-search, polled) > ranged aim (WS8)
+    playerCtrl.setStance(combat.reloading ? "reload_loop" : scavenge.search ? "rummage_loop" : hasRanged ? "aim" : null);
     applyPose(playerRig, playerCtrl.tick(simDt, playerInp), sim.player.facing);
+    // rummage dust pulses (~400ms cadence) at the search target
+    if (scavenge.search) {
+      if (rummagePulse(prevSearchHeld, scavenge.search.done)) {
+        view.fx.dust(scavenge.search.target.x, scavenge.search.target.y, 2);
+      }
+      prevSearchHeld = scavenge.search.done;
+    } else prevSearchHeld = 0;
     camTarget.set(player.position.x, player.position.y + 0.9, player.position.z);
+    // camera micro-motion (WS8): stride-locked walk bob + aim-side lead —
+    // FollowRig's 0.12 lerp smooths both into a drift
+    if (sim.player.moving) camTarget.y += Math.sin(2 * playerInp.phaseRad) * (sim.player.sprinting ? 0.045 : 0.03);
+    if (hasRanged) {
+      const aimA = sim.input.aim ?? sim.player.facing;
+      camTarget.x += Math.cos(aimA) * 0.35;
+      camTarget.z += Math.sin(aimA) * 0.35;
+    }
     rig.update(camTarget, dtMs);
 
     // lighting + fog from the world clock (or the dev override); fluid/roof
@@ -595,7 +614,7 @@ async function boot(): Promise<void> {
 
   // Diagnostics hook for the headless smoke + motion-probe harnesses
   // (read-only; the anim probe drives dev-only kill scenarios through it).
-  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state, caps, hostiles };
+  (window as unknown as Record<string, unknown>).__ob3d = { scene, engine, sim, state, caps, hostiles, drops };
 }
 
 void boot();
