@@ -16,3 +16,6 @@ Thumbs.db
 
 # Claude Code transient scheduler lock
 .claude/scheduled_tasks.lock
+
+# dev screenshot output (animShots.mjs)
+shots/
